@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import type { StructuredGenerationInput, StructuredGenerationRequestV1 } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createClaudeAccountStructuredGenerationV1 } from '../src/claude-research/structured-generation.js';
-import { ClaudeModelResponseErrorV1 } from '../src/claude-research/model-transport.js';
+import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1 } from '../src/claude-research/model-transport.js';
 import { ClaudeResearchResultErrorV1 } from '../src/claude-research/sdk-client.js';
 
 const model = 'claude-sonnet-5-5';
@@ -68,6 +68,21 @@ it('preserves a native provider failure instead of switching to a shared account
     },
   });
   await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({ diagnostic: { http_status: 429 } });
+});
+
+it('never admits the SDK\'s retry of a writer request whose billing is unknown, and reports the original failure', async () => {
+  let admissions = 0;
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async () => { throw new ClaudeModelTransportErrorV1(); },
+    run: async request => {
+      expect((await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).status).toBe(502);
+      expect((await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).status).toBe(403);
+      throw new ClaudeResearchResultErrorV1();
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => { admissions++; return (await send(new AbortController().signal)).value; }))
+    .rejects.toMatchObject({ diagnostic: { failure_class: 'adapter_transport' } });
+  expect(admissions).toBe(1);
 });
 
 it('cannot succeed without any admitted model request', async () => {

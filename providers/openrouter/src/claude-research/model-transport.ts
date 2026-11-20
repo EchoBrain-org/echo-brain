@@ -29,10 +29,30 @@ export class ClaudeModelResponseErrorV1 extends Error {
   }
 }
 
-/** Content-free network failure; the SDK may retry through fresh admission. */
+/**
+ * Content-free network failure. `unbilled`: it happened before the request body was fully sent, so the provider cannot
+ * have accepted the request; any later failure leaves the generation's billing unknown.
+ */
 export class ClaudeModelTransportErrorV1 extends Error {
   readonly diagnostic = { failure_class: 'adapter_transport' as const, http_status: null };
-  constructor() { super('Research provider transport failed'); }
+  constructor(readonly unbilled = false) { super('Research provider transport failed'); }
+}
+
+/** Statuses that say the provider refused the request without generating: rate-limited (429) or overloaded (503, 529). */
+const UNBILLED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([429, 503, 529]);
+
+/**
+ * True only for a failed model request that provably cost nothing: refused before the upstream accepted it, or refused
+ * with an explicit rate-limit or overloaded status. The SDK's retry of anything else could repeat a billed generation.
+ */
+export function claudeModelFailureUnbilledV1(error: unknown): boolean {
+  if (error instanceof ClaudeModelTransportErrorV1) return error.unbilled;
+  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES.has(error.diagnostic.http_status);
+}
+
+/** A model request refused because an earlier one in the same session failed with its billing unknown. */
+export class ClaudeModelRepeatRefusedErrorV1 extends Error {
+  constructor() { super('A model request after a possibly billed failure is not repeated'); this.name = 'ClaudeModelRepeatRefusedErrorV1'; }
 }
 
 /** Fixed upstream, no redirects; the service credential never enters the SDK child, logs or returned errors. */
@@ -66,13 +86,17 @@ function providerForwarderV1(options: {
     const call = async () => {
     observeCoreModelMetadataV1({ provider, model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
-      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1());
+      // Until the whole body is sent the provider cannot have accepted the request: a failure then is unbilled.
+      let sent = false;
+      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1(!sent));
       const headers: Record<string, string> = { authorization: options.authorization(input.req), 'content-type': 'application/json',
         'content-length': String(input.body.length), 'accept-encoding': 'identity' };
       for (const key of ['anthropic-version', 'anthropic-beta', ...(provider === 'anthropic' ? ['user-agent', 'x-app'] : [])]) {
         const value = input.req.headers[key]; if (typeof value === 'string') headers[key] = value;
       }
       const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
+        // A reply means the upstream received the request.
+        sent = true;
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
         const streamed = String(reply.headers['content-type'] ?? '').includes('text/event-stream');
         const usage = messageUsageObserverV1(true, streamed ? input.alive : undefined);
@@ -94,7 +118,7 @@ function providerForwarderV1(options: {
         reply.on('aborted', transportFailed);
       });
       upstream.on('error', transportFailed);
-      upstream.end(input.body);
+      upstream.end(input.body, () => { sent = true; });
     });
     observeCoreModelMetadataV1({ provider, model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
     if (result.usage !== undefined) annotateCoreRuntimeV1({ counts: { ...result.usage } });

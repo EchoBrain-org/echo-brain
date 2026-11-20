@@ -5,7 +5,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { AGENTIC_ASK_LIST_PAGE_ROWS_V1, AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
-import { ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
+import { claudeModelFailureUnbilledV1, ClaudeModelRepeatRefusedErrorV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 const SYSTEM = [
   'You are ECHO\'s internal researcher. Investigate the supplied goal with ECHO tools, then call finish with research notes and E/L evidence ids. ECHO writes the final user answer.',
@@ -42,9 +42,13 @@ export function createClaudeResearchDriverV1(options: {
     let terminal: unknown;
     const packets = new Map([[JSON.stringify(session.initial), canonicalSha256(session.initial)]]);
     const fail = (error: unknown) => { terminal ??= error; stop.abort(error); };
+    // A generation whose billing is unknown (a failure after the upstream may have accepted it) is never repeated: the
+    // SDK's retry is refused before admission and research ends, so the writer answers from what was released.
+    let billingUnknown = false;
     const fence = await startClaudeModelTransportV1({ signal, forward: options.forward,
       admit: async (body, operation, forward) => {
         try {
+          if (billingUnknown && operation === 'messages') throw new ClaudeModelRepeatRefusedErrorV1();
           const payload = JSON.parse(body.toString('utf8'));
           if (payload.model !== options.model) throw new Error('Unexpected SDK model route');
           const strings: string[] = [];
@@ -57,8 +61,10 @@ export function createClaudeResearchDriverV1(options: {
               user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.silence_ms } } : {}),
           }, async (admittedSignal: AbortSignal, progress?: () => void) => { const result = await forward(admittedSignal, progress); return { ...result, value: result.content ?? null }; });
         } catch (error) {
-          // Provider replies already reached the SDK, which owns its one retry; anything else stops research.
-          if (!(error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1)) fail(error);
+          // Provider replies already reached the SDK, which owns its one retry of an unbilled refusal; anything else stops research.
+          if (error instanceof ClaudeModelRepeatRefusedErrorV1) fail(new AgenticAskGenerationFailureV1('research model was unavailable (billing unknown)', 'fallback'));
+          else if (!(error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1)) fail(error);
+          else if (operation === 'messages' && !claudeModelFailureUnbilledV1(error)) billingUnknown = true;
           throw error;
         }
       },

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { ClaudeResearchResultErrorV1, runClaudeStructuredV1 } from './sdk-client.js';
-import { claudeAccountForwarderV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
+import { claudeAccountForwarderV1, claudeModelFailureUnbilledV1, ClaudeModelRepeatRefusedErrorV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
 
 export class ClaudeSingleGenerationLimitErrorV1 extends Error {
   constructor() { super('Native extraction permits a single generation'); }
@@ -40,9 +40,12 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       let terminal: unknown;
       let providerFailure: unknown;
       let messages = 0;
+      // A generation whose billing is unknown is never repeated by the SDK: its retry is refused before admission.
+      let billingUnknown = false;
       const fence = await startClaudeModelTransportV1({ signal, alive: produced, forward: options.forward ?? claudeAccountForwarderV1(options.model),
         admit: async (body, operation, forward) => {
           try {
+            if (billingUnknown && operation === 'messages') throw new ClaudeModelRepeatRefusedErrorV1();
             // Claim before awaiting admission, so concurrent SDK requests cannot share one attempt.
             if (options.max_model_requests === 1 && (operation !== 'messages' || messages++ !== 0)) {
               throw new ClaudeSingleGenerationLimitErrorV1();
@@ -70,7 +73,10 @@ export function createClaudeAccountStructuredGenerationV1(options: {
               return { ...result, value: result.content ?? null };
             });
           } catch (error) {
-            if (error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1) providerFailure = error;
+            if (error instanceof ClaudeModelResponseErrorV1 || error instanceof ClaudeModelTransportErrorV1) {
+              providerFailure = error;
+              if (operation === 'messages' && !claudeModelFailureUnbilledV1(error)) billingUnknown = true;
+            } else if (error instanceof ClaudeModelRepeatRefusedErrorV1) stop.abort(error);
             else { terminal ??= error; stop.abort(error); }
             throw error;
           }
