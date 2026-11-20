@@ -4,7 +4,8 @@
 // three, each once) and the count toward a question's 240 characters.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, HomeView, ListItem, OpenItemView } from '../../src/shared/protocol.js';
-import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
+import { PERSON_QUESTION_MAX_CODE_POINTS_V1 } from '@echo-brain/organization-api';
+import { COUNT_FROM, decidedIn, MAX_QUESTION, MAX_SUGGESTIONS, questionCount, questionLimitNote, suggestedQuestions, weekQuestion } from '../../src/renderer/bar.js';
 import { ACCOUNT, EMPTY_SUMMARY, cover, fail, fileOf, flush, Held, ok, project, rpcFor, startStore, storeLifecycle, timelineFiles, uncover } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -54,15 +55,20 @@ beforeEach(() => {
 });
 
 describe('the count toward a question\'s limit', () => {
-  it('shows nothing below 200 characters, counts from 200, and is full at 240', () => {
-    expect(COUNT_FROM).toBe(200);
-    expect(MAX_QUESTION).toBe(240);
+  it('takes the Authority\'s 4,000 code points, counts only close to them, and says by how much to shorten past them', () => {
+    expect(MAX_QUESTION).toBe(PERSON_QUESTION_MAX_CODE_POINTS_V1);
+    expect(COUNT_FROM).toBe(3_800);
     expect(questionCount('')).toBeNull();
-    expect(questionCount('x'.repeat(199))).toBeNull();
-    expect(questionCount('x'.repeat(200))).toEqual({ words: '200 / 240', full: false });
-    expect(questionCount('x'.repeat(212))).toEqual({ words: '212 / 240', full: false });
-    expect(questionCount('x'.repeat(239))).toEqual({ words: '239 / 240', full: false });
-    expect(questionCount('x'.repeat(240))).toEqual({ words: '240 / 240', full: true });
+    // A long natural-language question, well past the old 240, shows no count at all.
+    expect(questionCount('Who owns the thermal retest and what is blocked? '.repeat(20))).toBeNull();
+    expect(questionCount('x'.repeat(3_799))).toBeNull();
+    expect(questionCount('x'.repeat(3_800))).toEqual({ words: '3,800 / 4,000', full: false, over: 0 });
+    // Counted in code points, as the Authority counts: an emoji is one.
+    expect(questionCount('😀'.repeat(3_900))).toEqual({ words: '3,900 / 4,000', full: false, over: 0 });
+    expect(questionCount('x'.repeat(4_000))).toEqual({ words: '4,000 / 4,000', full: true, over: 0 });
+    expect(questionCount('x'.repeat(4_012))).toEqual({ words: '4,012 / 4,000', full: true, over: 12 });
+    expect(questionLimitNote({ over: 0 })).toBe('Questions are up to 4,000 characters');
+    expect(questionLimitNote({ over: 12 })).toBe('Questions are up to 4,000 characters. Shorten this one by 12.');
   });
 });
 

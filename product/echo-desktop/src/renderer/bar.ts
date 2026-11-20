@@ -4,18 +4,30 @@ import type { AskScope } from '../shared/protocol.js';
 import { clip } from './format.js';
 import type { Suggestion } from './timeline.js';
 
-/** The longest question the bar takes, as its field counts: the API's 240. */
-export const MAX_QUESTION = 240;
-/** From this many characters the bar counts them. */
-export const COUNT_FROM = 200;
+/**
+ * The longest question the Authority takes, in Unicode code points (the API's PERSON_QUESTION_MAX_CODE_POINTS_V1; a plain
+ * number so the page's bundle leaves the API out). The bar never cuts text to it: it counts, and says so when over.
+ */
+export const MAX_QUESTION = 4_000;
+/** From this many characters the bar counts them: only when a question is close to the limit. */
+export const COUNT_FROM = 3_800;
 /** "Try asking" offers at most this many questions. */
 export const MAX_SUGGESTIONS = 3;
 
-/** The count at the bar's right end: none below COUNT_FROM, "212 / 240" from it, and full at the limit, where the bar says why it stops. */
-export function questionCount(text: string): { words: string; full: boolean } | null {
-  const length = text.length;
+/**
+ * The count at the bar's right end, in code points as the Authority counts: none below COUNT_FROM, "3,812 / 4,000" from
+ * it, full at the limit, and over past it, where the question cannot be sent until it is shorter.
+ */
+export function questionCount(text: string): { words: string; full: boolean; over: number } | null {
+  const length = [...text].length;
   if (length < COUNT_FROM) return null;
-  return { words: `${Math.min(length, MAX_QUESTION)} / ${MAX_QUESTION}`, full: length >= MAX_QUESTION };
+  return { words: `${length.toLocaleString('en-US')} / ${MAX_QUESTION.toLocaleString('en-US')}`, full: length >= MAX_QUESTION, over: Math.max(0, length - MAX_QUESTION) };
+}
+
+/** What the bar says at the limit: the limit, and past it by how much to shorten. */
+export function questionLimitNote(count: { readonly over: number }): string {
+  const limit = `Questions are up to ${MAX_QUESTION.toLocaleString('en-US')} characters`;
+  return count.over === 0 ? limit : `${limit}. Shorten this one by ${count.over.toLocaleString('en-US')}.`;
 }
 
 /** A meeting ECHO shows, as a question: "What did we decide in THERM DVT recovery?" */

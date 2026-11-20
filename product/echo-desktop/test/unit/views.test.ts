@@ -356,10 +356,18 @@ describe('text the API accepts', () => {
     expect(noteTitle('   \n  ')).toBe('');
   });
 
-  it('questions are one NFC line of at most 240 code points', () => {
-    expect(askText('  what\nchanged?\u2028 ')).toBe('what changed?');
+  it('questions are sent NFC and trimmed, line breaks and tabs kept, other controls made spaces, and never cut', () => {
+    expect(askText('  what\nchanged?\u2028 ')).toBe('what\nchanged?');
+    expect(askText('who\u0000owns\tit?')).toBe('who owns\tit?');
     expect(askText('e\u0301')).toBe('é');
-    expect([...askText('😀'.repeat(300))].length).toBe(240);
+    expect([...askText('😀'.repeat(4_100))].length).toBe(4_100);
+  });
+
+  it('offers Try again for failures another try may pass, never for a refusal of what was sent', () => {
+    for (const code of ['internal', 'failed', 'request_failed', 'invalid_response', 'timed_out', 'research_failed', 'unavailable', 'transport_failed']) {
+      expect(failureView({ code }, 'failed', false).retryable, code).toBe(true);
+    }
+    for (const code of ['question_too_long', 'invalid_request', 'not_found', 'unauthorized']) expect(failureView({ code }, 'failed', false).retryable, code).toBe(false);
   });
 });
 

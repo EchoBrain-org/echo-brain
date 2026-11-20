@@ -23,7 +23,9 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
+import { HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
+import { askText } from '../../src/shared/query.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -294,6 +296,19 @@ describe('what the page sends with an Ask and a check', () => {
     statements: [{ text: 'THERM-482 is open.', citation_indexes: [0] }], citations: [cited],
   };
 
+  it('sends a long natural-language question on two lines whole, as the person typed it', () => {
+    const question = 'Can you summarize what the hardware and firmware teams decided about the thermal fix, who owns each follow-up, '
+      + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
+    expect(new Set(question.match(/[\p{L}\p{N}]+/gu)!.map(word => word.toLowerCase())).size).toBeGreaterThan(32);
+    expect(question.length).toBeGreaterThan(240);
+    expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress']);
+  });
+
+  it('waits out the client: an Ask past its 345 s, a cited passage past its 15 s read and 15 s session', () => {
+    expect(HOST_TIMEOUT_MS['ask.run']).toBe(355_000);
+    expect(HOST_TIMEOUT_MS['ask.source']).toBeGreaterThan(30_000);
+  });
+
   it('carries the earlier turn as the client takes it, only on an Ask that has one', () => {
     expect(askArgv('Who owns it?', { kind: 'global' })).not.toContainEqual(expect.stringMatching(/^--previous=/u));
     expect(askArgv('Who owns it?', { kind: 'global' }, previous).at(-1)).toBe(`--previous=${JSON.stringify(previous)}`);
@@ -307,8 +322,9 @@ describe('what the page sends with an Ask and a check', () => {
     expect(askPrevious({ ...previous, purpose: 'ask_again', statements: [], citations: [] }, previous.question, global)).not.toBeNull();
     // Ask again asks the earlier question itself.
     expect(askPrevious({ ...previous, purpose: 'ask_again' }, 'Who owns it?', global)).toBeNull();
-    // A question that fails on its own is the client's to report, as it would be without the earlier turn: that goes as it came.
+    // The question is the Authority's to judge: any question carries the earlier turn, a long one on two lines too.
     expect(askPrevious(previous, '?', global)).toEqual(previous);
+    expect(askPrevious(previous, `${'Who owns the retest and what is blocked? '.repeat(10).trim()}\nAnd when?`, global)).toEqual(previous);
     const many = <T>(item: T, count: number) => Array.from({ length: count }, () => item);
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
