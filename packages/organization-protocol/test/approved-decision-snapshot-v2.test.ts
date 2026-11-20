@@ -122,6 +122,14 @@ describe("approved decision snapshot v2", () => {
     expect(validateApprovedDecisionSnapshotV2(large).approved_payload.brief.decisions[0]!.evidence).toHaveLength(1_000);
   });
 
+  it("accepts as many participants and identities as the meeting has", () => {
+    const payload = approvedPayload();
+    const brief = payload.brief as { meeting: { participants: unknown[] } };
+    brief.meeting.participants = Array.from({ length: 10_001 }, (_, n) => ({ id: `p-${n}`,
+      ...(n === 0 ? { identities: Array.from({ length: 101 }, (_, i) => ({ kind: "email", value: `p${i}@example.com` })) } : {}) }));
+    expect(validateApprovedDecisionSnapshotV2({ ...snapshot(), approved_payload: payload }).approved_payload.brief.meeting.participants).toHaveLength(10_001);
+  });
+
   it("accepts neither accessors nor symbols, a null prototype, non-enumerable keys, NaN nor an unpaired surrogate", () => {
     const accessor = snapshot();
     Object.defineProperty(accessor, "approval_id", { enumerable: true, get: () => "approval-1" });
