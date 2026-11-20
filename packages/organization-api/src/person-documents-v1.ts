@@ -46,8 +46,9 @@ function boundedText(value: unknown, label: string, maximum: number): asserts va
 }
 function documentUploadFields(input: Record<string, unknown>): void {
   validatePersonUpdateRequestId(input.request_id);
+  // Storage: a file name is at most 255 bytes on the file systems a document comes from.
   boundedText(input.filename, 'Document filename', 255);
-  boundedText(input.title, 'Document title', 200);
+  boundedText(input.title, 'Document title', Number.POSITIVE_INFINITY);
   if (/[\\/]/u.test(input.filename) || input.filename === '.' || input.filename === '..') fail('Document filename must be a basename');
   if (!Number.isSafeInteger(input.content_length) || (input.content_length as number) < 1 || (input.content_length as number) > PERSON_DOCUMENT_MAX_ORIGINAL_BYTES) fail('Document content length is invalid');
   if (typeof input.sha256 !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(input.sha256)) fail('Document SHA-256 is invalid');

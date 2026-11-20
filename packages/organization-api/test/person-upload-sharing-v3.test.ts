@@ -26,6 +26,12 @@ describe('multi-project Person upload contracts', () => {
     expect(() => validatePersonDocumentSearchV2({ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: first, query: 'MRD', limit: 10, cursor: null, audience })).toThrow();
   });
 
+  it('takes a note or document title of any length', () => {
+    const title = 'T'.repeat(5_000);
+    expect(validatePersonUpdateSubmitV3({ schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title, text: 'Body.', association_project_ids: [], audience: { kind: 'only_me' } }).title).toBe(title);
+    expect(validatePersonDocumentUploadMetadataV2({ schema_version: 2, kind: 'echo-person-document-upload-v2', request_id, filename: 'MRD.md', title, content_length: 28, sha256: `sha256:${'a'.repeat(64)}`, association_project_ids: [], audience: { kind: 'only_me' } }).title).toBe(title);
+  });
+
   it('takes any number of projects in either set', () => {
     const many = Array.from({ length: 25 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
     const submit = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'MRD', text: 'The project starts Tuesday.', association_project_ids: many, audience: { kind: 'projects', project_ids: many } };

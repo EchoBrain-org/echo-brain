@@ -356,8 +356,9 @@ describe('text the API accepts', () => {
   it('titles are the first non-empty line, tabs and controls made spaces, at most 200 bytes', () => {
     expect(noteTitle('\n\n  Northwind call  \nsecond')).toBe('Northwind call');
     expect(noteTitle('a\tb\u0007c\r\nnext')).toBe('a b c');
-    expect(Buffer.byteLength(noteTitle('é'.repeat(200)))).toBe(200);
-    expect(noteTitle('x' + '😀'.repeat(60))).toBe('x' + '😀'.repeat(49)); // never half a character
+    // The first line whole, however long.
+    expect(noteTitle('é'.repeat(2_000))).toBe('é'.repeat(2_000));
+    expect(noteTitle('x' + '😀'.repeat(600) + '\nnext')).toBe('x' + '😀'.repeat(600));
     expect(noteTitle('   \n  ')).toBe('');
   });
 

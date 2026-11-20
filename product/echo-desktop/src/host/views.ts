@@ -601,21 +601,12 @@ export function failureView(raw: unknown, fallback: string, write: boolean, requ
 }
 
 /**
- * A title the API accepts: the first non-empty line, controls and tabs made
- * spaces, at most 200 UTF-8 bytes, cut only between whole characters.
+ * A note's title: its first non-empty line, whole, controls and tabs made
+ * spaces, lone surrogates left out.
  */
 export function noteTitle(body: string): string {
   const line = body.split(/\r?\n/).map(part => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim()).find(part => part.length > 0) ?? '';
-  let bytes = 0;
-  let title = '';
-  for (const character of line) {
-    if (/[\uD800-\uDFFF]/.test(character) && character.length === 1) continue; // lone surrogate
-    const size = Buffer.byteLength(character);
-    if (bytes + size > 200) break;
-    bytes += size;
-    title += character;
-  }
-  return title.trim();
+  return line.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '').trim();
 }
 
 /** The CLI validates provider coordinates; only the project key and opaque revision reach the UI. */
