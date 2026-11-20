@@ -73,7 +73,7 @@ let ids = 0;
 function turn(question: string, ago: number, answer: Answer, extra: Partial<TimelineTurn> = {}): TimelineTurn {
   ids += 1;
   return { id: `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`, asked_at: new Date(NOW.getTime() - ago).toISOString(), text: question, question,
-    scope: answer.scope, answer, citations_complete: true, ...extra };
+    scope: answer.scope, answer, citations_complete: true, typed: question, ...extra };
 }
 
 /** THERM's status, three sources: a ticket, the DVT plan and a follow-up. */
@@ -935,7 +935,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Older?', asked_at: older.asked_at });
   });
 
-  it('checks an old turn again once it is opened after its check went stale, and a follow-up of it waits for that check', async () => {
+  it('checks an old turn again once it is opened after its check went stale, and a follow-up of it waits for a check of its own', async () => {
     const turns = Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, (12 - at) * DAY, status()));
     seed(...turns);
     checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'follow_up' ? 'unreadable' : 'same' })) });
@@ -956,14 +956,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     const own = calls('ask.check').at(-1)!.items as { asked_at: string }[];
     expect(own.map(item => item.asked_at)).toEqual([turns[0]!.asked_at, turns[0]!.asked_at, turns[0]!.asked_at]);
-    // A follow-up of it waits for that check, then carries only what you can still read.
+    release(ok({ items: [{ state: 'same' }, { state: 'same' }, { state: 'unreadable' }] }));
+    await flush();
+    // A follow-up of it makes a check of its own, never reusing the one just made, waits for it, then carries only what you
+    // can still read.
+    const checked = calls('ask.check').length;
+    const mine = held.hold('ask.check');
     const asked = calls('ask.run').length;
     const following = store.ask('who owns it?');
     await flush();
+    expect(calls('ask.check')).toHaveLength(checked + 1);
     expect(calls('ask.run')).toHaveLength(asked);
     expect(store.getState().ask?.asking?.question).toBe('who owns it?');
-    // A changed source (as an Authority before checks said only readability answers) is as readable as one the same.
-    release(ok({ items: [{ state: 'same' }, { state: 'same' }, { state: 'unreadable' }] }));
+    mine(ok({ items: [{ state: 'same' }, { state: 'same' }, { state: 'unreadable' }] }));
     await following;
     expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
@@ -1006,14 +1011,112 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'ask_again', statements: [], citations: [] });
   });
 
+  describe('the earlier turn\'s model-written question, sent only while a fresh check finds all its sources readable', () => {
+    const resolved = 'What is open on THERM per the DVT plan?';
+    const typed = 'what is open?';
+    const sent = (call: number) => calls('ask.run')[call]!;
+    const someGone = (items: readonly { citation: { kind: string } }[]) => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'unreadable' : 'same' })) });
+    const allSame = (items: readonly { citation: { kind: string } }[]) => ok({ items: items.map(() => ({ state: 'same' })) });
+
+    it('makes a fresh check before a follow-up, not the five-minute one, and sends the resolved question only when all is same', async () => {
+      const earlier = turn(resolved, 2 * DAY, status(), { text: typed, typed });
+      seed(earlier);
+      checks = allSame;
+      const store = await startStore();
+      store.pickSuggestion({ question: resolved, turn: earlier.id });
+      await flush();
+      const before = calls('ask.check').length;
+      await store.ask('who owns it?');
+      expect(calls('ask.check').length).toBeGreaterThan(before);
+      expect(sent(0).previous).toMatchObject({ question: resolved });
+      // Access to the plan goes: within five minutes, the next follow-up still checks afresh, and sends only the typed words.
+      checks = someGone;
+      store.closeAsk();
+      store.pickSuggestion({ question: resolved, turn: earlier.id });
+      await flush();
+      await store.ask('and the retest?');
+      expect(sent(1).previous).toMatchObject({ question: typed });
+      expect(JSON.stringify(sent(1).previous)).not.toContain(resolved);
+    });
+
+    it('asks again with the typed words when a source is gone, and offers no Ask again for an older turn that has only its resolved question', async () => {
+      const earlier = turn(resolved, 2 * DAY, status(), { text: typed, typed });
+      const { typed: _typed, ...legacy } = turn(resolved, DAY, status());
+      seed(earlier, legacy);
+      checks = someGone;
+      const store = await startStore();
+      store.askAgain(earlier.id);
+      await flush();
+      expect(sent(0)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
+      store.askAgain(legacy.id);
+      await flush();
+      expect(calls('ask.run')).toHaveLength(1);
+      expect(store.askAgainOffered(legacy)).toBe(false);
+      expect(store.askAgainOffered(earlier)).toBe(true);
+      // All readable: the older turn's question may go.
+      checks = allSame;
+      store.askAgain(legacy.id);
+      await flush();
+      expect(sent(1)).toMatchObject({ question: resolved, previous: { purpose: 'ask_again', question: resolved } });
+    });
+
+    it('sends no earlier turn at all for a follow-up of an older turn when a source is gone', async () => {
+      const { typed: _typed, ...legacy } = turn(resolved, DAY, status());
+      seed(legacy);
+      checks = someGone;
+      const store = await startStore();
+      store.pickSuggestion({ question: resolved, turn: legacy.id });
+      await flush();
+      await store.ask('who owns it?');
+      expect(sent(0)).not.toHaveProperty('previous');
+    });
+
+    it('sends no stored choice once a source of the earlier turn is gone: it asks the person\'s own words again', async () => {
+      const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
+      rpc.mockImplementation(rpcFor(held, {
+        'ask.run': params => (params.question === 'who owns that ticket?' && calls('ask.run').length === 1
+          ? ok({ scope: { kind: 'global' }, sources: [], parts: [], outcome: 'clarify', choices })
+          : ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Dev owns THERM-482.', [0]]]))),
+        'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
+      }, () => ({ active: [apollo], archived: [] })));
+      const earlier = turn(resolved, 2 * DAY, status(), { text: typed, typed });
+      seed(earlier);
+      checks = allSame;
+      const store = await startStore();
+      store.pickSuggestion({ question: resolved, turn: earlier.id });
+      await flush();
+      await store.ask('who owns that ticket?');
+      await flush();
+      expect(store.getState().ask?.clarify).toMatchObject({ choices });
+      checks = someGone;
+      store.chooseClarified(choices[0]!);
+      await flush();
+      expect(sent(1).question).toBe('who owns that ticket?');
+      expect(JSON.stringify(calls('ask.run').slice(1))).not.toContain('Who owns THERM-482?');
+      expect(sent(1).previous).toMatchObject({ question: typed });
+    });
+
+    it('keeps what the person typed on a turn beside the question it answered', async () => {
+      rpc.mockImplementation(rpcFor(held, {
+        'ask.run': params => ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Open.', [0]]]), question: 'What is open on THERM?' }),
+      }, () => ({ active: [apollo], archived: [] })));
+      const store = await startStore();
+      await store.ask('whats open');
+      expect(kept()[0]).toMatchObject({ text: 'whats open', typed: 'whats open', question: 'What is open on THERM?' });
+    });
+  });
+
   it('asks which one, keeps nothing, and asks the chosen full question with the same earlier turn', async () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => (params.question === 'who owns that ticket?'
         ? ok({ scope: { kind: 'global' }, sources: [], parts: [], outcome: 'clarify', choices })
         : ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['Dev owns THERM-482, since Oct 21.', [0]]]), question: String(params.question) })),
+      'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     }, () => ({ active: [apollo], archived: [] })));
     seed(turn('What is open on DVT?', 10 * 60_000, status()));
+    // Every source of the turn it continues is readable on the check made before the choice: its choices may go.
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
     const store = await startStore();
     await store.ask('Anything else?');
     await store.ask('who owns that ticket?');
@@ -1029,7 +1132,8 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await flush();
     expect(calls('ask.run')[2]).toMatchObject({ question: 'Who owns THERM-482?', previous });
     expect(store.getState().ask?.clarify).toBeNull();
-    expect(latestTurn(store)).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?' });
+    // The question sent was the model's choice; what the person typed was their follow-up.
+    expect(latestTurn(store)).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?', typed: 'who owns that ticket?' });
   });
 
   // Every Authority takes the earlier turn (C3): a refused Ask fails as it is, and is never asked again without it.

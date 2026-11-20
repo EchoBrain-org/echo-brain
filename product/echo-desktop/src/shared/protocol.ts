@@ -407,6 +407,15 @@ export interface TimelineTurn {
    * sentence of it may rest on a row it no longer cites, which no check can then ask about. It shows as it always did.
    */
   readonly citations_complete?: true;
+  /**
+   * What the person typed, in their own words, when the turn knows it: never a question the model wrote (a follow-up's
+   * resolved question, a choice of "Which one?"). `question` may be model-written, from sources the person could read
+   * then; a follow-up, an Ask again or a choice built from this turn sends `question` only when a check made just then
+   * finds every source of the turn readable, and otherwise sends these words. A turn saved before this field has none,
+   * so its `question` is treated as model-written: with any source not readable it carries no earlier turn at all, and
+   * Ask again is not offered for it.
+   */
+  readonly typed?: string;
 }
 
 /**

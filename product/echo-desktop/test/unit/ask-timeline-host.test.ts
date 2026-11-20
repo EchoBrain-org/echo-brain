@@ -241,7 +241,7 @@ describe('the timeline file (C5)', () => {
   });
 
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
-    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true });
+    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true, typed: 'whats open' });
     expect(timelineTurn(good)).toEqual(good);
     // A turn an older desktop saved has no mark, and is read as it was.
     const { citations_complete: _mark, ...older } = good;
@@ -252,7 +252,7 @@ describe('the timeline file (C5)', () => {
       { ...good, answer: { ...good.answer, parts: [bare] } },
       { ...good, scope: { kind: 'mine' } }, { ...good, answer: { ...good.answer, parts: [{ ...good.answer.parts[0]!, statements: [] }] } },
       { ...good, id: 'turn-1' }, { ...good, asked_at: 'yesterday' }, { ...good, scope: { kind: 'project', project_id: 'Apollo' } },
-      { ...good, again_of: 'turn-0' }, { ...good, citations_complete: false }, { ...good, citations_complete: 1 },
+      { ...good, again_of: 'turn-0' }, { ...good, citations_complete: false }, { ...good, citations_complete: 1 }, { ...good, typed: 7 },
       // What a check found unreadable: distinct places among the answer's own sources.
       { ...good, unreadable: [0, 0] }, { ...good, unreadable: [good.answer.sources.length] }, { ...good, unreadable: [-1] }, { ...good, unreadable: ['0'] },
       { ...good, answer: { ...good.answer, outcome: 'clarify' } }, { ...good, answer: { ...good.answer, sources: [{ kind: 'ticket', label: 'T' }] } },
