@@ -817,8 +817,8 @@ export class PersonAuthorityClient {
   }
 
   records(accessToken: string, limit?: number, recordSha256?: `sha256:${string}`): Promise<PersonRecordListV1> {
-    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)) {
-      throw new PersonQueryInputError("invalid_limit", "Person record limit must be an integer from 1 to 100");
+    if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
+      throw new PersonQueryInputError("invalid_limit", "Person record limit must be a positive integer");
     }
     if (recordSha256 !== undefined && !/^sha256:[a-f0-9]{64}$/.test(recordSha256)) throw new Error("Person record SHA-256 is invalid");
     return this.getJson({
@@ -829,7 +829,7 @@ export class PersonAuthorityClient {
 
   searchRecords(accessToken: string, query: string, limit?: number): Promise<PersonRecordSearchV2> {
     return this.json({ path: PERSON_RECORDS_PATH_V1, body: { query, ...(limit === undefined ? {} : { limit }) }, validate_request: validatePersonRecordSearchRequestV2,
-      validate_response: validatePersonRecordSearchV2, access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES });
+      validate_response: validatePersonRecordSearchV2, access_token: accessToken, maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES });
   }
 
   /**

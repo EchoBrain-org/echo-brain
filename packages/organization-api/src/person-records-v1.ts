@@ -51,8 +51,7 @@ export function validatePersonRecordListV1(
   if (
     response.schema_version !== 1 ||
     response.kind !== "echo-clean-person-record-list-v1" ||
-    !Array.isArray(response.records) ||
-    response.records.length > 100
+    !Array.isArray(response.records)
   ) {
     throw new Error("record list response is invalid");
   }
@@ -125,10 +124,9 @@ export function validatePersonRecordSearchRequestV2(value: unknown): {
     keys.some(key => key !== "query" && key !== "limit") ||
     (request.limit !== undefined &&
       (!Number.isSafeInteger(request.limit) ||
-        (request.limit as number) < 1 ||
-        (request.limit as number) > 10))
+        (request.limit as number) < 1))
   ) {
-    throw new PersonQueryInputError("invalid_limit", "Search --limit must be an integer from 1 to 10");
+    throw new PersonQueryInputError("invalid_limit", "Search --limit must be a positive integer");
   }
   return Object.freeze({
     query,
@@ -150,8 +148,7 @@ export function validatePersonRecordSearchV2(
   if (
     response.schema_version !== 2 ||
     response.kind !== "echo-clean-person-record-search-v2" ||
-    !Array.isArray(response.items) ||
-    response.items.length > 10
+    !Array.isArray(response.items)
   ) {
     throw new Error("record search response is invalid");
   }

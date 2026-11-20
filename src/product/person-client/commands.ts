@@ -719,18 +719,19 @@ function requestOf<T>(values: Record<Option, string | boolean | undefined>, vali
   catch (error) { if (error instanceof SyntaxError) throw new Error(`${name} request JSON is invalid`); throw error; }
 }
 
+/** A positive --limit; `maximum` only where it is a paged list's page size (the rest follows by --cursor). */
 function optionalRecordLimit(
   values: Record<Option, string | boolean | undefined>,
-  maximum = 100,
+  maximum = Number.MAX_SAFE_INTEGER,
 ): number | undefined {
   const value = values.limit;
   if (value === undefined) return undefined;
   if (
     typeof value !== "string" ||
-    !/^[1-9][0-9]{0,2}$/.test(value) ||
+    !/^[1-9][0-9]*$/.test(value) ||
     Number(value) > maximum
   ) {
-    throw new PersonQueryInputError("invalid_limit", `--limit must be an integer from 1 to ${maximum}`);
+    throw new PersonQueryInputError("invalid_limit", maximum === Number.MAX_SAFE_INTEGER ? "--limit must be a positive integer" : `--limit must be an integer from 1 to ${maximum}`);
   }
   return Number(value);
 }
@@ -1322,7 +1323,7 @@ export async function runPersonClientCli(
         const recordSha256 = values["record-sha256"];
         if (query !== undefined) validatePersonQueryText(query);
         const records = await client.records(
-          optionalRecordLimit(values, query === undefined ? 100 : 10),
+          optionalRecordLimit(values),
           typeof query === "string" ? query : undefined,
           typeof recordSha256 === "string" ? recordSha256 as `sha256:${string}` : undefined,
         );

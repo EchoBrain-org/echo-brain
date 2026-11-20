@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1 } from "@echo-brain/organization-api";
+import { type OrganizationPersonSessionV2, type PersonSourceEvidenceCitationV1, validatePersonRecordSearchRequestV2 } from "@echo-brain/organization-api";
 import { organizationPersonSlackIdentityLinkChallengeCodeSha256 } from "@echo-brain/provider-slack-client/organization-api/person-slack-identity-link";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -596,6 +596,19 @@ describe("Person client", () => {
     });
   });
 
+  it("lists and searches any number of Person records: neither has a count of its own", async () => {
+    await withHome(async (home) => {
+      const records = Array.from({ length: 150 }, (_, index) => ({ position: 150 - index, approval_id: fixtureId("apr", index + 1),
+        record_sha256: `sha256:${index.toString(16).padStart(64, "0")}`, envelope: { kind: "approved" } }));
+      const client = await signedInClient(home, async (input) => {
+        expect(new URL(String(input)).search).toBe("?limit=150");
+        return json({ schema_version: 1, kind: "echo-clean-person-record-list-v1", records });
+      });
+      await expect(client.records(150)).resolves.toMatchObject({ records: expect.arrayContaining([expect.objectContaining({ position: 1 })]) });
+      expect(validatePersonRecordSearchRequestV2({ query: "pricing", limit: 500 })).toEqual({ query: "pricing", limit: 500 });
+    });
+  });
+
   it("lists Person records for the installed Person without an identity input", async () => {
     await withHome(async (home) => {
       const client = await signedInClient(home, async (input, init) => {
@@ -979,7 +992,7 @@ describe("Person client", () => {
         expect(JSON.parse(stderr)).toMatchObject({ code });
       }
     }
-    for (const limit of ["-1", "0", "101"]) {
+    for (const limit of ["-1", "0", "1.5"]) {
       const { code: status, stdout, stderr } = await runCli(["records", "--limit", limit], {
         home_directory: home,
       });
@@ -989,7 +1002,7 @@ describe("Person client", () => {
         ok: false,
         action: "records",
         code: "invalid_limit",
-        error: "--limit must be an integer from 1 to 100",
+        error: "--limit must be a positive integer",
       });
     }
     });

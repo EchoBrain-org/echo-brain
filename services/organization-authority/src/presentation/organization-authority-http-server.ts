@@ -612,11 +612,12 @@ function recordLimit(url: URL): number | undefined {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   const raw = values[0][1];
-  if (!/^[1-9][0-9]{0,2}$/.test(raw)) {
+  // Any positive count: the newest that many records.
+  if (!/^[1-9][0-9]*$/.test(raw)) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   const limit = Number(raw);
-  if (!Number.isSafeInteger(limit) || limit > 100) {
+  if (!Number.isSafeInteger(limit)) {
     throw new AuthorityOperationError("invalid_request", "request is invalid");
   }
   return limit;
