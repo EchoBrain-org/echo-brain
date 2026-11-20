@@ -137,24 +137,25 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.length).toBeGreaterThan(300);
   });
 
-  it('still caps content reads at 160 per request', async () => {
+  it('caps content reads at 1,600 per request, then ends each search with what it found and a notice, not a failure', async () => {
     const f = await fixture();
     // Each unmapped search is one CQL request plus one exact metadata read.
-    for (let search = 0; search < 80; search += 1) await f.source.search({ query: `gate ${search}` });
-    await expect(f.source.search({ query: 'one more' })).rejects.toMatchObject({ code: 'unavailable' });
-    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/'))).toHaveLength(160);
+    for (let search = 0; search < 800; search += 1) expect((await f.source.search({ query: `gate ${search}` })).items).toHaveLength(1);
+    await expect(f.source.search({ query: 'one more' })).resolves.toMatchObject({ items: [], truncated: true,
+      notice: 'This research run has made as many Confluence reads as one run may; Confluence results past them were left out.' });
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/'))).toHaveLength(1_600);
     // Fences still run: a revalidation of everything released so far succeeds.
     await expect(f.source.revalidate({})).resolves.toBeUndefined();
   });
 
-  it('stops a runaway loop at a hard bound of 2048 requests, fences included', async () => {
+  it('stops a runaway loop at a hard bound of 20,480 requests, fences included', async () => {
     const f = await fixture();
     let failure: unknown;
-    for (let fence = 0; fence < 600 && failure === undefined; fence += 1) {
+    for (let fence = 0; fence < 12_000 && failure === undefined; fence += 1) {
       try { await f.source.revalidate({}); } catch (error) { failure = error; }
     }
     expect(failure).toMatchObject({ code: 'unavailable' });
-    expect(f.calls.length).toBe(2048);
+    expect(f.calls.length).toBe(20_480);
   });
 
   it('says when a last list page was exactly full, so its end is unverified (ADR-0041)', async () => {
@@ -367,13 +368,11 @@ describe('Confluence live reader through the audited evidence source', () => {
     await f.source.open({ item: listed.items[0]!.id });
     f.state.pages.set('125', page({ id: '125' }));
     f.state.searchIds = ['125'];
-    let spent: unknown;
-    for (let search = 0; search < 100 && spent === undefined; search += 1) {
-      try { await f.source.search({ query: `gate ${search}` }); } catch (error) { spent = error; }
-    }
-    // Content reads (list, search, open and their exact reads) are capped at 160 per request.
-    expect(spent).toMatchObject({ code: 'unavailable' });
-    expect(f.calls.filter(call => call.path === '/rest/api/search' || (/^\/api\/v2\/pages(\/\d+)?$/.test(call.path) && !call.query.has('id')))).toHaveLength(160);
+    let spent: string | undefined;
+    for (let search = 0; search < 1_000 && spent === undefined; search += 1) spent = (await f.source.search({ query: `gate ${search}` })).notice;
+    // Content reads (list, search, open and their exact reads) are capped at 1,600 per request.
+    expect(spent).toContain('as many Confluence reads as one run may');
+    expect(f.calls.filter(call => call.path === '/rest/api/search' || (/^\/api\/v2\/pages(\/\d+)?$/.test(call.path) && !call.query.has('id')))).toHaveLength(1_600);
     // The check before the next model call re-reads exactly the new page and the opened body, then verifies the connection:
     // every request is fence traffic, so it succeeds although the content cap is spent.
     f.calls.length = 0;
@@ -381,7 +380,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(reads()).toEqual(['bulk:125', 'body:/api/v2/pages/123', ...verify]);
     // And so does the full check at release; the fences did not hand content reads back.
     await expect(f.source.revalidate({})).resolves.toBeUndefined();
-    await expect(f.source.search({ query: 'after the checks' })).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(f.source.search({ query: 'after the checks' })).resolves.toMatchObject({ items: [], truncated: true, notice: spent });
   });
 
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {

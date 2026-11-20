@@ -14,7 +14,12 @@ import { copyJiraBindingV1, JIRA_ID, JIRA_PERSON_PROVIDER_V1, JIRA_PROJECT_KEY, 
 const INVENTORY_FIELDS = 'summary,project,created,updated,status,assignee,duedate';
 const TEXT_FIELDS = `${INVENTORY_FIELDS},description`;
 const OPEN_FIELDS = `${TEXT_FIELDS},issuelinks`;
-const REQUEST_MAX_HANDLES = 512;
+/**
+ * Released items, discovered ids and list continuations one request may hold: memory protection for one research run.
+ * Reaching it ends what the run can release from Jira, with BUDGET_NOTICE and what was found, never a failure.
+ */
+const REQUEST_MAX_HANDLES = 5_120;
+const BUDGET_NOTICE = 'This research run has read as many Jira items as one run can hold; Jira results past them were left out.';
 const REVALIDATION_BATCH_SIZE = 50;
 /**
  * One list page is one search plus one bulk read. 25 matches the research
@@ -258,16 +263,19 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     }
   }
 
-  /** Released rows and sections. A row without text opens its ticket from the top; a section's handle opens what `opens` says. */
-  function remember(items: readonly (ParsedJiraIssueV1 | Section)[]): readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[] {
-    if (handles.size + items.length > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
-    return Object.freeze(items.map(item => {
+  /**
+   * Released rows and sections, as many as the request can still hold, and whether some were left out (`spent`). A row
+   * without text opens its ticket from the top; a section's handle opens what `opens` says.
+   */
+  function remember(all: readonly (ParsedJiraIssueV1 | Section)[]): { readonly values: readonly PersonLiveEvidenceValueV1<PersonTicketCitationV1>[]; readonly spent: boolean } {
+    const items = all.slice(0, Math.max(0, REQUEST_MAX_HANDLES - handles.size));
+    return { spent: items.length < all.length, values: Object.freeze(items.map(item => {
       const handle = `jira_item_${randomUUID()}`;
       const section = 'opens' in item ? item.section : 0;
       handles.set(handle, 'opens' in item ? item.opens : { id: item.id, start: 0 });
       issued.set(canonicalSha256(item.value.citation), { id: item.id, section });
       return Object.freeze({ ...item.value, handle });
-    }));
+    })) };
   }
 
   /**
@@ -306,20 +314,23 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     if (typeof page.isLast !== 'boolean') jiraFailure('invalid_output');
     const token = page.nextPageToken === undefined || page.nextPageToken === null ? undefined : jiraString(page.nextPageToken, 4096);
     if (page.isLast ? token !== undefined : token === undefined) jiraFailure('invalid_output');
+    // A list's seen ids and page tokens refuse a cycle. Once they hold as many as a request may, the list ends here.
     const tokens = new Set(input.cursor?.tokens);
+    let spent = false;
+    let next = token;
     if (token !== undefined) {
       if (tokens.has(token)) jiraFailure('invalid_output');
-      tokens.add(token);
+      if (tokens.size >= REQUEST_MAX_HANDLES) { spent = true; next = undefined; } else tokens.add(token);
     }
     const ids = new Set(input.cursor?.ids);
     const selected: ParsedJiraIssueV1[] = [];
-    const discovered = jiraArray(page.issues, input.maximum).map(raw => {
+    const discovered = jiraArray(page.issues, input.maximum).flatMap(raw => {
       const reference = jiraRecord(raw);
       const id = jiraString(reference.id, 20, JIRA_ID);
       if (ids.has(id)) jiraFailure('invalid_output');
+      if (ids.size >= REQUEST_MAX_HANDLES) { spent = true; next = undefined; return []; }
       ids.add(id);
-      if (ids.size > REQUEST_MAX_HANDLES || tokens.size > REQUEST_MAX_HANDLES) jiraFailure('unavailable');
-      return id;
+      return [id];
     });
     // Search is eventually consistent. Current reads enforce issue security
     // before exposing even a title; results keep discovery order.
@@ -327,7 +338,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       if (input.projectId !== undefined && current.project_id !== input.projectId) jiraFailure('invalid_output');
       selected.push(current);
     }
-    return { selected, token, tokens, ids };
+    return { selected, token: next, tokens, ids, spent };
   }
 
   /**
@@ -418,9 +429,11 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       ];
       // Truncated covers what the open left out beside the ticket too (a link, a hidden link, a label cut). The ticket's
       // own text is cut when sections follow those shown, which its last section shown opens, or when it passed its bound.
-      const anchorCut = page.more || selected.text_truncated;
-      return Object.freeze({ items: remember([...page.items, ...visibleRelated]),
-        truncated: anchorCut || selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || (expandRelated && start === 0 && relatedIds.length !== selected.related_issue_ids.length),
+      const released = remember([...page.items, ...visibleRelated]);
+      if (released.spent) notices.push(BUDGET_NOTICE);
+      const anchorCut = page.more || selected.text_truncated || released.values.length < page.items.length;
+      return Object.freeze({ items: released.values,
+        truncated: anchorCut || released.spent || selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || (expandRelated && start === 0 && relatedIds.length !== selected.related_issue_ids.length),
         anchor_truncated: anchorCut, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
     }, signal);
   }
@@ -469,9 +482,12 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         }
         const matches = [...byKey, ...found].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         const selected = matches.slice(0, maximum);
-        return Object.freeze({ items: remember(selected),
-          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated),
-          ...(relaxed && selected.length > 0 ? { notice: RELAXED_NOTICE } : {}) });
+        const released = remember(selected);
+        const spent = released.spent || byText?.spent === true;
+        const notices = [...(relaxed && selected.length > 0 ? [RELAXED_NOTICE] : []), ...(spent ? [BUDGET_NOTICE] : [])];
+        return Object.freeze({ items: released.values,
+          truncated: spent || byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated),
+          ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
@@ -515,21 +531,23 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
         // A window on any date has no single field the pages are ordered by, so it never stops early.
         const oldestDay = input.date_field === "any" ? undefined : evidenceDayV1(oldest?.value.dates?.[input.date_field ?? "created"], input.time_zone);
         const passedSince = input.since !== undefined && oldestDay !== undefined && oldestDay < input.since;
-        const token = passedSince ? undefined : page.token;
         await verifyConnection(input.signal);
-        const items = remember(selected);
+        const released = remember(selected);
+        const spent = page.spent || released.spent || (page.token !== undefined && !passedSince && cursors.size >= REQUEST_MAX_HANDLES);
+        const items = released.values;
+        const token = passedSince || spent ? undefined : page.token;
         let next_cursor: string | undefined;
         if (token !== undefined) {
-          if (cursors.size >= REQUEST_MAX_HANDLES) jiraFailure('unavailable');
           next_cursor = `jira_cursor_${randomUUID()}`;
           cursors.set(next_cursor, { selection, token, projectId: project?.id, tokens: page.tokens, ids: page.ids });
         }
         // Jira's last page can be exactly full (ADR-0041): its end is confirmed only when the page held fewer issues than
         // asked for, or when the newest-first order passed since. Counted before ECHO's own date filter.
-        const page_full = !passedSince && page.token === undefined && page.selected.length >= maximum;
-        // Only a next page means more items exist. A summary cut to its label bound is one row's title, never a sign that
-        // the list did not reach its end (ADR-0041).
-        return Object.freeze({ items, truncated: token !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full });
+        const page_full = !passedSince && !spent && page.token === undefined && page.selected.length >= maximum;
+        // Only a next page, or a run that holds no more, means more items exist. A summary cut to its label bound is one
+        // row's title, never a sign that the list did not reach its end (ADR-0041).
+        return Object.freeze({ items, truncated: token !== undefined || spent, ...(next_cursor === undefined ? {} : { next_cursor }), page_full,
+          ...(spent ? { notice: BUDGET_NOTICE } : {}) });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

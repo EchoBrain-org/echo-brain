@@ -901,6 +901,23 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.jqls()).toHaveLength(1);
   });
 
+  it('lists past 512 items, and at the run budget ends the list with what it found and a notice, never a failure', async () => {
+    const f = fixture();
+    const pages = 210;
+    for (let index = 0; index < pages * 25; index += 1) f.state.tickets.set(String(20000 + index), ticket(String(20000 + index)));
+    f.state.pages = Array.from({ length: pages }, (_, number) => page(Array.from({ length: 25 }, (_, index) => String(20000 + number * 25 + index)), number + 1 < pages ? `token-${number}` : undefined));
+    const { reader } = await f.make();
+    let released = 0;
+    let result = await reader.list({ limit: 25 });
+    released += result.items.length;
+    while (result.next_cursor !== undefined) {
+      result = await reader.list({ limit: 25, cursor: result.next_cursor });
+      released += result.items.length;
+    }
+    expect(released).toBe(5_120);
+    expect(result).toMatchObject({ truncated: true, page_full: false, notice: 'This research run has read as many Jira items as one run can hold; Jira results past them were left out.' });
+  });
+
   it('relaxes a long empty search to any one word, keeps named keys, and ranks tickets by how many words their titles name', async () => {
     const literal = (term: string) => `text ~ "\\"${term}\\""`;
     const f = fixture();

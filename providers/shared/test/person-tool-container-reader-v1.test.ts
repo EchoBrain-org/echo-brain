@@ -44,7 +44,7 @@ async function fixture(pinned?: readonly string[]) {
   const reader = await createPersonToolContainerReaderV1({ provider, echo_projects: () => state.echo, ...(pinned === undefined ? {} : { pinned }) });
   const source = createAuditedPersonLiveEvidenceSourceV1({ actor: binding, read_grant_sha256: binding.read_grant_sha256, reader, audit, authorization: { assertCurrent: () => {} },
     access: { tool_id: 'fixture', identity_status: 'linked', external_scope_id: 'site-1', external_subject_id: binding.external_subject_id, read_status: 'connected', read_capabilities: ['live_evidence'] } });
-  return { state, provider, audit, source };
+  return { state, provider, audit, source, reader };
 }
 
 describe('the shared tool container reader (research tool contract v1)', () => {
@@ -176,6 +176,16 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     const found = await f.source.search({ query: 'channel', limit: 50 });
     expect(found.items).toHaveLength(25);
     expect(found.truncated).toBe(true);
+  });
+
+  it('releases past 512 items, and at the run budget returns what fits with a notice, never a failure', async () => {
+    const f = await fixture();
+    const listed = await f.reader.list({ limit: 25 });
+    let released = listed.items.length;
+    let opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
+    while (opened.items.length > 0) { released += 1; opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 }); }
+    expect(released).toBe(5_120);
+    expect(opened).toMatchObject({ truncated: true, notice: 'This research run has read as many Fixture channels as one run can hold; the rest were left out.' });
   });
 
   it("pages on from where the tool's page ended, past a container it left out", async () => {
