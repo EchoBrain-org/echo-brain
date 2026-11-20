@@ -71,6 +71,11 @@ async function answered(answer: Answer) {
 const shownAnswer = async (answer: Answer) => byTestId((await answered(answer)).thread(), 'answer').at(-1)!;
 
 /** A turn kept on the timeline `days` before NOW, `question` answered with `answer`. */
+/** Six turns of 500 pages each, oldest first: more sources than one check request's 1 MiB body holds. */
+function sixTurns(): TimelineTurn[] {
+  return Array.from({ length: 6 }, (_, at) => kept(String(at + 1), pagesAnswer(500), 6 - at, at === 5 ? QUESTION : `Which pages applied ${at}?`));
+}
+
 function kept(id: string, answer: Answer, days = 1, question = QUESTION): TimelineTurn {
   return { id: `00000000-0000-4000-8000-${id.padStart(12, '0')}`, asked_at: new Date(NOW.getTime() - days * 24 * 60 * 60_000).toISOString(), text: question,
     question, scope: GLOBAL, answer };
@@ -305,27 +310,30 @@ describe('a check of an arranged answer (ADR-0047)', () => {
   });
 
   it('asks about every source of an answer past what one check request\'s body holds, and leaves out what cites one past it you can no longer read', async () => {
-    // 175 pages, each a point of its own after the answer: the 175th is no longer yours to read. One request's 64 KiB holds 171 of them.
-    const { store, thread } = await reopened({ 41174: 'unreadable' }, kept('1', pagesAnswer(175)));
-    expect(rpc.mock.calls.filter(([name]) => name === 'ask.check').map(([, params]) => (params as { items: unknown[] }).items.length)).toEqual([171, 4]);
+    // Six turns of 500 pages, each a point of its own after the answer: page 500 is no longer yours to read. One request's 1 MiB holds fewer than 3,000.
+    const { store, thread } = await reopened({ 41499: 'unreadable' }, ...sixTurns());
+    const sizes = rpc.mock.calls.filter(([name]) => name === 'ask.check').map(([, params]) => (params as { items: unknown[] }).items.length);
+    expect(sizes).toHaveLength(2);
+    expect(sizes[0]! + sizes[1]!).toBe(3_000);
     const answer = byTestId(thread(), 'answer')[0]!;
-    expect(byTestId(answer, 'statement').map(words)).toHaveLength(174);
-    expect(text(answer)).not.toContain('Page 175');
+    expect(byTestId(answer, 'statement').map(words)).toHaveLength(499);
+    expect(text(answer)).not.toContain('Page 500 ');
     expect(await store.copyAnswer(store.getState().timeline.turns.at(-1)!.id)).toBe(true);
     const [markdown] = rpc.mock.calls.filter(([name]) => name === 'clipboard.writeText').map(([, params]) => (params as { text: string }).text);
-    expect(markdown).toContain('Page 174 applies.');
-    expect(markdown).not.toContain('Page 175');
+    expect(markdown).toContain('Page 499 applies.');
+    expect(markdown).not.toContain('Page 500 ');
   });
 
   it('keeps hidden what a request found you can no longer read when a later request of the check fails, and speaks for no turn', async () => {
-    // 175 pages, two requests: the first finds page 1 no longer yours to read, and the second fails.
+    // Six turns of 500 pages, two requests: the first finds page 1 no longer yours to read, and the second fails.
     const sent: number[] = [];
     const first = finding({ 41000: 'unreadable' });
     const { store, thread } = await reopenedWith(params => {
       sent.push((params.items as unknown[]).length);
       return sent.length === 1 ? first(params) : { ok: false, failure: { code: 'unavailable', retryable: true } };
-    }, kept('1', pagesAnswer(175)));
-    expect(sent).toEqual([171, 4]);
+    }, ...sixTurns());
+    expect(sent).toHaveLength(2);
+    expect(sent[0]! + sent[1]!).toBe(3_000);
     const id = store.getState().timeline.turns.at(-1)!.id;
     expect(text(byTestId(thread(), 'answer')[0])).not.toContain('Page 1 applies.');
     expect(await store.copyAnswer(id)).toBe(true);
@@ -338,9 +346,10 @@ describe('a check of an arranged answer (ADR-0047)', () => {
   });
 
   it('hides at once what such a check found unreadable, over a check of the turn still good that found it readable', async () => {
-    // An earlier turn citing 100 pages and the latest citing 110: Ask opening checks both, in two requests.
-    const older = kept('1', pagesAnswer(100), 2, 'Which pages apply?');
-    const latest = kept('2', pagesAnswer(110));
+    // An earlier turn and the latest, each citing 500 pages, behind four older turns of 500: Ask opening checks them all, in two requests.
+    const fillers = Array.from({ length: 4 }, (_, at) => kept(String(10 + at), pagesAnswer(500), 10 - at, `Which pages applied ${at}?`));
+    const older = kept('1', pagesAnswer(500), 2, 'Which pages apply?');
+    const latest = kept('2', pagesAnswer(500));
     const failing: number[] = [];
     let fails = false;
     const same = finding({});
@@ -350,7 +359,7 @@ describe('a check of an arranged answer (ADR-0047)', () => {
       failing.push(items.length);
       return failing.length > 1 ? { ok: false, failure: { code: 'unavailable', retryable: true } }
         : ok({ items: items.map(({ asked_at, citation }) => ({ state: asked_at === older.asked_at && citation.page_id === '41000' ? 'unreadable' : 'same' })) });
-    }, older, latest);
+    }, ...fillers, older, latest);
     // Five and a half minutes on, opening the earlier turn checks it alone: its page 1 is readable.
     vi.setSystemTime(NOW.getTime() + 5.5 * 60_000);
     store.toggleTurn(older.id);
@@ -363,7 +372,7 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     store.pickSuggestion({ question: QUESTION, turn: latest.id });
     await flush();
     expect(failing.length).toBe(2);
-    expect(failing[0]! + failing[1]!).toBe(210);
+    expect(failing[0]! + failing[1]!).toBe(3_000);
     expect(store.getState().timeline.checks[older.id]?.states[0]).toBe('unreadable');
     expect(store.getState().timeline.turns.find(turn => turn.id === older.id)!.unreadable).toEqual([0]);
     expect(await store.copyAnswer(older.id)).toBe(true);

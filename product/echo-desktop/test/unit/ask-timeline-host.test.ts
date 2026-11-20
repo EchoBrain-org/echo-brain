@@ -378,7 +378,7 @@ describe('what the page sends with an Ask and a check', () => {
     expect(asked({ ...previous, statements: [{ text: `${'🙂'.repeat(PREVIOUS_LIMITS.statement_bytes / 4)}x`, citation_indexes: [0] }] })).toBeNull();
   });
 
-  it('checks 1 to 100 items, each a citation that can go, within 64 KiB', () => {
+  it('checks any number of items, each a citation that can go, within the 1 MiB request body', () => {
     const item = { asked_at: '2026-10-25T11:30:00.000Z', citation: ticketCitation };
     const record = { asked_at: item.asked_at, citation: { kind: 'approved_record', atom_id: sha('1'), record_sha256: sha('2'), policy_id: 'project-members-readable-person-v1' } };
     const followUp = { asked_at: item.asked_at, citation: { kind: 'follow_up', item_id: 'itm_timeline-1' } };
@@ -391,6 +391,6 @@ describe('what the page sends with an Ask and a check', () => {
       [{ asked_at: item.asked_at, citation: { kind: 'person', membership_id: ARI.membership_id } }], [{ ...followUp, citation: { kind: 'follow_up', item_id: 'x' } }],
       [{ ...item, extra: 1 }], 'items']) expect(askCheckRequest(bad)).toBeNull();
     const long = { ...ticketCitation, permalink: `https://example.atlassian.net/browse/${'T'.repeat(1_900)}` };
-    expect(askCheckRequest(Array.from({ length: 40 }, () => ({ ...item, citation: long })))).toBeNull();
+    expect(askCheckRequest(Array.from({ length: 600 }, () => ({ ...item, citation: long })))).toBeNull();
   });
 });
