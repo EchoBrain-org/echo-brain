@@ -725,11 +725,6 @@ function readGeneration<T>(read: () => T): T {
   }
 }
 
-/**
- * The Layer 1 reader's own page maximum (organization-record's `PersonRecordReaderV1`): a longer lag holds Only me rather
- * than list it stale, until the index catches up.
- */
-const MEETING_WAITING_ONLY_ME_MAX = 100;
 const RECORD_SHA256 = /^sha256:[0-9a-f]{64}$/;
 /** The filed records a project lookup reads per SQL page; it pages on until none is left. Batching, not a bound. */
 const PROJECT_RECORDS_PAGE = 100;
@@ -1147,11 +1142,10 @@ export function createPersonRecordSearchRouteV1(
       principal_id: authorization.principal_id, membership_id: authorization.membership_id,
       ...(options.capture_projects === undefined ? {} : { project_ids: projects.project_ids }),
       ...(scope.project_id === undefined ? {} : { project_id: scope.project_id }),
-      after_position: publishedHead, limit: scope.only_me ? MEETING_WAITING_ONLY_ME_MAX : 1,
+      // Only me reads every record past the published head: whether one is waiting depends on each one's policy.
+      after_position: publishedHead, limit: scope.only_me ? Number.MAX_SAFE_INTEGER : 1,
     });
     if (!scope.only_me) return waiting.length > 0;
-    // A lag longer than one probe holds, rather than list a stale Only me.
-    if (waiting.length === MEETING_WAITING_ONLY_ME_MAX) return true;
     // The Layer 1 read admits a restricted reviewer record to its approver alone.
     return waiting.some((record) => envelopePolicy(record.envelope) === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2);
   }
