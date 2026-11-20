@@ -607,9 +607,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       // A retired or malformed scope is refused, never widened to all accessible context.
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
-      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3): one it would refuse is refused here.
-      const previous = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
-      if (text === '' || previous === null) return code('invalid_request');
+      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3). One it would refuse is
+      // context, not the question: the Ask goes without it rather than failing.
+      const checked = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
+      if (text === '') return code('invalid_request');
+      if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
+      const previous = checked ?? undefined;
       // An Ask's steps reach the page as they are printed (ask.ts).
       const progress = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),

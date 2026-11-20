@@ -23,6 +23,7 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
+import { PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
@@ -313,16 +314,17 @@ describe('what the page sends with an Ask and a check', () => {
     for (const bad of [
       { ...previous, purpose: 'guess' }, { ...previous, question: '' }, { ...previous, question: ` ${previous.question}` }, { ...previous, asked_at: 'today' },
       { ...previous, asked_at: '2026-10-25T11:30:00Z' }, { ...previous, extra: true },
-      { ...previous, statements: many(previous.statements[0], 9) }, { ...previous, statements: [{ text: 'x'.repeat(401), citation_indexes: [0] }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0, 0, 0, 0] }] },
-      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, 13) },
+      { ...previous, statements: many(previous.statements[0], PREVIOUS_LIMITS.statements + 1) },
+      { ...previous, statements: [{ text: 'x'.repeat(PREVIOUS_LIMITS.statement_chars + 1), citation_indexes: [0] }] },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [1] }] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: many(0, PREVIOUS_LIMITS.statement_citations + 1) }] },
+      { ...previous, statements: [{ text: 'Open.', citation_indexes: [0], private: true }] }, { ...previous, citations: many(cited, PREVIOUS_LIMITS.citations + 1) },
       { ...previous, citations: [{ ...cited, visibility: 'everyone' }] }, { ...previous, citations: [ticketCitation] },
       // Each citation once, and each sentence citing each once.
       { ...previous, citations: [cited, cited] }, { ...previous, statements: [{ text: 'Open.', citation_indexes: [0, 0] }] },
     ]) expect(asked(bad)).toBeNull();
-    // 400 characters as the API counts them: code points, so a sentence of 400 emoji passes, and one more does not.
-    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(400), citation_indexes: [0] }] })).not.toBeNull();
-    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(401), citation_indexes: [0] }] })).toBeNull();
+    // Characters as the API counts them: code points, so a sentence of that many emoji passes, and one more does not.
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(PREVIOUS_LIMITS.statement_chars), citation_indexes: [0] }] })).not.toBeNull();
+    expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(PREVIOUS_LIMITS.statement_chars + 1), citation_indexes: [0] }] })).toBeNull();
   });
 
   it('checks 1 to 100 items, each a citation that can go, within 64 KiB', () => {
