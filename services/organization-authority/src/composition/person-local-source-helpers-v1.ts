@@ -11,10 +11,10 @@ import { PERSON_QUERY_FUNCTION_WORDS_V1 } from '../adapters/persistence/sqlite/p
 export function evidenceInvalidV1(message: string): never { throw new AuthorityOperationError('invalid_request', message); }
 export function evidenceNotFoundV1(): never { throw new AuthorityOperationError('not_found', 'Evidence item is not available in this request'); }
 
-/** A call's page: at most `maximum` items, and a limit outside 1 to 50 is refused. */
-export function evidencePageSizeV1(limit: number | undefined, maximum: number): number {
-  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)) evidenceInvalidV1('Evidence limit is invalid');
-  return Math.min(limit ?? maximum, maximum);
+/** A call's page: the count the caller names, any size, or every item when it names none. Only a non-count is refused. */
+export function evidencePageSizeV1(limit: number | undefined): number {
+  if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) evidenceInvalidV1('Evidence limit must be a positive whole number');
+  return limit ?? Number.POSITIVE_INFINITY;
 }
 
 /** A search's words: whole Unicode terms, lower case, without function words unless written as an acronym. */

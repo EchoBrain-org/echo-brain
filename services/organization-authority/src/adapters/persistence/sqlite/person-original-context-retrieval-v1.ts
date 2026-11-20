@@ -40,15 +40,8 @@ import { createUncheckedTallyV1 } from "../../../application/evidence-unchecked-
  * format and never changes with what one read may carry. An open hands over many packets instead.
  */
 const MAXIMUM_PACKET_BYTES = 3_072;
-/** The most hits one search returns: one page the research model reads in a step. More set `truncated`. */
-const ORIGINAL_SEARCH_MAX_V1 = 25;
-/** The most rows one inventory page returns. More set `truncated`. */
-const ORIGINAL_INVENTORY_MAX_V1 = 50;
-/**
- * What one open hands the research prompt: the cited packet always, then its neighbours nearest first until the next
- * would pass this. A neighbour left out is offered as a continuation the reader can open next.
- */
-const ORIGINAL_OPEN_MAX_BYTES_V1 = 96 * 1024;
+/** SQLite's LIMIT for "no limit": a desk read with no named count returns every row its access admits. */
+const SQL_NO_LIMIT = -1;
 const SOURCE_ID = /^source:[0-9a-f]{64}$/;
 const SHA256 = /^sha256:[0-9a-f]{64}$/;
 /** The Ask source check reads under global access: everything the caller may read, every project included. */
@@ -219,29 +212,25 @@ function packets(title: string, body: string): readonly string[] {
 }
 
 /**
- * One open's window over a source's units in order (packets, or a document's chunks), given each unit's size: the anchor,
- * then up to `neighbours` more, nearest first (the one before, then the one after), until the next would pass the open's
- * byte budget. `read` is the anchor, then the others in source order. `offered` is the nearest unit left out on each side,
- * when the reader asked for neighbours: a continuation it can open next, so a whole source can be read open by open.
+ * One open's window over a source's packets in order: the anchor, then up to `neighbours` more, nearest first (the one
+ * before, then the one after); every packet when `neighbours` is infinite. `read` is the anchor, then the others in source
+ * order. `offered` is the nearest packet left out on each side, when the reader named a count: a continuation it can open
+ * next, so a source paged by its reader is still read whole, open by open.
  */
-function openWindowV1(anchor: number, sizes: readonly number[], neighbours: number): { readonly read: readonly number[]; readonly offered: readonly number[] } {
+function openWindowV1(anchor: number, count: number, neighbours: number): { readonly read: readonly number[]; readonly offered: readonly number[] } {
   const read = [anchor];
-  let used = sizes[anchor]!;
   let before = anchor - 1;
   let after = anchor + 1;
-  let full = false;
-  while (!full && read.length - 1 < neighbours && (before >= 0 || after < sizes.length)) {
+  while (read.length - 1 < neighbours && (before >= 0 || after < count)) {
     for (const side of ["before", "after"] as const) {
       if (read.length - 1 >= neighbours) break;
       const index = side === "before" ? before : after;
-      if (index < 0 || index >= sizes.length) continue;
-      if (used + sizes[index]! > ORIGINAL_OPEN_MAX_BYTES_V1) { full = true; break; }
+      if (index < 0 || index >= count) continue;
       read.push(index);
-      used += sizes[index]!;
       if (side === "before") before -= 1; else after += 1;
     }
   }
-  const offered = neighbours === 0 ? [] : [before, after].filter((index) => index >= 0 && index < sizes.length);
+  const offered = neighbours === 0 ? [] : [before, after].filter((index) => index >= 0 && index < count);
   return Object.freeze({ read: Object.freeze([anchor, ...read.slice(1).sort((left, right) => left - right)]), offered: Object.freeze(offered) });
 }
 
@@ -300,8 +289,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   /**
-   * Request-bound desk search: whole terms, at most three passages per
-   * document.
+   * Request-bound desk search: whole terms, every matching passage. A named `limit` is the caller's page, any size;
+   * with none, every match (or every inventory row) its access admits. More than the page set `truncated`.
    */
   deskSearch(input: EvidenceDateFilterV1 & {
     readonly source?: "meeting" | "document";
@@ -313,11 +302,8 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     readonly exclude?: OriginalContextDeskExclusionV1;
   }): OriginalContextDeskReleaseV1 {
     validateEvidenceDateFilterV1(input, input.source === "meeting" ? PERSON_MEETING_DATE_FIELDS_V1 : input.source === "document" ? PERSON_DOCUMENT_DATE_FIELDS_V1 : ANY_SOURCE_DATE_FIELDS);
-    // A request for more than one page is clamped to it; `truncated` says more exist.
-    const maximum = input.query === undefined ? ORIGINAL_INVENTORY_MAX_V1 : ORIGINAL_SEARCH_MAX_V1;
-    const requested = input.limit ?? maximum;
-    const limit = Math.min(requested, maximum);
-    if (!Number.isSafeInteger(requested) || requested < 1 || (input.exclude !== undefined
+    const limit = input.limit ?? Number.POSITIVE_INFINITY;
+    if ((input.limit !== undefined && (!Number.isSafeInteger(input.limit) || input.limit < 1)) || (input.exclude !== undefined
       && (!Array.isArray(input.exclude.source_ids) || input.exclude.source_ids.some(id => typeof id !== "string") || typeof input.exclude.only_me !== "boolean"))) {
       throw new AuthorityOperationError("invalid_request", "request is invalid");
     }
@@ -372,20 +358,21 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     readonly citation: OriginalContextCitationV1;
     readonly neighbours?: number;
   }): OriginalContextDeskReleaseV1 {
-    const neighbours = input.neighbours ?? 0;
-    if (!Number.isSafeInteger(neighbours) || neighbours < 0) {
+    // The whole source unless the reader names how many packets around the cited one it wants.
+    if (input.neighbours !== undefined && (!Number.isSafeInteger(input.neighbours) || input.neighbours < 0)) {
       throw new AuthorityOperationError("invalid_request", "Evidence open neighbours must be a whole number of zero or more");
     }
+    const neighbours = input.neighbours ?? Number.POSITIVE_INFINITY;
     const actor = this.reader(input.access_token, input.scope);
     if (input.citation.document_id === undefined) {
-      // A note or an imported meeting: its packets in order, the cited one and its neighbours read, the next ones offered.
+      // A note or an imported meeting: its packets in order, the cited one first.
       const row = this.textByCitation(actor, input.scope, input.citation);
       if (row === undefined) denied();
       this.assertTextSourceRevision(row);
       const atoms = packets(packetTitle(row), row.text).map((text, index) => originalPacketAtomV1(row, { index, text }));
       const anchor = atoms.findIndex((atom) => this.citationMatches(atom, input.citation));
       if (anchor < 0) denied();
-      const window = openWindowV1(anchor, atoms.map((atom) => Buffer.byteLength(atom.text, "utf8")), neighbours);
+      const window = openWindowV1(anchor, atoms.length, neighbours);
       const read = window.read.map((index) => atoms[index]!);
       const offered = window.offered.map((index) => atoms[index]!);
       return this.commitDeskRelease(actor, input.access_token, input.scope,
@@ -405,17 +392,15 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       if (candidate !== undefined) { anchorRow = row; anchor = candidate; break; }
     }
     if (anchorRow === undefined || anchor === undefined) denied();
-    // Preceding and following chunks, nearest first, each side read only as far as one open could reach (its byte
-    // budget, or the neighbours asked for) plus the one beyond, which is offered as a continuation.
+    // Preceding and following chunks, nearest first: every one for a whole open, else only as many as the named
+    // packets could reach (each chunk holds at least one) plus the one beyond, which is offered as a continuation.
     type Chunk = Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">;
     const side = (sql: string): Chunk[] => {
       const chunks: Chunk[] = [];
-      let bytes = 0;
       if (neighbours === 0) return chunks;
       for (const chunk of this.database.prepare(sql).iterate(input.citation.document_id, meta.extractor, anchorRow.ordinal) as Iterable<Chunk>) {
         chunks.push(chunk);
-        bytes += Buffer.byteLength(chunk.text, "utf8");
-        if (chunks.length > neighbours || bytes > ORIGINAL_OPEN_MAX_BYTES_V1) break;
+        if (chunks.length > neighbours) break;
       }
       return chunks;
     };
@@ -423,18 +408,24 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     const after = side("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? AND ordinal>? ORDER BY ordinal ASC");
     // Preserve the exact requested segment.  A large extracted chunk can have
     // several 3 KiB packets, and recomputing the anchor with an empty query
-    // would otherwise silently substitute packet zero. A neighbour chunk is read from its first packet.
+    // would otherwise silently substitute packet zero. Every chunk is read packet by packet.
     this.assertIntegrity(meta);
     this.assertDocumentSourceRevision(meta as DocumentRow);
     const rows = [...before.reverse(), anchorRow, ...after].map((chunk) => chunk === anchorRow ? anchorRow : Object.freeze({ ...meta, ...chunk }) as DocumentRow);
-    const atoms = rows.map((row) => {
-      if (row === anchorRow) return anchor!;
-      this.assertDocumentChunk(row, representation);
-      return originalPacketAtomV1(row, firstPacket(row.title, row.text));
-    });
-    const window = openWindowV1(before.length, atoms.map((atom) => Buffer.byteLength(atom.text, "utf8")), neighbours);
-    const items = [...window.read.map((index) => this.deskItem(rows[index]!, atoms[index]!, true)), ...window.offered.map((index) => this.deskItem(rows[index]!, atoms[index]!, false))];
-    return this.commitDeskRelease(actor, input.access_token, input.scope, items, [...window.read, ...window.offered].map((index) => atoms[index]!));
+    const units: { readonly row: DocumentRow; readonly atom: ReleasedSourceContextAtomV1 }[] = [];
+    let anchorIndex = -1;
+    for (const row of rows) {
+      if (row !== anchorRow) this.assertDocumentChunk(row, representation);
+      for (const [index, text] of packets(row.title, row.text).entries()) {
+        const atom = originalPacketAtomV1(row, { index, text });
+        if (row === anchorRow && atom.anchor_sha256 === anchor.anchor_sha256) anchorIndex = units.length;
+        units.push({ row, atom: row === anchorRow && atom.anchor_sha256 === anchor.anchor_sha256 ? anchor : atom });
+      }
+    }
+    if (anchorIndex < 0) denied();
+    const window = openWindowV1(anchorIndex, units.length, neighbours);
+    const items = [...window.read.map((index) => this.deskItem(units[index]!.row, units[index]!.atom, true)), ...window.offered.map((index) => this.deskItem(units[index]!.row, units[index]!.atom, false))];
+    return this.commitDeskRelease(actor, input.access_token, input.scope, items, [...window.read, ...window.offered].map((index) => units[index]!.atom));
   }
 
   revalidateDeskRelease(input: {
@@ -455,16 +446,22 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     // snapshots. Not the org-wide revision: anyone's note or rename moves it.
     if (this.grantsSha256(actor) !== input.release.release.grants_sha256) denied();
     if (input.items_checked === true) return checked;
+    // Each source's current row is read once, however many of its packets the release holds.
+    const rows = new Map<string, SourceRow | DocumentRow>();
     for (const item of input.release.items) {
       const atom = input.release.release.released_atoms.find((candidate) => this.citationMatches(candidate, item.citation));
-      if (atom === undefined || canonicalJson(this.currentDeskItem(actor, input.release.release.scope, atom, item.text !== undefined)) !== canonicalJson(item)) denied();
+      if (atom === undefined) denied();
+      const key = canonicalJson([atom.source_id, atom.revision_id, atom.source_sha256, atom.representation_sha256, atom.document_id ?? null]);
+      const row = rows.get(key) ?? this.currentDeskRow(actor, input.release.release.scope, atom);
+      rows.set(key, row);
+      if (canonicalJson(this.deskItem(row, atom, item.text !== undefined)) !== canonicalJson(item)) denied();
     }
     return checked;
   }
 
   revalidate(input: { readonly access_token: string; readonly release: OriginalContextReleaseV1 }) {
     const actor = this.releaseActor(input.access_token, input.release);
-    for (const atom of input.release.released_atoms) this.assertReleasedAtomReadable(actor, input.release.scope, atom);
+    this.assertReleasedAtomsReadable(actor, input.release.scope, input.release.released_atoms);
     return Object.freeze({ checked_at: actor.checked_at });
   }
 
@@ -570,18 +567,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       left.row.source_id.localeCompare(right.row.source_id) ||
       ("ordinal" in left.row ? left.row.ordinal : 0) - ("ordinal" in right.row ? right.row.ordinal : 0) ||
       left.packet.index - right.packet.index);
-    const documents = new Map<string, number>();
-    const selected: typeof ranked = [];
-    for (const candidate of ranked) {
-      if ("document_id" in candidate.row) {
-        const count = documents.get(candidate.row.document_id) ?? 0;
-        if (count >= 3) continue;
-        documents.set(candidate.row.document_id, count + 1);
-      }
-      selected.push(candidate);
-      if (selected.length === limit) break;
-    }
-    return selected.map(candidate => {
+    return ranked.slice(0, limit).map(candidate => {
       const scan = candidate.row;
       const row = "document_id" in scan ? this.hydrateDocumentScanRow(actor, scope, scan) : this.textBySource(actor, scope, scan.source_id, scan.revision_id);
       if (row === undefined) denied();
@@ -619,16 +605,16 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   }
 
   private deskInventoryRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, limit: number, kinds: readonly DeskKind[] | undefined, exclude?: OriginalContextDeskExclusionV1): readonly (SourceRow | DocumentRow)[] {
-    // Source inventory exposes one stable representative passage per document.
-    const sourceLimit = 100;
+    // Source inventory exposes one stable representative passage per document. The newest `limit` across kinds are
+    // among the newest `limit` of each kind, so each kind is read that far and no further.
     const candidates = [
-      ...this.textRows(actor, scope, { limit: sourceLimit, ...(exclude === undefined ? {} : { exclude }) }),
+      ...this.textRows(actor, scope, { limit, ...(exclude === undefined ? {} : { exclude }) }),
       // Transcript-only imports from a meeting tool remain visible in the
       // original-item list, but have no passage to cite. Exclude them before
       // applying the limit so they neither
       // break packet construction nor hide readable notes.
-      ...this.imported.rows(actor, scope).filter(row => row.text.length > 0 && !excludedRow(row, true, exclude)).slice(0, sourceLimit),
-      ...this.documentRows(actor, scope, { limit: sourceLimit, first_document_passage: true, ...(exclude === undefined ? {} : { exclude }) }),
+      ...this.imported.rows(actor, scope).filter(row => row.text.length > 0 && !excludedRow(row, true, exclude)).slice(0, limit),
+      ...this.documentRows(actor, scope, { limit, first_document_passage: true, ...(exclude === undefined ? {} : { exclude }) }),
     ]
       .filter((row) => kinds === undefined || kinds.includes("document_id" in row ? "document_passage" : row.api_version === 0 ? "imported_meeting" : "note"))
       .sort((left, right) => right.received_at.localeCompare(left.received_at) || left.source_id.localeCompare(right.source_id) || ("ordinal" in left ? left.ordinal : 0) - ("ordinal" in right ? right.ordinal : 0));
@@ -670,15 +656,13 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     return Object.freeze({ citation, kind, dates: { ...((row as SourceRow).dates ?? {}), received: row.received_at }, ...(includeText ? { text: atom.text } : {}), visibility, label: atom.label ?? "Saved context", received_at: row.received_at, version: atom.revision_id, ref });
   }
 
-  private currentDeskItem(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1, includeText: boolean): OriginalContextDeskItemV1 {
-    if (atom.document_id === undefined) {
-      const row = this.textByCitation(actor, scope, atom);
-      if (row === undefined) denied();
-      return this.deskItem(row, atom, includeText);
-    }
-    const row = this.documentSourceMeta(actor, scope, atom.source_id, atom.revision_id, atom.document_id, atom.representation_sha256);
+  /** The released atom's source row as the caller may read it now. */
+  private currentDeskRow(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): SourceRow | DocumentRow {
+    const row = atom.document_id === undefined
+      ? this.textByCitation(actor, scope, atom)
+      : this.documentSourceMeta(actor, scope, atom.source_id, atom.revision_id, atom.document_id, atom.representation_sha256) as DocumentRow | undefined;
     if (row === undefined) denied();
-    return this.deskItem(row as DocumentRow, atom, includeText);
+    return row;
   }
 
   private commitDeskRelease(actor: PersonAccessAuthorization, accessToken: string, scope: PersonAskScopeV2, items: readonly OriginalContextDeskItemV1[], atoms: readonly ReleasedSourceContextAtomV1[], truncated = false, unchecked?: EvidenceDeskUncheckedV1): OriginalContextDeskReleaseV1 {
@@ -705,7 +689,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_contents_v1 content ON content.organization_id=r.organization_id AND content.source_id=r.source_id AND content.revision_id=r.revision_id
       WHERE u.organization_id=? AND ${acl.sql} ${scoped.sql} ${dates.sql} ${excluded.sql}
       ORDER BY u.received_at DESC,s.source_id LIMIT ?`;
-    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly SourceRow[];
+    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, Number.isFinite(query.limit) ? query.limit : SQL_NO_LIMIT) as readonly SourceRow[];
   }
 
   private textScanRows(actor: PersonAccessAuthorization, scope: PersonAskScopeV2): readonly OriginalScanRow[] {
@@ -761,7 +745,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       JOIN authority_source_representations_v1 representation ON representation.organization_id=r.organization_id AND representation.source_id=r.source_id AND representation.revision_id=r.revision_id AND representation.processor_version=t.extractor
       WHERE d.organization_id=? AND ${acl.sql} ${scoped.sql} ${firstChunk} ${dates.sql} ${excluded.sql}
       ORDER BY d.received_at DESC,s.source_id,t.ordinal LIMIT ?`;
-    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, query.limit) as readonly DocumentRow[];
+    return this.database.prepare(sql).all(actor.organization_id, ...acl.args, ...scoped.args, ...dates.args, ...excluded.args, Number.isFinite(query.limit) ? query.limit : SQL_NO_LIMIT) as readonly DocumentRow[];
   }
 
   private assertIntegrity(row: Pick<SourceRow, "source_id" | "revision_id" | "source_sha256" | "representation_sha256">): void {
@@ -812,19 +796,54 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
     if (canonicalSourceContentV1(content) !== canonicalSourceContentV1(expected)) unavailable();
   }
 
-  private assertReleasedAtomReadable(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atom: ReleasedSourceContextAtomV1): void {
-    if (!SOURCE_ID.test(atom.source_id) || !SHA256.test(atom.source_sha256) || !SHA256.test(atom.representation_sha256) || !SHA256.test(atom.anchor_sha256)) denied();
-    if (atom.document_id === undefined) {
-      const row = this.textByCitation(actor, scope, atom);
-      if (row === undefined || !this.hasTextAnchor(row, atom)) denied();
-      return;
+  /**
+   * Every released atom is still readable, with its exact text. Atoms of one source revision are checked together, so a
+   * whole-source open re-reads and re-packets its source once, not once per packet.
+   */
+  private assertReleasedAtomsReadable(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, atoms: readonly ReleasedSourceContextAtomV1[]): void {
+    const sources = new Map<string, ReleasedSourceContextAtomV1[]>();
+    for (const atom of atoms) {
+      if (!SOURCE_ID.test(atom.source_id) || !SHA256.test(atom.source_sha256) || !SHA256.test(atom.representation_sha256) || !SHA256.test(atom.anchor_sha256)) denied();
+      const key = canonicalJson([atom.source_id, atom.revision_id, atom.source_sha256, atom.representation_sha256, atom.document_id ?? null]);
+      const group = sources.get(key);
+      if (group === undefined) sources.set(key, [atom]); else group.push(atom);
     }
-    if (this.documentAnchorByCitation(actor, scope, atom) === undefined) denied();
+    for (const group of sources.values()) {
+      const current = this.currentPackets(actor, scope, group[0]!);
+      for (const atom of group) {
+        const packet = current?.get(atom.anchor_sha256);
+        if (packet === undefined || !this.citationMatches(packet, atom) || packet.text !== atom.text) denied();
+      }
+    }
   }
 
-  private hasTextAnchor(row: SourceRow, atom: ReleasedSourceContextAtomV1): boolean {
-    this.assertTextSourceRevision(row);
-    return packets(packetTitle(row), row.text).some((text, index) => this.citationMatches(originalPacketAtomV1(row, { index, text }), atom) && atom.text === text);
+  /** A cited source revision's packets as the caller may read them now, by anchor; undefined when it cannot read it. */
+  private currentPackets(actor: PersonAccessAuthorization, scope: PersonAskScopeV2, citation: OriginalContextCitationV1): ReadonlyMap<Sha256Digest, ReleasedSourceContextAtomV1> | undefined {
+    const found = new Map<Sha256Digest, ReleasedSourceContextAtomV1>();
+    if (citation.document_id === undefined) {
+      const row = this.textByCitation(actor, scope, citation);
+      if (row === undefined) return undefined;
+      this.assertTextSourceRevision(row);
+      for (const [index, text] of packets(packetTitle(row), row.text).entries()) {
+        const atom = originalPacketAtomV1(row, { index, text });
+        found.set(atom.anchor_sha256, atom);
+      }
+      return found;
+    }
+    const meta = this.documentSourceMeta(actor, scope, citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256);
+    if (meta === undefined) return undefined;
+    this.assertDocumentSourceRevision(meta as DocumentRow);
+    const chunks = this.representationChunks(meta as DocumentRow);
+    for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? ORDER BY ordinal").iterate(citation.document_id) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
+      const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
+      if (row.extractor !== meta.extractor) continue;
+      this.assertDocumentChunk(row, chunks);
+      for (const [index, text] of packets(row.title, row.text).entries()) {
+        const atom = originalPacketAtomV1(row, { index, text });
+        found.set(atom.anchor_sha256, atom);
+      }
+    }
+    return found;
   }
 
   private textAnchorForCitation(row: SourceRow, citation: OriginalContextCitationV1): ReleasedSourceContextAtomV1 | undefined {

@@ -111,8 +111,8 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
     const kept = Array.from({ length: 500 }, (_, index) => w.digest(`kept-${499 - index}`));
     // To EMP_A they are not filed in SHARED at all: OWNER's r3 is still the news, past none of them.
     expect(activity("emp_a")).toEqual({ meeting_at: arrival("r3"), filed: [w.digest("r4"), w.digest("r3")] });
-    // OWNER finds them, newest first: his own, so no meeting time among his newest 500.
-    expect(activity("owner")).toEqual({ meeting_at: null, filed: kept });
+    // OWNER finds them, newest first, and every older record too: past his own, EMP_A's r4 is his news.
+    expect(activity("owner")).toEqual({ meeting_at: arrival("r4"), filed: [...kept, w.digest("r4"), w.digest("r3")] });
     // EMP_A's project records cost one exact read each, none for OWNER's private ones; OWNER's are his newest.
     const reads = vi.spyOn(PersonRecordReaderV1.prototype, "list");
     try {
@@ -120,6 +120,8 @@ describe("a meeting item kept private inside a project (ADR-0049)", () => {
       expect(reads).toHaveBeenCalledTimes(2);
     } finally { reads.mockRestore(); }
     expect(route.projectRecords({ access_token: "owner", project_id: SHARED, limit: 500 })).toEqual(kept);
+    // With no count named, every record OWNER reads in SHARED.
+    expect(route.projectRecords({ access_token: "owner", project_id: SHARED })).toEqual([...kept, w.digest("r4"), w.digest("r3")]);
   });
 
   it("follows its approver's current grants: out of the project scope once they leave it, still theirs alone", async () => {

@@ -8,8 +8,6 @@ import {
   buildReadableSearchGenerationV1,
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
-  READABLE_SEARCH_LIST_MAX_V1,
-  READABLE_SEARCH_RESPONSE_MAX_V1,
   readReadableSearchGenerationAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
@@ -248,6 +246,19 @@ describe("immutable readable-search generation v1", () => {
     }
   });
 
+  it("admits a record filed in any number of projects: the approval that files it owns that rule", () => {
+    const directory = tempDirectory();
+    const projectPolicy = PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1;
+    const projects = Array.from({ length: 40 }, (_, index) => `prj_${String(index).padStart(2, "0")}`);
+    const wide = { ...atom("project-wide", projectPolicy), text: "wide roadmap", text_sha256: digest("wide roadmap"),
+      audience_project_ids: projects, association_project_ids: projects };
+    const built = buildReadableSearchGenerationV1({ ...input(directory, [wide]), project_members_policy_contract_sha256: digest(`policy-${projectPolicy}`) });
+    const active = activeGeneration(built);
+    warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: active });
+    const reader = { principal_id: "prn_last", membership_id: "mem_last", project_ids: [projects.at(-1)!] };
+    expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader, query: "roadmap" }).items.map((item) => item.text)).toEqual(["wide roadmap"]);
+  });
+
   it("refuses an atom under the retired Team policy and a reviewer atom with an audience project", () => {
     const directory = tempDirectory();
     expect(() => buildReadableSearchGenerationV1(input(directory, [atom("team", "organization-member-readable-person-v2" as never)])))
@@ -449,6 +460,7 @@ describe("immutable readable-search generation v1", () => {
           ? { principal_id: "prn_member", membership_id: "mem_member", ...SHARED }
           : { principal_id: `reviewer-${tuple}`, membership_id: `membership-${tuple}`, ...SHARED },
         query,
+        limit: 10,
       });
     // Equal scores fall back to atom order: a project member reads the shared segment alone,
     // and the last reviewer reads it merged with their own segment.
@@ -825,19 +837,23 @@ describe("immutable readable-search generation v1", () => {
       expect(() => search({ record_sha256s: [], policy_ids: ["team" as never] })).toThrow("known policies");
     });
 
-    it("returns up to twenty-five search hits and lists past fifty, saying when more exist", () => {
+    it("returns every match when no limit is named, and a named limit of any size, saying when more exist", () => {
       const directory = tempDirectory();
-      const many = Array.from({ length: 60 }, (_, order) => inRecord("wide", 1, order, `launch item ${order}`));
+      const many = Array.from({ length: 1_200 }, (_, order) => inRecord("wide", 1, order, `launch item ${order}`));
       const active = warmed(directory, many);
-      const searched = searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: READABLE_SEARCH_RESPONSE_MAX_V1 });
-      expect(searched.items).toHaveLength(25);
-      expect(searched.truncated).toBe(true);
-      expect(() => searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 26 })).toThrow("one through 25");
-      const listed = listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 60 });
-      expect(listed.items).toHaveLength(60);
+      const all = searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch" });
+      expect(all.items).toHaveLength(1_200);
+      expect(all.truncated).toBe(false);
+      const page = searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 100 });
+      expect(page.items).toHaveLength(100);
+      expect(page.truncated).toBe(true);
+      expect(searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 5_000 }).items).toHaveLength(1_200);
+      expect(() => searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 0 })).toThrow("positive safe integer");
+      const listed = listReadableSearchGenerationV1({ ...active, reader: REVIEWER });
+      expect(listed.items).toHaveLength(1_200);
       expect(listed.truncated).toBe(false);
-      expect(listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 59 }).truncated).toBe(true);
-      expect(READABLE_SEARCH_LIST_MAX_V1).toBeGreaterThan(50);
+      expect(listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 1_199 }).truncated).toBe(true);
+      expect(() => listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 1.5 })).toThrow("positive safe integer");
     });
 
     it("recomputes BM25 statistics over the narrowed records, as a project scope does", () => {

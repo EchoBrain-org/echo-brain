@@ -198,11 +198,16 @@ describe('thin live ticket dispatcher', () => {
     vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('invalid_request', 'Fixture rule'));
     await expect(deskWith(f.base).search({ query: 'launch' })).rejects.toMatchObject({ code: 'invalid_request', message: 'Fixture rule' });
   });
-  it('asks each live source for up to twenty-five hits by default', async () => {
+  it('asks each live source for what it holds when research names no count, and for the named count of any size', async () => {
     const f = mixedFixture();
-    await deskWith(f.base, f.ticket, f.page).search({ query: 'launch' });
-    expect(f.ticket.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
-    expect(f.page.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+    const desk = deskWith(f.base, f.ticket, f.page);
+    await desk.search({ query: 'launch' });
+    expect(vi.mocked(f.ticket.search).mock.calls[0]![0]).not.toHaveProperty('limit');
+    expect(vi.mocked(f.page.search).mock.calls[0]![0]).not.toHaveProperty('limit');
+    await desk.search({ query: 'launch', limit: 400 });
+    expect(f.ticket.search).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 400 }));
+    expect(f.page.search).toHaveBeenLastCalledWith(expect.objectContaining({ limit: 400 }));
+    await expect(desk.search({ query: 'launch', limit: 0 })).rejects.toMatchObject({ code: 'invalid_request' });
   });
   it('observes actual list and open calls once without changing provider routing or results', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.page);
@@ -235,12 +240,12 @@ describe('thin live ticket dispatcher', () => {
     await expect(desk.list({ source: 'page', kinds: ['ticket'] })).rejects.toMatchObject({ code: 'unauthorized' });
     expect(f.base.list).not.toHaveBeenCalled(); expect(f.ticket.list).not.toHaveBeenCalled();
   });
-  it('passes the research loop\'s 50-item list fetch through to a live reader, which applies its own cap', async () => {
+  it('passes the list count research names through to a live reader, any size, and none when it names none', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.page);
-    await desk.list({ source: 'ticket', limit: 50 });
+    await desk.list({ source: 'ticket', limit: 500 });
     await desk.list({ source: 'ticket' });
     await desk.search({ kinds: ['ticket'], limit: 50 });
-    expect(vi.mocked(f.ticket.list).mock.calls.map(([input]) => input.limit)).toEqual([50, 20, 50]);
+    expect(vi.mocked(f.ticket.list).mock.calls.map(([input]) => input.limit)).toEqual([500, undefined, 50]);
   });
   it('opens only request-issued handles through their original source', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.page);

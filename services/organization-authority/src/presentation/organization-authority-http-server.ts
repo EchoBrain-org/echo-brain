@@ -81,10 +81,22 @@ import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-appli
 import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
 import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
 
-/** One JSON request's body: the API's one request bound, so the server and every client agree. */
-const MAXIMUM_BODY_BYTES = MAX_ORGANIZATION_API_BODY_BYTES;
+/**
+ * Request body bounds, one per route family. They are transport bounds: the most one request may carry, refused whole
+ * with "request body is too large" before it is buffered further, and the only limit on how much a person sends.
+ * - Person JSON (Ask with its previous turns, reads, sign-in, employees, record search): the note upload's 1 MiB, so a
+ *   person's question is never held to less than a note.
+ * - Project and settings bodies: the organization API's own bound (`MAX_ORGANIZATION_API_BODY_BYTES`), with a note upload
+ *   at `PERSON_UPDATE_REQUEST_MAX_BYTES_V1`.
+ * - Provider ingress (webhooks and sign-in callbacks from a provider, before any person is known): 64 KiB, with its query
+ *   string at 8 KiB. Unauthenticated, so it stays small against abuse.
+ */
+const PERSON_REQUEST_BODY_MAX_BYTES = PERSON_UPDATE_REQUEST_MAX_BYTES_V1;
+const PROVIDER_REQUEST_BODY_MAX_BYTES = 64 * 1024;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
+/** Response bounds for provider ingress, by kind: a JSON answer, raw bytes, and a provider's sign-in callback page. */
 const MAXIMUM_PROVIDER_RESPONSE_BYTES = 64 * 1024;
+const PROVIDER_CALLBACK_PAGE_MAX_BYTES = 16_384;
 const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
 const OIDC_BEGIN_CLIENT_LIMIT = 10;
 const MAXIMUM_TRACKED_OIDC_BEGIN_CLIENTS = 1024;
@@ -287,7 +299,7 @@ function providerResponse(response: ServerResponse, result: ProviderHttpResponse
     contentType = result.content_type;
   } else if (result.content_type === "text/html") {
     if (typeof result.body !== "string") throw new Error("invalid provider callback page");
-    maximum = 16_384;
+    maximum = PROVIDER_CALLBACK_PAGE_MAX_BYTES;
     if (Buffer.byteLength(result.body, "utf8") > maximum) throw new Error("provider response is too large");
     bytes = Buffer.from(result.body, "utf8");
     contentType = "text/html; charset=utf-8";
@@ -429,7 +441,7 @@ function failureOf(error: unknown): { readonly status: PersonAskProgressErrorSta
   return { status, code: error.code, message: "request failed" };
 }
 
-async function rawBody(request: IncomingMessage, maximum = MAXIMUM_BODY_BYTES): Promise<Buffer> {
+async function rawBody(request: IncomingMessage, maximum = PERSON_REQUEST_BODY_MAX_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
@@ -809,7 +821,7 @@ export function createOrganizationAuthorityHttpServer(
             route_id: ingress.route.route_id,
             method: ingress.route.method,
             path: ingress.route.path,
-            raw_body: await rawBody(request),
+            raw_body: await rawBody(request, PROVIDER_REQUEST_BODY_MAX_BYTES),
             content_type: headers["content-type"],
             headers,
             signal: disconnect.signal,

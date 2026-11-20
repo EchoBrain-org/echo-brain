@@ -8,9 +8,19 @@ export interface ModelCallLimiterV1 {
   run<T>(priority: ModelCallPriorityV1, signal: AbortSignal | undefined, op: () => Promise<T>): Promise<T>;
 }
 
+/**
+ * Model calls in flight at once, process-wide, and how many of them background work may hold. A concurrency ceiling, not
+ * a count: every call runs, queued until a slot frees. Sized to the provider account's own concurrency (a burst past it
+ * comes back 429) on a host that holds each call's prompt and reply in memory; background work never takes the last slots
+ * an Ask needs.
+ */
 const MODEL_CALL_LIMITS = Object.freeze({ concurrent: 6, background: 4 });
-/** Each SDK research or writer session runs a Claude Code process (about 210 MB resident). */
+/**
+ * SDK research or writer sessions at once. Host memory: each runs a Claude Code process of about 210 MB resident, so
+ * three fit beside the Authority on the staging host with room to spare; background work holds at most two.
+ */
 export const RESEARCH_SESSION_LIMITS_V1 = Object.freeze({ concurrent: 3, background: 2 });
+/** Background backoff after the provider refused or struggled (408, 429, 5xx, timeout): doubling from 5 s, at most 60 s. */
 const COOLDOWN_MIN_MS = 5_000;
 const COOLDOWN_MAX_MS = 60_000;
 

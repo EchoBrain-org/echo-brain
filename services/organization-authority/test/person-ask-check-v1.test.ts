@@ -5,6 +5,7 @@ import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_ASK_CHECK_PATH_V1,
   PERSON_ASK_CHECK_REQUEST_KIND_V1,
+  PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
   validatePersonAskCheckRequestV1,
   validatePersonAskCheckV1,
   type PersonAskCheckItemV1,
@@ -501,7 +502,9 @@ describe('Ask source check HTTP route', () => {
       expect(await refused.json()).toEqual({ error: { code: 'invalid_request', message: expect.any(String) } });
     }
     expect((await post('Bearer ari', body, `${PERSON_ASK_CHECK_PATH_V1}?since=1`)).status).toBe(404);
-    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(64 * 1024)}`)).status).toBe(400);
+    // A Person request body is held only to the Person transport bound (a note upload's 1 MiB): past it, refused whole.
+    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(64 * 1024)}`)).status).toBe(200);
+    expect((await post('Bearer ari', `${JSON.stringify(body)}${' '.repeat(PERSON_UPDATE_REQUEST_MAX_BYTES_V1)}`)).status).toBe(400);
     // Only POST is served.
     expect((await fetch(`${base}${PERSON_ASK_CHECK_PATH_V1}`, { headers: { authorization: 'Bearer ari' } })).status).toBe(404);
   });
