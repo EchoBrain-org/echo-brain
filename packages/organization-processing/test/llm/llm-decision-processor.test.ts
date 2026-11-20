@@ -345,13 +345,13 @@ describe('llm decision processor extraction', () => {
   ] };
   const citedQuotes = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(' covers')[0]);
 
-  it('keeps cited units in citation order until their text would exceed 15,000 characters', async () => {
+  it('keeps every cited unit, in citation order, with no character budget of its own', async () => {
     const short = await extractWith(modelOutput([modelSignal({ evidence_units: ['N10', 'N9', 'N8', 'N7', 'N6', 'N5', 'N4', 'N3', 'N2', 'N1'] })]), manyUnits);
     expect(short.signals.map(citedQuotes)).toEqual([
       ['Point 10', 'Point 9', 'Point 8', 'Point 7', 'Point 6', 'Point 5', 'Point 4', 'Point 3', 'Point 2', 'Point 1'],
     ]);
 
-    // N1–N26 are note lines of exactly 600 characters; N27 and N28 are short.
+    // N1–N26 are note lines of exactly 600 characters (15,600 in all); N27 and N28 are short.
     const longUnits: MeetingDocument = { ...meeting, content: [
       { id: 'notes-1', kind: 'note', text: [
         ...Array.from({ length: 26 }, (_, n) => `Long point ${n + 1}: `.padEnd(600, 'z')), 'Short point 27', 'Short point 28',
@@ -360,23 +360,21 @@ describe('llm decision processor extraction', () => {
     const heads = (signal: { evidence: readonly { quote?: string }[] }) => signal.evidence.map((span) => span.quote?.split(':')[0]);
     const descending = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, n) => from - n);
     const output = modelOutput([
-      // 25 fit the budget exactly; a 26th would exceed it.
       modelSignal({ evidence_units: descending(26, 1).map((n) => `N${n}`) }),
-      // 14 + 24 × 600 characters leaves room for N28, but N2 does not fit: the budget stops there instead of skipping ahead.
       modelSignal({ text: 'Ship the launch', evidence_units: ['N27', ...descending(26, 2).map((n) => `N${n}`), 'N28'] }),
     ]);
     const long = await extractWith(output, longUnits);
-    expect(long.signals[0]!.evidence.map((span) => span.quote?.length)).toEqual(Array.from({ length: 25 }, () => 600));
+    expect(long.signals[0]!.evidence.map((span) => span.quote?.length)).toEqual(Array.from({ length: 26 }, () => 600));
     expect(long.signals.map(heads)).toEqual([
-      descending(26, 2).map((n) => `Long point ${n}`),
-      ['Short point 27', ...descending(26, 3).map((n) => `Long point ${n}`)],
+      descending(26, 1).map((n) => `Long point ${n}`),
+      ['Short point 27', ...descending(26, 2).map((n) => `Long point ${n}`), 'Short point 28'],
     ]);
-    // The items lost three cited units (N1; N2 and N28): the trim is counted as a correction, as a number only.
-    expect(await correctionsWith(output, longUnits)).toEqual({ extraction_evidence_trimmed: 3 });
+    // Nothing is left out, so nothing is counted as trimmed.
+    expect(await correctionsWith(output, longUnits)).toEqual({});
   });
 
-  it('judges a decided decision against all its cited units, before any trim', async () => {
-    // N1–N25 are 600-character questions that fill the item budget; N26 states the choice.
+  it('judges a decided decision against all its cited units and keeps them all', async () => {
+    // N1–N25 are 600-character questions; N26 states the choice.
     const questions: MeetingDocument = { ...meeting, content: [
       { id: 'notes-1', kind: 'note', text: [
         ...Array.from({ length: 25 }, (_, n) => `Should we keep option ${n + 1} `.padEnd(599, 'z') + '?'), 'We chose option 1.',
@@ -386,23 +384,12 @@ describe('llm decision processor extraction', () => {
     const output = modelOutput([modelSignal({ status: 'decided', evidence_units: all })]);
     const result = await extractWith(output, questions);
     expect(result.signals).toMatchObject([{ kind: 'decision', status: 'decided' }]);
-    expect(result.signals[0]!.evidence).toHaveLength(25);
-    // N26 left out by the item budget is counted, never a downgrade.
-    expect(await correctionsWith(output, questions)).toEqual({ extraction_evidence_trimmed: 1 });
+    expect(result.signals[0]!.evidence).toHaveLength(26);
+    expect(await correctionsWith(output, questions)).toEqual({});
   });
 
-  it('keeps an action\'s proposed owner when the meeting byte limit trims the quote that names them', async () => {
-    const text = ['一', '二', '三', '四'].map(c => c.repeat(599)).concat('Maya ' + '五'.repeat(594)).join('\n');
-    const wide: MeetingDocument = { ...meeting, content: [{ id: 'notes-1', kind: 'note', text }] };
-    const result = await extractWith(modelOutput(Array.from({ length: 25 }, (_, i) =>
-      modelSignal({ kind: 'action', text: `Task ${i}`, owner: 'Maya', evidence_units: ['N1', 'N2', 'N3', 'N4', 'N5'] }))), wide);
-    const trimmed = result.signals.filter(signal => !signal.evidence.some(span => span.quote?.includes('Maya')));
-    expect(trimmed.length).toBeGreaterThan(0);
-    expect(result.signals.every(signal => signal.kind === 'action' && signal.owner === 'Maya')).toBe(true);
-  });
-
-  it('trims the largest evidence lists, last span first, until the meeting fits 160,000 evidence bytes', async () => {
-    // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON and at most 85 spans fit.
+  it('keeps every cited span of a meeting whose evidence passes 160,000 bytes', async () => {
+    // N1–N5 are 600 CJK characters each, so every span is 1,862 bytes of JSON: 94 spans are about 175,000 bytes.
     const wide: MeetingDocument = { ...meeting, content: [
       { id: 'notes-1', kind: 'note', text: ['一', '二', '三', '四', '五'].map((character) => character.repeat(600)).join('\n') },
     ] };
@@ -411,28 +398,25 @@ describe('llm decision processor extraction', () => {
       modelSignal({ text: 'Item 0', evidence_units: ['N1'] }),
       modelSignal({ text: 'Item 1', evidence_units: ['N1', 'N2', 'N3'] }),
       modelSignal({ text: 'Repeat', evidence_units: all }),
-      // Differs from item 2 until item 2 loses its last span, then repeats it.
       modelSignal({ text: 'Repeat', evidence_units: ['N1', 'N2', 'N3', 'N4'] }),
       modelSignal({ kind: 'rationale', text: 'Because', evidence_units: ['N2'], supports_decision_indexes: [3] }),
       ...Array.from({ length: 16 }, (_, n) => modelSignal({ text: `Item ${n + 5}`, evidence_units: all })),
+      modelSignal({ kind: 'action', text: 'Send the quote', owner: 'Maya', evidence_units: all }),
     ]);
     const instance = processor(new FakeLlmClient(output));
     const result = await instance.extract(wide, extractionContext(instance));
 
     const bytes = result.signals.flatMap((signal) => signal.evidence).reduce((sum, span) => sum + Buffer.byteLength(JSON.stringify(span)), 0);
-    expect(bytes).toBeLessThanOrEqual(160_000);
-    // 94 spans before: the nine five-span lists with the lowest indexes (items 2, 5–12) each lost one; items 0, 1 and the rationale kept theirs.
+    expect(bytes).toBeGreaterThan(160_000);
     expect(result.signals.map((signal) => [signal.text, signal.evidence.length])).toEqual([
-      ['Item 0', 1], ['Item 1', 3], ['Repeat', 4], ['Because', 1],
-      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 5}`, 4]),
-      ...Array.from({ length: 8 }, (_, n) => [`Item ${n + 13}`, 5]),
+      ['Item 0', 1], ['Item 1', 3], ['Repeat', 5], ['Repeat', 4], ['Because', 1],
+      ...Array.from({ length: 16 }, (_, n) => [`Item ${n + 5}`, 5]),
+      ['Send the quote', 5],
     ]);
-    expect(result.signals[2]!.evidence.map((span) => span.quote?.charAt(0))).toEqual(['一', '二', '三', '四']);
-    // Item 3 now repeats item 2 and is dropped; the rationale linked to it follows item 2.
-    expect(result.signals[3]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[2]!.id] });
+    expect(result.signals[4]).toMatchObject({ kind: 'rationale', supports_signal_ids: [result.signals[3]!.id] });
+    expect(result.signals.at(-1)).toMatchObject({ kind: 'action', owner: 'Maya' });
     expect(() => assertCanonicalDecisionSet(result, wide, instance.identity)).not.toThrow();
-    // Nine spans left out by the meeting ceiling, counted as a number only.
-    expect(await correctionsWith(output, wide)).toEqual({ extraction_repeat_dropped: 1, extraction_evidence_trimmed: 9 });
+    expect(await correctionsWith(output, wide)).toEqual({});
   });
 
   it('reads cited IDs in any case and a split turn\'s parent ID as its parts', async () => {

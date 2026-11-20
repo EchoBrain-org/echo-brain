@@ -29,18 +29,15 @@ import {
 } from "./llm-provider.js";
 
 const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
-export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '2.1.0';
+export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '2.2.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
-export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v12';
+export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v13';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
   'decision-extraction-schema-v8';
-/**
- * Most cited unit text kept per item, in characters (25 full 600-character units). It keeps one item from taking the
- * meeting's whole evidence allowance below; owner and status are judged before it applies.
+/*
+ * An item carries every unit it cites: there is no evidence budget per item or per meeting. The approved record is
+ * bounded only by what the record store holds (MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES, SQLite's own maximum value size).
  */
-const EVIDENCE_CHARACTERS_PER_SIGNAL = 15_000;
-/** Most evidence per meeting, as the UTF-8 bytes of each span's JSON, which keeps the approved record under 256 KiB. */
-const EVIDENCE_BYTES_PER_MEETING = 160_000;
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -113,10 +110,8 @@ interface CheckedSignal {
   readonly owner: string | null;
   readonly dueAt: string | null;
   readonly confidence: number | null;
-  /** Known cited units, de-duplicated, in citation order, within EVIDENCE_CHARACTERS_PER_SIGNAL. */
+  /** Known cited units, de-duplicated, in citation order. */
   readonly units: readonly MeetingEvidenceUnitV1[];
-  /** Known cited units the item budget left out. */
-  readonly trimmed: number;
   /** The model's raw decision indexes; only those of surviving decisions are kept. */
   readonly supports: readonly unknown[];
 }
@@ -459,18 +454,6 @@ function citationTargets(units: readonly MeetingEvidenceUnitV1[]): Map<string, M
   return targets;
 }
 
-/** Units in order until the next would take their text past the budget; the first is always kept (units are at most 600 characters). */
-function withinEvidenceBudget(units: readonly MeetingEvidenceUnitV1[]): MeetingEvidenceUnitV1[] {
-  const kept: MeetingEvidenceUnitV1[] = [];
-  let characters = 0;
-  for (const unit of units) {
-    characters += unit.text.length;
-    if (kept.length > 0 && characters > EVIDENCE_CHARACTERS_PER_SIGNAL) break;
-    kept.push(unit);
-  }
-  return kept;
-}
-
 /** One item on its own: its reason for being set aside, or the item with corrections applied. */
 function checkedSignal(
   item: unknown,
@@ -502,7 +485,6 @@ function checkedSignal(
   const citations = cited.map((id) => { const unit = citedUnitId(id); return { id, unit, parts: targets.get(unit) }; });
   const known = [...new Set(citations.flatMap(({ parts }) => parts ?? []))];
   if (known.length === 0) return 'evidence_id';
-  const units = withinEvidenceBudget(known);
   // How code read a kept item's citations: another spelling, a split unit's parent, an ID that names no unit.
   for (const { id, unit, parts } of citations) {
     if (parts === undefined) observeCoreModelCorrectionV1('extraction_unknown_unit_dropped');
@@ -512,7 +494,7 @@ function checkedSignal(
     }
   }
   const supports = record['supports_decision_indexes'];
-  // A choice cited only from questions was not made in the meeting. Judged on every known cited unit, so no trim changes it.
+  // A choice cited only from questions was not made in the meeting. Judged on every known cited unit.
   const downgraded = status === 'decided' && known.every((unit) => unit.question);
   if (downgraded) observeCoreModelCorrectionV1('extraction_decided_downgraded');
   // A proposed owner is offered to the approver, who confirms or clears it (ADR-0021); it is never recorded unconfirmed.
@@ -534,8 +516,7 @@ function checkedSignal(
     owner,
     dueAt,
     confidence,
-    units,
-    trimmed: known.length - units.length,
+    units: known,
     supports: kind === 'rationale' && Array.isArray(supports) ? supports : [],
   };
 }
@@ -572,34 +553,6 @@ interface KeptSignal {
 }
 
 /**
- * While the meeting's evidence is over EVIDENCE_BYTES_PER_MEETING, drops the
- * last span of the item with the most evidence bytes that still has more than
- * one span (the lower model index on a tie). Every item keeps one span. Returns how many spans it dropped.
- */
-function fitEvidenceCeiling(kept: readonly KeptSignal[]): number {
-  const sized = kept.map((item) => {
-    const sizes = item.spans.map((span) => Buffer.byteLength(JSON.stringify(span)));
-    return { item, sizes, bytes: sizes.reduce((sum, size) => sum + size, 0) };
-  });
-  let total = sized.reduce((sum, { bytes }) => sum + bytes, 0);
-  let dropped = 0;
-  while (total > EVIDENCE_BYTES_PER_MEETING) {
-    let largest: (typeof sized)[number] | undefined;
-    for (const entry of sized) {
-      if (entry.sizes.length > 1 && (largest === undefined || entry.bytes > largest.bytes
-        || (entry.bytes === largest.bytes && entry.item.signal.index < largest.item.signal.index))) largest = entry;
-    }
-    if (largest === undefined) break;
-    const removed = largest.sizes.pop()!;
-    largest.item.spans.pop();
-    largest.bytes -= removed;
-    total -= removed;
-    dropped += 1;
-  }
-  return dropped;
-}
-
-/**
  * Checks each item on its own: a bad item is set aside, never the whole answer.
  * The meeting fails only when the model returned items and none survived, with
  * the first set-aside item's reason. Set-aside items reach only the private sink.
@@ -620,7 +573,7 @@ function groundedSignals(
   });
   // Decisions and actions first, so a rationale can link to any surviving decision.
   candidates.sort((left, right) => Number(left.kind === 'rationale') - Number(right.kind === 'rationale'));
-  /** Dedupe key or untrimmed signal id of each kept item → that item. */
+  /** Dedupe key or signal id of each kept item → that item. */
   const keptBy = new Map<string, KeptSignal>();
   const decisions = new Map<unknown, KeptSignal>();
   const kept: KeptSignal[] = [];
@@ -635,11 +588,11 @@ function groundedSignals(
         ...(block?.ended_at === undefined ? {} : { ended_at: block.ended_at }),
       };
     });
-    const untrimmedId = stableSignalId(meeting, signal, spans);
+    const signalId = stableSignalId(meeting, signal, spans);
     const key = JSON.stringify([signal.kind, comparable(signal.text), signal.units.map((unit) => unit.id).sort()]);
     // A repeat of a kept item. A repeated id (same text citing identical quotes) would also break the decision set.
     // A rationale that links to a dropped decision links to its kept twin.
-    const twin = keptBy.get(key) ?? keptBy.get(untrimmedId);
+    const twin = keptBy.get(key) ?? keptBy.get(signalId);
     if (twin !== undefined) {
       observeCoreModelCorrectionV1('extraction_repeat_dropped');
       if (signal.kind === 'decision') decisions.set(signal.index, twin);
@@ -648,7 +601,7 @@ function groundedSignals(
     // A rationale whose decisions did not survive is kept unlinked: the reason still stands on its own evidence.
     const supports = [...new Set(signal.supports)].flatMap((index) => decisions.get(index) ?? []);
     const entry = { signal, spans, supports };
-    keptBy.set(key, entry).set(untrimmedId, entry);
+    keptBy.set(key, entry).set(signalId, entry);
     if (signal.kind === 'decision') decisions.set(signal.index, entry);
     kept.push(entry);
   }
@@ -667,11 +620,7 @@ function groundedSignals(
     if (isGroundingStage(first.reason)) extractionGroundingFailure(first.reason, { signal_index: first.index });
     extractionSchemaFailure(first.reason);
   }
-  // Cited units left out by the item budget or the meeting ceiling; owner and status were judged before either trim.
-  const trimmed = kept.reduce((sum, { signal }) => sum + signal.trimmed, 0) + fitEvidenceCeiling(kept);
-  if (trimmed > 0) observeCoreModelCorrectionV1('extraction_evidence_trimmed', trimmed);
-  // Ids hash the final evidence. An item trimmed into a repeat of an earlier one
-  // shares its id, so it is dropped and links to it follow the earlier one.
+  // Ids hash the final evidence. An item whose id repeats an earlier one is dropped and links to it follow the earlier one.
   const ids = new Map(kept.map((entry) => [entry, stableSignalId(meeting, entry.signal, entry.spans)]));
   const seen = new Set<string>();
   return kept
