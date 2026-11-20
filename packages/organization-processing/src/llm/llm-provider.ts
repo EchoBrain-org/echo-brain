@@ -77,6 +77,10 @@ export interface LlmProviderClient {
 
 export type LlmCredentialResolver = (reference: string) => string | undefined;
 
+/**
+ * A provider call's silence period: a call that receives nothing this long is stalled. A client that streams (OpenRouter)
+ * resets it at every piece of the reply, so a reply that keeps arriving runs as long as it needs.
+ */
 export const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_LLM_REQUEST_TIMEOUT_MS = 600_000;
 /** A configuration that sets no output allowance gets the extraction model's own maximum; none may ask for more. */

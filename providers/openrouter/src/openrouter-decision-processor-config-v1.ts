@@ -32,6 +32,7 @@ export function fixedOpenRouterDecisionProcessorConfigV1(
       provider: "openrouter",
       model: OPENROUTER_DECISION_PROCESSOR_MODEL_V1,
       max_output_tokens: DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
+      // A silence period, not a whole-call deadline: the streamed reply is stalled only when nothing arrives this long.
       request_timeout_ms: 600_000,
     },
   };

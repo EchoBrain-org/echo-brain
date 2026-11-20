@@ -54,6 +54,56 @@ function generationUsageObservation(
   };
 }
 
+/** The whole body as text, calling `alive` at each piece that arrives. */
+async function readAlive(response: Response, alive: () => void): Promise<string> {
+  if (response.body === null) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    alive();
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/**
+ * A streamed Chat Completions reply (server-sent events) as the one JSON reply it stands for: its id, usage, any error,
+ * and its first choice's content, refusal, finish reason and error. Comment lines (OpenRouter's keep-alives) carry nothing.
+ */
+function assembledStream(body: string): Record<string, unknown> {
+  let id: unknown;
+  let usage: unknown;
+  let error: unknown;
+  let content = '';
+  let refusal = '';
+  let finishReason: unknown;
+  let choiceError: unknown;
+  for (const line of body.split(/\r?\n/u)) {
+    if (!line.startsWith('data:')) continue;
+    const data = line.slice('data:'.length).trim();
+    if (data === '' || data === '[DONE]') continue;
+    const event = JSON.parse(data) as unknown;
+    if (!isRecord(event)) continue;
+    if (event['id'] !== undefined) id = event['id'];
+    if (event['usage'] !== undefined && event['usage'] !== null) usage = event['usage'];
+    if (event['error'] !== undefined) error = event['error'];
+    const choice = Array.isArray(event['choices']) ? event['choices'].find(isRecord) : undefined;
+    if (choice === undefined) continue;
+    const delta = isRecord(choice['delta']) ? choice['delta'] : {};
+    if (typeof delta['content'] === 'string') content += delta['content'];
+    if (typeof delta['refusal'] === 'string') refusal += delta['refusal'];
+    if (choice['finish_reason'] !== undefined && choice['finish_reason'] !== null) finishReason = choice['finish_reason'];
+    if (choice['error'] !== undefined) choiceError = choice['error'];
+  }
+  const message = { content, ...(refusal === '' ? {} : { refusal }) };
+  return {
+    ...(id === undefined ? {} : { id }), ...(usage === undefined ? {} : { usage }), ...(error === undefined ? {} : { error }),
+    choices: [{ message, ...(finishReason === undefined ? {} : { finish_reason: finishReason }), ...(choiceError === undefined ? {} : { error: choiceError }) }],
+  };
+}
+
 export class OpenRouterClient implements LlmProviderClient {
   readonly provider = 'openrouter' as const;
   private readonly options: OpenRouterClientOptions;
@@ -66,7 +116,12 @@ export class OpenRouterClient implements LlmProviderClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  /** One request with the resolved bearer credential and this client's timeout: the reply's JSON, or the provider's refusal. */
+  /**
+   * One request with the resolved bearer credential: the reply's JSON (a streamed reply assembled into the same shape),
+   * or the provider's refusal. Liveness, not a whole-call clock: the call is stalled only when nothing arrives (its
+   * headers, a stream event or OpenRouter's keep-alive comment) for `requestTimeoutMs`; a reply that keeps arriving is
+   * never cut off, however long it runs.
+   */
   private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<{ readonly payload: unknown; readonly response: Response }> {
     let credential: string | undefined;
     try {
@@ -75,32 +130,48 @@ export class OpenRouterClient implements LlmProviderClient {
       throw new AdapterError('unauthorized', 'OpenRouter credential is unreadable', false);
     }
     if (!nonEmptyString(credential)) throw new AdapterError('unauthorized', 'OpenRouter credential is unavailable', false);
-    const signals = [AbortSignal.timeout(this.requestTimeoutMs)];
-    if (signal !== undefined) signals.push(signal);
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
-        ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers }, signal: AbortSignal.any(signals),
-      });
-    } catch (error) {
+    const silence = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const alive = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => silence.abort(new DOMException('OpenRouter sent nothing for the silence period', 'TimeoutError')), this.requestTimeoutMs);
+    };
+    const stalled = (error: unknown): never => {
       if (signal?.aborted === true) throw new DOMException('OpenRouter request was cancelled', 'AbortError');
-      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-        throw new AdapterError('timeout', 'OpenRouter request timed out or was cancelled', true);
+      if (silence.signal.aborted || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))) {
+        throw new AdapterError('timeout', 'OpenRouter sent nothing for the silence period, or the request was cancelled', true);
       }
       throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
-    }
-    annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-    // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
-    if (response.status === 400) {
-      let refusal: unknown;
-      try { refusal = JSON.parse(await response.text()) as unknown; } catch { refusal = undefined; }
-      if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
-    }
-    // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
-    if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
+    };
+    alive();
     try {
-      const body = await response.text();
-      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => JSON.parse(body) as unknown);
+      let response: Response;
+      try {
+        response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
+          ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers },
+          signal: signal === undefined ? silence.signal : AbortSignal.any([silence.signal, signal]),
+        });
+      } catch (error) { return stalled(error); }
+      alive();
+      annotateCoreRuntimeV1({ counts: { http_status: response.status } });
+      let body: string;
+      try { body = await readAlive(response, alive); } catch (error) { return stalled(error); }
+      // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
+      if (response.status === 400) {
+        let refusal: unknown;
+        try { refusal = JSON.parse(body) as unknown; } catch { refusal = undefined; }
+        if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
+      }
+      // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
+      if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
+      return this.parsed(body, response);
+    } finally { clearTimeout(timer); }
+  }
+
+  private parsed(body: string, response: Response): { readonly payload: unknown; readonly response: Response } {
+    try {
+      const streamed = (response.headers.get('content-type') ?? '').includes('text/event-stream');
+      const payload: unknown = observeCoreRuntimeSyncV1("model_parse", () => streamed ? assembledStream(body) : JSON.parse(body) as unknown);
       try {
         // Usage is observational, never a business input.
         const usage = isRecord(payload) ? generationUsageObservation(payload) : {};
@@ -126,7 +197,8 @@ export class OpenRouterClient implements LlmProviderClient {
             { role: 'system', content: request.systemPrompt },
             { role: 'user', content: request.userPrompt },
           ],
-          stream: false,
+          // Streamed, so a long reply shows it is alive as it arrives (see `request`).
+          stream: true,
           max_tokens: request.maxOutputTokens,
           response_format: {
             type: 'json_schema',
