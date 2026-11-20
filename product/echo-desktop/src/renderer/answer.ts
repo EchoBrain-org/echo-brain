@@ -1,5 +1,5 @@
 import type {
-  Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, CardEntity, ConnectedTool, ExternalAnswerSource, TimelineAnswer,
+  Answer, AnswerPart, AnswerSource, AnswerStatement, AnswerTableRow, ArrangedBlock, ConnectedTool, ExternalAnswerSource, TimelineAnswer,
 } from '../shared/protocol.js';
 import { sourceKey } from './openers.js';
 
@@ -228,11 +228,11 @@ export function blockTitle(block: ArrangedBlock): string | undefined {
 }
 
 /** What a card's kind reads as, before its title ("Ticket THERM-48"). */
-export const CARD_WORDS: Readonly<Record<CardEntity, string>> = { person: 'Person', project: 'Project', ticket: 'Ticket', decision: 'Decision' };
+export const CARD_WORDS: Readonly<Record<string, string>> = { person: 'Person', project: 'Project', ticket: 'Ticket', decision: 'Decision' };
 
 /** A card's kind as words: one the page knows, or any other by its own name ("risk_item" reads "Risk item"). */
 export function cardWord(entity: string): string {
-  if (Object.hasOwn(CARD_WORDS, entity)) return CARD_WORDS[entity as CardEntity];
+  if (Object.hasOwn(CARD_WORDS, entity)) return CARD_WORDS[entity]!;
   const words = entity.replace(/[_-]+/gu, ' ').trim();
   return words === '' ? 'Card' : `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
 }

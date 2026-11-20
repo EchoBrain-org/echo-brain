@@ -201,14 +201,16 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual(STEPS);
   });
 
-  it('shows an answer block or card entity it does not know as a text block of the same statements', async () => {
+  // Card entities are an open set (ADR-0051 as widened): an unfamiliar entity stays a card; only an unknown block kind
+  // becomes text.
+  it('shows an answer block it does not know as a text block of the same statements, and keeps a card of any entity', async () => {
     const two = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'Lin owns the retest.', citation_indexes: [0], private: false }],
       blocks: [{ kind: 'answer', statements: [0] }, { kind: 'gallery', title: 'Photos', statements: [1] }] }] };
     const card = { ...answer(), parts: [{ ...answer().parts[0]!, statements: [answer().parts[0]!.statements[0]!, { text: 'A', citation_indexes: [0], private: false }, { text: 'B', citation_indexes: [0], private: false }],
       blocks: [{ kind: 'answer', statements: [0] }, { kind: 'card', title: 'Acme', entity: 'customer', facts: [{ label: 'Plan', value: 'A' }, { label: 'Owner', value: 'B' }], statements: [1, 2] }] }] };
     for (const [response, blocks] of [
       [two, [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Photos', statements: [1] }]],
-      [card, [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Acme', statements: [1, 2] }]],
+      [card, card.parts[0]!.blocks],
     ] as const) {
       const body = `${frames(STEPS)}data: ${JSON.stringify({ type: 'answer', response, receipt: receipt() })}\n\n`;
       const result = await authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(body, 7)))

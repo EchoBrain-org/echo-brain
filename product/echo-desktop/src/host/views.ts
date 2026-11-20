@@ -12,7 +12,7 @@ import type {
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ANSWER_CARD_ENTITIES_V2, PERSON_ASK_PROGRESS_COUNT_MAX_V1,
+  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_COUNT_MAX_V1,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -288,8 +288,8 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   try {
     line = validatePersonAskProgressResultLineV3(raw);
   } catch {
-    // An Authority newer than this desktop may arrange a part in a block, or a card of an entity, this contract does not
-    // know: that block is shown as text (its sentences and title), and the answer is checked again, whole.
+    // An Authority newer than this desktop may arrange a part in a block this contract does not know: that block is
+    // shown as text (its sentences and title), and the answer is checked again, whole. A card of any entity is a card.
     line = validated(validatePersonAskProgressResultLineV3, withKnownBlocks(raw));
   }
   const { result, receipt } = line;
@@ -305,18 +305,17 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
 }
 
 const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
-const CARD_ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
 
 /**
- * The answer line with each block of a kind this contract does not know, and
- * each card of an entity it does not know, made a text block of the same
- * sentences and title. Nothing else changes: the line is checked whole after.
+ * The answer line with each block of a kind this contract does not know made a
+ * text block of the same sentences and title. Nothing else changes: the line is
+ * checked whole after.
  */
 function withKnownBlocks(raw: unknown): unknown {
   const line = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Json : {};
   const result = line.result !== null && typeof line.result === 'object' && !Array.isArray(line.result) ? line.result as Json : undefined;
   if (result === undefined || !Array.isArray(result.parts)) return raw;
-  const known = (block: Json) => BLOCK_KINDS.has(block.kind) && (block.kind !== 'card' || CARD_ENTITIES.has(block.entity));
+  const known = (block: Json) => BLOCK_KINDS.has(block.kind);
   const parts = result.parts.map(part => {
     if (part === null || typeof part !== 'object' || !Array.isArray((part as Json).blocks)) return part;
     const blocks = ((part as Json).blocks as unknown[]).map(block => {
