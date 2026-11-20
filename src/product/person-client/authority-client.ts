@@ -9,7 +9,7 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ANSWER_CARD_ENTITIES_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -233,13 +233,65 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
+type JsonRecord = Record<string, unknown>;
+const isRecord = (value: unknown): value is JsonRecord => value !== null && typeof value === "object" && !Array.isArray(value);
+const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
+const CARD_ENTITIES: ReadonlySet<unknown> = new Set(PERSON_ANSWER_CARD_ENTITIES_V2);
+
+/**
+ * A block this client can show: one of a kind it does not know (an Authority newer than the client), or a card of an
+ * entity it does not know, reads as a text block of the same statements, with its title when it has one.
+ */
+function readableBlock(block: unknown): unknown {
+  if (!isRecord(block) || (BLOCK_KINDS.has(block.kind) && (block.kind !== "card" || CARD_ENTITIES.has(block.entity)))) return block;
+  return { kind: "text", ...(typeof block.title === "string" ? { title: block.title } : {}), statements: block.statements };
+}
+
+/** An answer whose blocks this client can show (readableBlock); the answer is validated as usual afterwards. */
+function readableAnswer(response: unknown): unknown {
+  if (!isRecord(response) || !Array.isArray(response.parts)) return response;
+  return { ...response, parts: response.parts.map(part => isRecord(part) && Array.isArray(part.blocks) ? { ...part, blocks: part.blocks.map(readableBlock) } : part) };
+}
+
+/**
+ * The text of a progress stream as this client reads it, frame by frame: a step event it cannot read is left out (a
+ * progress step is only a view of the work, so the Ask goes on without it), and an answer's blocks become ones it can
+ * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder.
+ */
+function tolerantAskFrames(): (text: string, end?: boolean) => string {
+  let partial = "";
+  const data = (json: string): string | null => {
+    let value: unknown;
+    try { value = JSON.parse(json); } catch { return json; }
+    if (!isRecord(value) || value.type === "error") return json;
+    if (value.type === "answer") return JSON.stringify({ ...value, response: readableAnswer(value.response) });
+    try { validatePersonAskProgressStepEventV3(value); return json; } catch { return null; }
+  };
+  return (text, end = false) => {
+    const lines = (partial + text).split("\n");
+    partial = lines.pop()!;
+    const read = lines.map(line => {
+      if (!line.startsWith("data: ")) return `${line}\n`;
+      const kept = data(line.slice("data: ".length));
+      return kept === null ? "" : `data: ${kept}\n`;
+    }).join("");
+    // At the end, or past the line bound, the unfinished line goes to the decoder, which refuses it.
+    if (!end && partial.length <= PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1) return read;
+    const rest = partial;
+    partial = "";
+    return read + rest;
+  };
+}
+
 /**
  * Reads a streamed Ask (ADR-0039) to its end with the progress V3 decoder, hands
  * each step event to `onProgress` as it arrives, and returns the one terminal
- * event. Fails closed: a malformed frame or event, invalid UTF-8, or an end
- * without exactly one terminal event is `invalid_response`, and a stream past
- * its byte bound is `response_too_large`. Either failure cancels the body, so
- * the Authority sees the disconnect and stops the Ask.
+ * event. A step event it cannot read is skipped, and an answer block it does not
+ * know reads as text (tolerantAskFrames). Otherwise it fails closed: a malformed
+ * frame or answer, invalid UTF-8, or an end without exactly one terminal event
+ * is `invalid_response`, and a stream past its byte bound is
+ * `response_too_large`. Either failure cancels the body, so the Authority sees
+ * the disconnect and stops the Ask.
  */
 async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
   if (response.status !== 200 || response.body === null) {
@@ -251,10 +303,11 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   const frames = createPersonAskProgressDecoderV3();
+  const tolerant = tolerantAskFrames();
   const decode = (chunk: Uint8Array | undefined) => {
     try {
-      if (chunk !== undefined) return frames.push(utf8.decode(chunk, { stream: true }));
-      const events = frames.push(utf8.decode());
+      if (chunk !== undefined) return frames.push(tolerant(utf8.decode(chunk, { stream: true })));
+      const events = frames.push(tolerant(utf8.decode(), true));
       frames.end();
       return events;
     } catch (error) {
