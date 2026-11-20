@@ -110,12 +110,16 @@ export async function readOpenRouterReplyV1(response: Response, options: {
     text += piece;
     if (!streamed) return;
     let end: number;
+    let produced = false;
     while ((end = text.indexOf('\n')) !== -1) {
       const line = text.slice(0, end).replace(/\r$/u, '');
       text = text.slice(end + 1);
-      if (assembler.line(line)) options.progress();
+      if (assembler.line(line)) produced = true;
     }
-    if (final && text !== '') { if (assembler.line(text)) options.progress(); text = ''; }
+    if (final && text !== '') { if (assembler.line(text)) produced = true; text = ''; }
+    // Bytes of an event still arriving are progress too: one large event (a long tool argument) can take longer than
+    // the silence period to arrive. A keep-alive comment (a line starting ':') never is.
+    if (produced || (piece !== '' && text !== '' && !text.startsWith(':'))) options.progress();
   };
   if (response.body !== null) {
     const reader = response.body.getReader();

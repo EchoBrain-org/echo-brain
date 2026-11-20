@@ -69,6 +69,29 @@ describe("OpenRouter reply reading", () => {
   });
 });
 
+describe("OpenRouter progress inside one event", () => {
+  /** One tool-argument event split into fragments 40 ms apart, longer in all than the 80 ms silence period, then the finish. */
+  function fragmented(): typeof fetch {
+    const event = `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"${"x".repeat(60)}\\"}"}}]}}]}\n\n`;
+    const pieces = Array.from({ length: 6 }, (_, index) => event.slice(Math.floor(index * event.length / 6), Math.floor((index + 1) * event.length / 6)));
+    return stream(function* () { yield* pieces; yield 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'; }, 40);
+  }
+  const schema = { type: "object", additionalProperties: false, required: ["f0"], properties: Object.fromEntries(Array.from({ length: 60 }, (_, index) => [`f${index}`, { type: "string" }])) };
+
+  it("counts the bytes of a real event as they arrive, so a healthy event arriving in fragments is never stalled", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: fragmented() });
+    await expect(adapter.generate({ ...request, schema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) });
+  });
+
+  it("still does not count a keep-alive comment arriving in fragments", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: stream(function* () {
+      for (let index = 0; index < 20; index += 1) yield ": OPENROUTER";
+      yield " PROCESSING\n\n";
+    }, 10) });
+    await expect(adapter.generate({ ...request, timeout_ms: 80 })).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_timeout" } });
+  });
+});
+
 describe("OpenRouter stream ending", () => {
   // A complete, schema-valid value, then the connection closes before the provider's terminal outcome.
   const truncated = () => stream(function* () { yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":[]}"}}]}\n\n'; }, 0);
