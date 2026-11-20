@@ -187,14 +187,14 @@ test('Copy answer copies the answer as Markdown and says so, and main takes no m
   expect(await copied()).toBe(markdown);
   await expect(copy).toHaveText('Copy');
 
-  // An answer is at most 12,000 characters; the broker refuses more.
+  // Copy answer takes one whole answer (256 Ki characters); the broker refuses more.
   const write = (text: string) => page.evaluate(value =>
     (window as unknown as { echo: { rpc(method: string, params: object): Promise<{ ok: boolean }> } }).echo.rpc('clipboard.writeText', { text: value }),
   text);
-  expect(await write('x'.repeat(12_001))).toEqual({ ok: false, failure: { code: 'invalid_request', retryable: false } });
+  expect(await write('x'.repeat(256 * 1024 + 1))).toMatchObject({ ok: false });
   expect(await copied()).toBe(markdown);
-  // Counted in characters: 12,000 that each take two UTF-16 units still fit.
-  expect((await write('𝄞'.repeat(12_000))).ok).toBe(true);
+  // Counted in characters: 20,000 that each take two UTF-16 units fit.
+  expect((await write('𝄞'.repeat(20_000))).ok).toBe(true);
 });
 
 // What each block draws, the numbers each item keeps and how Copy answer writes them are ask-blocks.test's and

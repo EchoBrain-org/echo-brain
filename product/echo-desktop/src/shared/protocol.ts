@@ -510,8 +510,12 @@ export type Audience =
 export const MAX_CAPTURE_PROJECTS = 20;
 /** New project takes up to 20 files. */
 export const MAX_PROJECT_FILES = 20;
-/** Copy answer takes what an answer can hold: 12,000 characters. */
-export const MAX_COPY_CHARACTERS = 12_000;
+/**
+ * Copy answer takes one whole answer, as a saved turn holds one: up to the
+ * bound of a timeline put, in characters. It bounds what the page may hand
+ * the clipboard, never what an answer may say.
+ */
+export const MAX_COPY_CHARACTERS = MAX_TIMELINE_PUT_BYTES;
 
 /** Where a saved document's text extraction stands (the Authority's own states). */
 export type Extraction = 'extracting' | 'ready' | 'partial' | 'no_text' | 'encrypted' | 'malformed' | 'limit_exceeded' | 'timed_out'
@@ -1024,9 +1028,12 @@ export function changesLogLine(params: unknown): string | null {
 
 /** Parameters larger than this are refused at the broker. */
 export const MAX_PARAMS_BYTES = 64 * 1024;
-/** The most a call's parameters may take at the broker: a timeline put carries one whole answer, every other call MAX_PARAMS_BYTES. */
+/**
+ * The most a call's parameters may take at the broker: a timeline put and
+ * Copy answer each carry one whole answer, every other call MAX_PARAMS_BYTES.
+ */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
+  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

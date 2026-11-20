@@ -1,5 +1,13 @@
 import { expect, it } from 'vitest';
-import { MAX_PARAMS_BYTES, plainJsonBytes } from '../../src/shared/protocol.js';
+import { MAX_PARAMS_BYTES, MAX_TIMELINE_PUT_BYTES, paramsLimit, plainJsonBytes } from '../../src/shared/protocol.js';
+
+it('lets a call that carries one whole answer take one, and every other call the broker\'s own bound', () => {
+  expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);
+  // Copy answer carries a whole answer too, however long.
+  expect(paramsLimit('clipboard.writeText')).toBe(MAX_TIMELINE_PUT_BYTES);
+  expect(plainJsonBytes({ text: 'x'.repeat(100_000) }, paramsLimit('clipboard.writeText'))).not.toBeNull();
+  expect(paramsLimit('ask.run')).toBe(MAX_PARAMS_BYTES);
+});
 
 it('refuses what a structured clone carries but JSON does not', () => {
   for (const value of [new Map([['a', 1]]), new Set([1]), new Date(0), new Uint8Array(8), new ArrayBuffer(8), { at: new Date(0) }, [1, 2n], { run: () => 1 }, { n: Number.NaN }]) {
