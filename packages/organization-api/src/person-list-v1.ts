@@ -18,12 +18,9 @@ import { asEnumerableRecord as object, assertExactKeys, assertTimestamp, fail, u
 export const PERSON_LIST_PATH_V1 = '/v1/person/list';
 export const PERSON_OPEN_PATH_V1 = '/v1/person/open';
 export const PERSON_LIST_PAGE_SIZE_V1 = 25;
-/** Equals the association cap, so a row never hides a joined project. */
-const PERSON_LIST_ROW_PROJECTS_MAX_V1 = 20;
 export const PERSON_LIST_TEXT_MAX_BYTES_V1 = 200;
 export const PERSON_LIST_RESPONSE_MAX_BYTES_V1 = 320 * 1024;
 export const PERSON_OPEN_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
-const PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1 = 8;
 export const PERSON_LIST_NOTICE_MEETINGS_UNAVAILABLE_V1 = 'meetings_unavailable';
 
 export type PersonItemKindV1 = 'imported_meeting' | 'note' | 'document' | 'meeting';
@@ -219,7 +216,8 @@ function row(value: unknown, label: string): PersonListRowV1 {
   line(input.title, `${label} title`, PERSON_LIST_TEXT_MAX_BYTES_V1);
   assertTimestamp(input.added_at, `${label} added_at`);
   if (!VISIBILITIES.includes(input.visibility as string)) fail(`${label} visibility is invalid`);
-  if (!Array.isArray(input.projects) || input.projects.length > PERSON_LIST_ROW_PROJECTS_MAX_V1) fail(`${label} projects is invalid`);
+  // Every project the item is filed in: a row names them all.
+  if (!Array.isArray(input.projects)) fail(`${label} projects is invalid`);
   const projects = input.projects.map(rowProject);
   if (new Set(projects.map((project) => project.project_id)).size !== projects.length) fail(`${label} projects contains duplicates`);
   const base = { title: input.title, added_at: input.added_at, visibility: input.visibility as PersonListVisibilityV1, projects: Object.freeze(projects) };
@@ -384,7 +382,8 @@ export function validatePersonOpenResponseV1(value: unknown): PersonOpenResponse
     case 'document': {
       const item = openItem(input.item, ref as PersonDocumentRefV1) as PersonListDocumentRowV1;
       filename(input.filename);
-      if (!Array.isArray(input.chunks) || input.chunks.length > PERSON_OPEN_DOCUMENT_CHUNKS_MAX_V1) fail('Person open document chunks is invalid');
+      // The Authority pages a document's chunks; the page it sends is checked by the response bound alone.
+      if (!Array.isArray(input.chunks)) fail('Person open document chunks is invalid');
       return bounded<PersonOpenDocumentV1>({
         ...base, ref: ref as PersonDocumentRefV1, item, filename: input.filename, chunks: Object.freeze(input.chunks.map(chunk)), next_cursor,
       }, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, 'Person open response');

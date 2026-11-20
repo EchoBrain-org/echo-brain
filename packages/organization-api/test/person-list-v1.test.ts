@@ -154,7 +154,7 @@ describe('Person list and open public contracts', () => {
     for (const visibility of ['projects', 'approver_only', 'everyone']) expect(() => validatePersonListResponseV1(withRow(0, { visibility }))).toThrow('visibility');
     const rowProjects = (count: number) => Array.from({ length: count }, (_, index) => ({ project_id: projectId(index + 1), name: `Project ${index}` }));
     expect(validatePersonListResponseV1(withRow(1, { projects: rowProjects(20) })).items[1]!.projects).toHaveLength(20);
-    expect(() => validatePersonListResponseV1(withRow(1, { projects: rowProjects(21) }))).toThrow('projects is invalid');
+    expect(validatePersonListResponseV1(withRow(1, { projects: rowProjects(21) })).items[1]!.projects).toHaveLength(21);
     expect(() => validatePersonListResponseV1(withRow(1, { projects: [...rowProjects(1), ...rowProjects(1)] }))).toThrow('duplicates');
     expect(() => validatePersonListResponseV1(withRow(1, { projects: [{ project_id: PROJECT_A, name: 'Apollo', role: 'lead' }] }))).toThrow();
     expect(() => validatePersonListResponseV1(withRow(0, { kind: 'document' }))).toThrow('inconsistent');
@@ -243,7 +243,10 @@ describe('Person list and open public contracts', () => {
     expect(validatePersonOpenResponseV1({ ...openDocument, chunks: [{ anchor: { kind: 'page', start: 2 }, text: '\fPage two\u0007' }] })).toHaveProperty('chunks');
     const chunk = (index: number) => ({ anchor: { kind: 'paragraph', start: index + 1 }, text: `Paragraph ${index}` });
     expect(validatePersonOpenResponseV1({ ...openDocument, chunks: Array.from({ length: 8 }, (_, index) => chunk(index)) })).toHaveProperty(['chunks', 'length'], 8);
-    expect(() => validatePersonOpenResponseV1({ ...openDocument, chunks: Array.from({ length: 9 }, (_, index) => chunk(index)) })).toThrow('chunks is invalid');
+    expect(validatePersonOpenResponseV1({ ...openDocument, chunks: Array.from({ length: 9 }, (_, index) => chunk(index)) })).toHaveProperty(['chunks', 'length'], 9);
+    // A row names every project its item is filed in, however many.
+    const projects = Array.from({ length: 25 }, (_, index) => ({ project_id: `prj_00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, name: `Project ${index}` }));
+    expect(validatePersonListResponseV1(withRow(1, { projects })).items[1]!.projects).toHaveLength(25);
     for (const anchor of [{ kind: 'page', start: 0 }, { kind: 'page', start: 1.5 }, { kind: 'line', start: 1 }, { kind: 'page' }]) {
       expect(() => validatePersonOpenResponseV1({ ...openDocument, chunks: [{ anchor, text: 'x' }] })).toThrow('anchor');
     }
