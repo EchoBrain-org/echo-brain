@@ -144,7 +144,7 @@ export class OpenRouterClient implements LlmProviderClient {
   async generateStructured(
     request: StructuredGenerationRequest,
   ): Promise<StructuredGenerationResult> {
-    const { payload, response } = await this.request(
+    const { payload, response, streamed } = await this.request(
       '/chat/completions',
       {
         method: 'POST',
@@ -207,6 +207,16 @@ export class OpenRouterClient implements LlmProviderClient {
       throw invalidProviderResponse(
         'OpenRouter',
         'response generation failed',
+      );
+    }
+    // A stream that closed before the provider's terminal outcome (its finish reason) was cut off in transit: the
+    // content that arrived is not a finished reply, and the call may have been billed.
+    if (streamed && !nonEmptyString(finishReason)) {
+      throw new StructuredGenerationAttemptError(
+        'temporarily_unavailable',
+        'OpenRouter stream closed before it finished',
+        true,
+        attemptObservation,
       );
     }
     // A reply that stopped at the model's own output limit was billed and would stop there again: never retried.

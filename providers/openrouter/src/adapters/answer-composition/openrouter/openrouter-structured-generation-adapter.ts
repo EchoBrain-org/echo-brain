@@ -502,6 +502,17 @@ export function createOpenRouterStructuredGenerationAdapter(
         provider_latency_ms: providerLatency,
       });
     }
+    // A stream that closed before the provider's terminal outcome (its finish reason) was cut off in transit: whatever
+    // content arrived is not a finished reply, however complete it looks.
+    if (reply.streamed && (first.finish_reason === undefined || first.finish_reason === null)) {
+      fail("OpenRouter request failed", {
+        failure_class: "adapter_transport",
+        response,
+        root,
+        usage: generationUsage,
+        provider_latency_ms: providerLatency,
+      });
+    }
     // Calling the reply tool is how a tool-sent schema's reply completes; what it called is checked below.
     const calledTool = !strict && first.finish_reason === "tool_calls";
     const completed = finishReason(calledTool ? "stop" : first.finish_reason);

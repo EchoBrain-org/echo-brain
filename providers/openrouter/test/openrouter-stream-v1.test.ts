@@ -68,3 +68,18 @@ describe("OpenRouter reply reading", () => {
     await expect(adapter.generate({ ...request, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ n: 1111111 });
   });
 });
+
+describe("OpenRouter stream ending", () => {
+  // A complete, schema-valid value, then the connection closes before the provider's terminal outcome.
+  const truncated = () => stream(function* () { yield 'data: {"id":"gen-1","choices":[{"delta":{"content":"{\\"signals\\":[]}"}}]}\n\n'; }, 0);
+
+  it("fails an answer whose stream ended without a finish reason, never a short success", async () => {
+    const adapter = createOpenRouterStructuredGenerationAdapter({ credential_ref: "fixture", credential_resolver: () => "SECRET", fetch_impl: truncated() });
+    await expect(adapter.generate(request)).rejects.toMatchObject({ diagnostic: { failure_class: "adapter_transport", finish_reason: null } });
+  });
+
+  it("fails an extraction whose stream ended without a finish reason, as possibly billed", async () => {
+    const client = new OpenRouterClient({ credentialRef: "openrouter", credentialResolver: () => "secret", fetchImpl: truncated() });
+    await expect(client.generateStructured(extraction)).rejects.toMatchObject({ code: "temporarily_unavailable", retryable: true, unbilled: false, message: expect.stringContaining("before it finished") });
+  });
+});
