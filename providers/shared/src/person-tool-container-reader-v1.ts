@@ -64,7 +64,8 @@ export function personToolContainerRowsV1(rows: readonly unknown[], parse: (row:
 }
 
 const LIST_MAX = 25;
-const SEARCH_MAX = 10;
+/** One search page: a list page's size. */
+const SEARCH_MAX = 25;
 /** Containers a search finds only through a mapped ECHO project's name, each read exactly. */
 const MAPPED_MAX = 10;
 const PINNED_MAX = 20;
@@ -131,18 +132,32 @@ export async function createPersonToolContainerReaderV1(options: {
   function refuseDates(input: EvidenceDateFilterV1): void {
     if (input.since !== undefined || input.until !== undefined || input.date_field !== undefined) failure('invalid_request');
   }
-  /** Keywords, compared case-insensitively. Words that only name the collection ("Jira projects") match every container. */
+  /**
+   * Keywords, compared case-insensitively, any number of them under the 1 KiB query bound. Words that only name the
+   * collection ("Jira projects") match every container.
+   */
   function searchTerms(query: string): { readonly terms: readonly string[]; readonly probe?: string } {
     if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) failure('invalid_request');
     const words = [...new Set(query.normalize('NFC').toLowerCase().trim().split(/\s+/u).map(word => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')).filter(word => word !== ''))];
-    if (words.length > 32) failure('invalid_request');
     const terms = words.filter(word => !nouns.some(noun => word === noun || word === `${noun}s` || word === `${noun}es`));
     const probe = terms.reduce<string | undefined>((longest, term) => longest === undefined || term.length > longest.length ? term : longest, undefined);
     return { terms, ...(probe === undefined ? {} : { probe }) };
   }
-  function matches(container: PersonToolContainerV1, names: readonly string[], terms: readonly string[]): boolean {
+  /** How many of `terms` the container's key, name or mapped ECHO project names contain. */
+  function matched(container: PersonToolContainerV1, names: readonly string[], terms: readonly string[]): number {
     const haystack = [container.key, container.name, ...names].join('\n').normalize('NFC').toLowerCase();
-    return terms.every(term => haystack.includes(term));
+    return terms.filter(term => haystack.includes(term)).length;
+  }
+  /**
+   * The containers that match every term, in candidate order. When none does, a longer query must not end empty: the
+   * containers that match some terms, most matched first, and `partial` says they do not match every term.
+   */
+  function matching(containers: readonly PersonToolContainerV1[], echo: ReadonlyMap<string, readonly string[]>, terms: readonly string[]): { readonly containers: readonly PersonToolContainerV1[]; readonly partial: boolean } {
+    const scored = containers.map((container, index) => ({ container, index, score: matched(container, echo.get(container.id) ?? [], terms) }));
+    const every = scored.filter(entry => entry.score === terms.length);
+    if (every.length > 0 || terms.length < 2) return { containers: every.map(entry => entry.container), partial: false };
+    const some = scored.filter(entry => entry.score > 0).sort((left, right) => right.score - left.score || left.index - right.index);
+    return { containers: some.map(entry => entry.container), partial: some.length > 0 };
   }
   /**
    * What the container is, then the mapped ECHO projects by whole name, at most ten and as many as fit, then how many
@@ -233,10 +248,11 @@ export async function createPersonToolContainerReaderV1(options: {
           const exact = await visibleAll(mapped.slice(0, MAPPED_MAX), input.signal);
           candidates = { containers: [...found.containers, ...exact.containers], left_out: found.left_out + exact.left_out };
         }
-        const matching = candidates.containers.filter(container => matches(container, echo.get(container.id) ?? [], terms));
-        const selected = matching.slice(0, maximum);
+        const found = matching(candidates.containers, echo, terms);
+        const selected = found.containers.slice(0, maximum);
         await verify(input.signal);
-        return Object.freeze({ items: release(selected, echo), truncated: more || matching.length > selected.length, ...leftOut(candidates.left_out) });
+        const notices = [...(found.partial ? [`No ${provider.noun} matched every word of this search; these match some of them.`] : []), ...(candidates.left_out === 0 ? [] : [leftOut(candidates.left_out).notice!])];
+        return Object.freeze({ items: release(selected, echo), truncated: more || found.containers.length > selected.length, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
       }, input.signal);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<Page> {

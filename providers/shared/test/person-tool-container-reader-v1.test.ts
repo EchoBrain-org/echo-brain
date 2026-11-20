@@ -155,6 +155,29 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     expect(found.notice).toBe(LEFT_OUT);
   });
 
+  it('accepts a query of any number of words and, when no container matches every word, shows those matching most and says so', async () => {
+    const f = await fixture(['1', '2', '3', '4']);
+    const long = `Launchscope ${Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ')}`;
+    const found = await f.source.search({ query: long });
+    expect(found.items.map(item => item.label)).toEqual(['Channel 2']);
+    expect(found.notice).toBe('No Fixture channel matched every word of this search; these match some of them.');
+    // A query some container matches in full keeps only those, unannounced.
+    const exact = await f.source.search({ query: 'channel 2' });
+    expect(exact.items.map(item => item.label)).toEqual(['Channel 2']);
+    expect(exact.notice).toBeUndefined();
+    // Containers matching more words come first.
+    const ranked = await f.source.search({ query: '1 launchscope 2' });
+    expect(ranked.items.map(item => item.label)).toEqual(['Channel 2', 'Channel 1']);
+  });
+
+  it('returns up to 25 search matches, and says when more matched', async () => {
+    const f = await fixture();
+    for (let index = 5; index <= 30; index += 1) f.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `Channel ${index}` });
+    const found = await f.source.search({ query: 'channel', limit: 50 });
+    expect(found.items).toHaveLength(25);
+    expect(found.truncated).toBe(true);
+  });
+
   it("pages on from where the tool's page ended, past a container it left out", async () => {
     const f = await fixture(); f.state.malformed.add('1');
     const first = await f.source.list({ limit: 2 });
