@@ -67,22 +67,41 @@ export class AgenticAskGenerationFailureV1 extends AgenticAskOutputErrorV1 {
   constructor(message: string, readonly recovery: "retry" | "repair" | "fallback", readonly correction?: RecoveryCorrection, readonly silent = false) { super(message); }
 }
 
-/** A model call sent nothing for its silence period, and its one retry did the same; the writer answers from what was released. */
-export class AgenticModelStalledErrorV1 extends AgenticAskGenerationFailureV1 {
-  constructor(silenceMs: number) { super(`the model sent nothing for ${Math.round(silenceMs / 1000)} s`, "fallback"); this.name = "AgenticModelStalledErrorV1"; }
+/**
+ * A model call failed after the provider may have accepted it, so it may have been billed: it is never sent again
+ * (a paid attempt is not repeated automatically). Unlike a permanent refusal it does not stop the request's other
+ * calls; the writer answers from what was released.
+ */
+export class AgenticModelUnsettledErrorV1 extends AgenticAskGenerationFailureV1 {
+  constructor(message: string) { super(message, "fallback"); this.name = "AgenticModelUnsettledErrorV1"; }
 }
+
+/**
+ * A model call sent nothing for its silence period and is not sent again: a call the provider accepted may have been
+ * billed. The writer answers from what was released.
+ */
+export class AgenticModelStalledErrorV1 extends AgenticModelUnsettledErrorV1 {
+  constructor(silenceMs: number) { super(`the model sent nothing for ${Math.round(silenceMs / 1000)} s`); this.name = "AgenticModelStalledErrorV1"; }
+}
+
+/**
+ * Provider statuses that refuse a request before any generation runs (rate limited, unavailable, overloaded), so they
+ * are unbilled and earn the one retry.
+ */
+const UNBILLED_REFUSAL_STATUSES = new Set([429, 503, 529]);
 
 export function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 /** Reads the port's StructuredGenerationFailureV1 off a thrown error; anything else has no failure class. */
-function errorDiagnostic(error: unknown): { readonly failure_class: StructuredGenerationFailureClassV1 | null; readonly http_status: number | null; readonly finish_reason: string | null; readonly usage: StructuredGenerationUsageV1 | null } {
+function errorDiagnostic(error: unknown): { readonly failure_class: StructuredGenerationFailureClassV1 | null; readonly http_status: number | null; readonly finish_reason: string | null; readonly unbilled: boolean; readonly usage: StructuredGenerationUsageV1 | null } {
   const outer = object(error); const diagnostic = object(outer?.diagnostic);
   const observation = object(outer?.generation_observation); const usage = object(observation?.usage);
   const valid = (value: unknown): number | null => typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
   const failureClass = STRUCTURED_GENERATION_FAILURE_CLASSES_V1.find(known => known === diagnostic?.failure_class);
   return Object.freeze({
     failure_class: failureClass ?? null,
+    unbilled: diagnostic?.unbilled === true,
     http_status: typeof diagnostic?.http_status === "number" && Number.isSafeInteger(diagnostic.http_status) ? diagnostic.http_status : null,
     finish_reason: typeof diagnostic?.finish_reason === "string" ? diagnostic.finish_reason : null,
     usage: usage === null ? null : Object.freeze({ input_tokens: valid(usage.input_tokens), output_tokens: valid(usage.output_tokens), total_tokens: valid(usage.total_tokens), cached_input_tokens: valid(usage.cached_input_tokens), reasoning_tokens: valid(usage.reasoning_tokens) }),
@@ -90,11 +109,17 @@ function errorDiagnostic(error: unknown): { readonly failure_class: StructuredGe
 }
 function finishFailure(reason: string | null): AgenticAskGenerationFailureV1 {
   if (reason === "content_filter") return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
-  if (reason === "error") return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
+  // The provider ran the generation and reported an error: it may have been billed, so it is not repeated.
+  if (reason === "error") return new AgenticModelUnsettledErrorV1("the model reported an error while generating");
   return new AgenticAskGenerationFailureV1("the reply did not finish; keep notes and sentences shorter", "repair", "model_repair_unfinished");
 }
-/** Exhaustive over the port's failure classes: a new class does not compile until it is handled here. */
-function generationFailure(error: unknown): AgenticAskGenerationFailureV1 | null {
+/**
+ * Exhaustive over the port's failure classes: a new class does not compile until it is handled here. Only a failure
+ * known to be unbilled earns the one retry: a refusal before the request was fully sent (the adapter's `unbilled`), or
+ * an explicit rate-limit or overloaded status. Every other transport, silence or 5xx failure may have been billed and
+ * goes to the fallback with its own reason.
+ */
+function generationFailure(error: unknown, silenceMs: number): AgenticAskGenerationFailureV1 | null {
   const diagnostic = errorDiagnostic(error);
   const status = diagnostic.http_status;
   switch (diagnostic.failure_class) {
@@ -103,11 +128,18 @@ function generationFailure(error: unknown): AgenticAskGenerationFailureV1 | null
     case "adapter_refusal": return new AgenticAskGenerationFailureV1("the provider declined the reply", "fallback");
     case "adapter_response":
       return status !== null && status >= 200 && status < 300 ? new AgenticAskGenerationFailureV1("the reply had no usable content", "repair", "model_repair_empty") : null;
-    case "adapter_timeout": return new AgenticAskGenerationFailureV1("model sent nothing for its silence period", "retry", "model_retry", true);
-    case "adapter_transport": return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
+    case "adapter_timeout":
+      return diagnostic.unbilled ? new AgenticAskGenerationFailureV1("model sent nothing for its silence period", "retry", "model_retry", true) : new AgenticModelStalledErrorV1(silenceMs);
+    case "adapter_transport":
+      return diagnostic.unbilled ? new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry")
+        : new AgenticModelUnsettledErrorV1("the connection to the model failed after it may have accepted the request");
     case "adapter_http": case "adapter_provider_error": {
-      const temporary = status === null || (status >= 200 && status < 300) || status === 408 || status === 429 || (status >= 500 && status < 600);
-      return temporary ? new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry") : new AgenticAskGenerationFailureV1("model was unavailable", "fallback");
+      if (status !== null && UNBILLED_REFUSAL_STATUSES.has(status)) return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
+      if (diagnostic.unbilled) return new AgenticAskGenerationFailureV1("model was unavailable", "retry", "model_retry");
+      // A provider error inside a successful reply, a request timeout, a 5xx or no status: the generation may have run
+      // and been billed. Any other status is a permanent refusal.
+      if (status === null || (status >= 200 && status < 300) || status === 408 || status >= 500) return new AgenticModelUnsettledErrorV1(`the model failed${status === null ? "" : ` with status ${status}`} after it may have accepted the request`);
+      return new AgenticAskGenerationFailureV1("model was unavailable", "fallback");
     }
     // Local configuration/contract errors and unknown failures are terminal, not a model reply to repair.
     case null: return null;
@@ -172,7 +204,7 @@ export interface AgenticModelGateStatsV1 {
 
 export interface AgenticModelGateV1 {
   /** A harness transport calls this before forwarding each exact body, never once per SDK session. */
-  external<T>(request: AgenticExternalModelRequestV1, forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>): Promise<T>;
+  external<T>(request: AgenticExternalModelRequestV1, forward: (signal: AbortSignal, progress: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>): Promise<T>;
   call(model_call: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, recovery?: boolean): Promise<unknown>;
   withRepair<T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T>;
   stats(): AgenticModelGateStatsV1;
@@ -183,6 +215,22 @@ export type AgenticExternalModelRequestV1 = StructuredGenerationRequestV1;
 
 /** The pause before the one retry of an access check that failed transiently. */
 export const AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1 = 400;
+
+/**
+ * One model call's silence period: `progress` restarts it, and once it passes with no progress `signal` aborts. The
+ * call is handed `signal`, so the abort reaches the operation itself.
+ */
+function silenceWatch(ms: number): { readonly signal: AbortSignal; readonly progress: () => void; readonly stop: () => void } {
+  const silent = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const progress = () => {
+    if (silent.signal.aborted) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => silent.abort(new DOMException("the model sent nothing for its silence period", "TimeoutError")), ms);
+  };
+  progress();
+  return { signal: silent.signal, progress, stop: () => clearTimeout(timer) };
+}
 
 function abortablePause(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -217,7 +265,7 @@ export async function revalidateWithTransientRetryV1<T>(check: () => Promise<T>,
 export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Options): AgenticModelGateV1 {
   const { now } = options;
   const activeSignal = options.signal;
-  /** How long one model call may stay silent: a structured call sends nothing until it finishes. */
+  /** How long one model call may send nothing: progress the call reports restarts it, and only silence stops the call. */
   const silenceMs = options.generation.timeout_ms;
   let calls = 0; let repairs = 0; let generationStopped = false;
   let externalFailure: unknown;
@@ -226,6 +274,8 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   const invocationDigests: Sha256Digest[] = [];
   /** The request stopped because something it waits on stalled. */
   const stalled = () => activeSignal.aborted && activeSignal.reason instanceof AgenticAskStalledErrorV1;
+  /** A permanent refusal stops every later call; a failure whose billing is unknown stops only its own call. */
+  const stops = (failure: AgenticAskGenerationFailureV1 | null) => failure?.recovery === "fallback" && !(failure instanceof AgenticModelUnsettledErrorV1);
   const assertLive = () => {
     if (options.input_signal?.aborted) abort(options.input_signal);
     if (stalled()) throw activeSignal.reason;
@@ -246,8 +296,8 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
         }));
       } catch (error) {
         if (isAbort(error, options.input_signal) || stalled()) throw error;
-        const failure = error instanceof AgenticAskGenerationFailureV1 ? error : generationFailure(error);
-        if (failure?.recovery === 'fallback') generationStopped = true;
+        const failure = error instanceof AgenticAskGenerationFailureV1 ? error : generationFailure(error, silenceMs);
+        if (stops(failure)) generationStopped = true;
         throw failure ?? error;
       }
     }
@@ -283,48 +333,51 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
           input: { model: modelInput.model, system_prompt: modelInput.system_prompt, user_prompt: modelInput.user_prompt, schema: modelInput.schema, max_output_tokens: modelInput.max_output_tokens, timeout_ms: modelInput.timeout_ms } });
         // Only a provider failure has an error terminal. A returned value has
         // one response terminal even when its finish reason requires recovery.
-        const generate = async <T>(operation: () => Promise<T>): Promise<T> => {
-          // The adapter enforces the silence period too; the gate's own timer covers a port that does not.
-          const silent = new AbortController();
-          const timer = setTimeout(() => silent.abort(), silenceMs);
-          try { return await raceAbort(AbortSignal.any([activeSignal, silent.signal]), operation()); }
+        const generate = async <T>(operation: (signal: AbortSignal, on_progress: () => void) => Promise<T>): Promise<T> => {
+          // The gate's silence period restarts at each piece of the reply the adapter reports (on_progress), so a reply
+          // that keeps arriving runs as long as it needs; its abort reaches the operation through the signal it is given.
+          const watch = silenceWatch(silenceMs);
+          const signal = AbortSignal.any([activeSignal, watch.signal]);
+          const running = operation(signal, watch.progress);
+          try { return await raceAbort(signal, running); }
           catch (error) {
-            const stall = silent.signal.aborted && !activeSignal.aborted
-              ? Object.assign(new Error("model sent nothing for its silence period"), { diagnostic: { failure_class: "adapter_timeout", http_status: null, finish_reason: null } })
-              : error;
+            // A request stop wins over silence, with its own reason. Silence from a call the provider may have accepted is
+            // a stall whose billing is unknown (no `unbilled`), so it is never sent again.
+            const stall = !watch.signal.aborted ? error : activeSignal.aborted ? abortReason(activeSignal)
+              : Object.assign(new Error("model sent nothing for its silence period"), { diagnostic: { failure_class: "adapter_timeout", http_status: null, finish_reason: null } });
             observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: callId, role, error_kind: coreRuntimeDiagnosticErrorKindV1(stall), ...coreRuntimeModelRoutingV1(stall, 'failure') });
             throw stall;
-          } finally { clearTimeout(timer); }
+          } finally { watch.stop(); }
         };
         if (options.model.generate_with_observation !== undefined) {
-          const observed = await generate(() => options.model.generate_with_observation!(modelInput));
+          const observed = await generate((signal, on_progress) => options.model.generate_with_observation!({ ...modelInput, signal, on_progress }));
           observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value: observed.value, usage: observed.usage, finish_reason: observed.finish_reason, ...coreRuntimeModelRoutingV1(observed, 'result') });
           generations.push(Object.freeze({ role, finish_reason: observed.finish_reason, usage: observed.usage }));
           if (observed.finish_reason !== null && observed.finish_reason !== "stop") throw finishFailure(observed.finish_reason);
           return observed.value;
         }
-        const value = await generate(() => options.model.generate(modelInput));
+        const value = await generate((signal, on_progress) => options.model.generate({ ...modelInput, signal, on_progress }));
         observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: callId, role, value });
         generations.push(Object.freeze({ role, finish_reason: null, usage: null }));
         return value;
       });
     } catch (error) {
       if (error instanceof AgenticAskGenerationFailureV1) {
-        if (error.recovery === "fallback") generationStopped = true;
+        if (stops(error)) generationStopped = true;
         throw error;
       }
       // Every admitted call leaves exactly one content-free observation, including aborts.
       const diagnostic = errorDiagnostic(error);
       generations.push(Object.freeze({ role, finish_reason: diagnostic.finish_reason, usage: diagnostic.usage }));
       if (isAbort(error, options.input_signal) || stalled()) throw error;
-      const failure = generationFailure(error);
+      const failure = generationFailure(error, silenceMs);
       // A permanent provider rejection must not be repeated under the writer role either.
-      if (failure?.recovery === "fallback") generationStopped = true;
+      if (stops(failure)) generationStopped = true;
       throw failure ?? error;
     }
   };
   /**
-   * At most one extra call: temporary failures retry unchanged; invalid output gets repair guidance. Each admitted extra
+   * At most one extra call: a failure known to be unbilled retries unchanged; invalid output gets repair guidance. Each admitted extra
    * call is counted by what it corrects; a caller's rejection is model_repair_rejected.
    */
   const withRepair = async <T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T> => {
@@ -350,7 +403,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
     const admitted = repairs;
     try { return parse(await call(model_call, system, repairUser, schema, true)); }
     catch (error) {
-      // A call silent twice is a stall, named as such, not an unavailable model.
+      // A call silent again after its unbilled retry is a stall, named as such, not an unavailable model.
       if (silent && error instanceof AgenticAskGenerationFailureV1 && error.silent) throw new AgenticModelStalledErrorV1(silenceMs);
       throw error;
     }
@@ -358,7 +411,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   };
   // SDK retries and auxiliary requests cannot share an admission. Serialize them so access
   // failures have one order, even if the harness sends concurrently.
-  const admitExternal = <T>(request: StructuredGenerationRequestV1, forward: (signal: AbortSignal) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>, { role, span }: AgenticModelCallV1, recovery = false): Promise<T> => {
+  const admitExternal = <T>(request: StructuredGenerationRequestV1, forward: (signal: AbortSignal, progress: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>, { role, span }: AgenticModelCallV1, recovery = false): Promise<T> => {
     const requestSignal = request.signal === undefined ? activeSignal : AbortSignal.any([activeSignal, request.signal]);
     const assertRequestLive = () => { assertLive(); requestSignal.throwIfAborted(); };
     const run = externalQueue.then(async () => {
@@ -381,21 +434,25 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       // Count-token requests carry evidence but do not mean the reasoning model read it.
       if (request.operation === 'messages') { request.before_forward?.(); options.before_call?.(role); }
       const started = now();
-      const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.floor(timeoutMs)));
-      const signal = AbortSignal.any([requestSignal, timeoutSignal]);
+      // The silence period restarts at each piece of the reply `forward` reports, so a reply that keeps arriving is never
+      // stopped by a clock; its abort reaches the forwarded request through the signal it is given.
+      const watch = silenceWatch(Math.max(1, Math.floor(timeoutMs)));
+      const signal = AbortSignal.any([requestSignal, watch.signal]);
       try {
         const result = await observeCoreRuntimeV1(span, async () => {
           options.on_span?.({ role, phase: 'enter' });
           const observed = request.diagnostic_input !== undefined;
           if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_request', call_id: calls, role, recovery, input: request.diagnostic_input! });
           try {
-            const result = await raceAbort(signal, forward(signal));
+            const result = await raceAbort(signal, forward(signal, watch.progress));
             if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_response', call_id: calls, role, value: result.value ?? null,
               ...(result.usage === undefined ? {} : { usage: result.usage }), finish_reason: result.finish_reason === 'stop' || result.finish_reason === 'length' ? result.finish_reason : 'other' });
             return result;
           } catch (error) {
-            // This request sent nothing for its silence period: a stall, not a provider failure. A caller stop wins.
-            if (timeoutSignal.aborted && !requestSignal.aborted) {
+            // This request sent nothing for its silence period: a stall, not a provider failure. A caller stop wins, with
+            // its own reason.
+            if (watch.signal.aborted && requestSignal.aborted) error = abortReason(requestSignal);
+            if (watch.signal.aborted && !requestSignal.aborted) {
               try { assertLive(); error = new AgenticModelStalledErrorV1(timeoutMs); } catch (stop) { error = stop; }
             }
             if (observed) observeCoreRuntimeDiagnosticV1({ kind: 'model_error', call_id: calls, role, error_kind: error instanceof AgenticModelStalledErrorV1 ? 'adapter_timeout' : coreRuntimeDiagnosticErrorKindV1(error) });
@@ -407,7 +464,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
       } catch (error) {
         generations.push(Object.freeze({ role, engine, model: request.model, finish_reason: null, usage: null }));
         throw error;
-      } finally { options.on_span?.({ role, phase: 'exit', elapsed_ms: Math.max(0, now() - started) }); }
+      } finally { watch.stop(); options.on_span?.({ role, phase: 'exit', elapsed_ms: Math.max(0, now() - started) }); }
     });
     externalQueue = run.catch(() => undefined);
     return run;

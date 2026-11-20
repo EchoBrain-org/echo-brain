@@ -589,15 +589,19 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         expect(rendered.result.writer_evidence).toEqual(["E9", ...ids(1, 8)]); } },
     { id: "CF2", name: "keeps a rows sentence beside the list the writer places, citing every row of the list it names", bundle: eightAnd1([WI(["L1", "E9"])]), replies: [sayWithL1(FOUR)], status: "answered", says: [FOUR.text, EIGHT] },
     // E9 is text the writer read, outside the list: the sentence stands on it (W1). The rows it cites beside it are cited
-    // too, since it may carry their facts (W6); its list id supports nothing and brings the list's private rows the writer saw.
+    // too, since it may carry their facts (W6); its list id supports nothing and brings every row of the list the writer saw,
+    // whatever its visibility (visibility follows citations).
     { id: "W1, W6", name: "stands a sentence on the text it cites beside the list the writer places, and cites after it the rows it names and its list's private rows", bundle: eightAnd1([WI(["L1"])]), replies: [sayWithL1({ ...FOUR, evidence: [...FOUR.evidence, "E9"] })], status: "answered", says: [st(FOUR.text, 9), st(EIGHT, [1, 2, 3, 4, 5, 6, 7, 8])] },
     { id: "W1, W6", name: "cites every private row its list id brings, for a content plan", bundle: eightAnd1([C(["E9"])]), replies: [say({ ...FOUR, evidence: [...FOUR.evidence, "E9"] })], status: "answered", says: [st(FOUR.text, 9)] },
-    { id: "W1, W6", name: "cites only the list's private rows: E9, then THERM-1 to THERM-4 by id with THERM-2 the one only_me row", bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ ...FOUR, evidence: [...FOUR.evidence, "E9"] })], status: "answered", says: [st(FOUR.text, 5)], cited: ["E9", "E2", "E1", "E3", "E4"] },
-    ...[["E2", "E9"], ["L1", "E9"], ["E9", "L1"]].map((evidence): Row => ({
-      id: "X35a", name: `makes a sentence citing ${evidence.join(" and ")} private beside team text, citing the private row the person can open`, bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ text: WAITS, evidence })],
-      q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 2)], cited: ["E9", "E2"], check: visibility(["decision", "team"], ["ticket", "only_me"]),
+    { id: "W1, W6", name: "cites every row of the list whatever its visibility: E9, then THERM-1 to THERM-8 with THERM-2 the one only_me row", bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ ...FOUR, evidence: [...FOUR.evidence, "E9"] })], status: "answered", says: [st(FOUR.text, 9)], cited: ["E9", ...ids(1, 8)] },
+    { id: "X35a", name: "makes a sentence citing E2 and E9 private beside team text, citing the private row the person can open", bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ text: WAITS, evidence: ["E2", "E9"] })],
+      q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 2)], cited: ["E9", "E2"], check: visibility(["decision", "team"], ["ticket", "only_me"]) },
+    ...[["L1", "E9"], ["E9", "L1"]].map((evidence): Row => ({
+      id: "X35a", name: `makes a sentence citing ${evidence.join(" and ")} private beside team text, citing every row of the list, the private one included`, bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ text: WAITS, evidence })],
+      q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 9)], cited: ["E9", ...ids(1, 8)],
+      check: visibility(["decision", "team"], ...ids(1, 8).map(short => ["ticket", short === "E2" ? "only_me" : "team"] as const)),
     })),
-    { id: "X35b", name: "cites its text alone through a list with no private row the writer saw", bundle: teamRows(eightAnd1([C(["E9"])])), replies: [say({ text: WAITS, evidence: ["L1", "E9"] })], q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 1, true)], cited: ["E9"] },
+    { id: "X35b", name: "cites its text and every team row through a list with no private row the writer saw, so losing any row hides it", bundle: teamRows(eightAnd1([C(["E9"])])), replies: [say({ text: WAITS, evidence: ["L1", "E9"] })], q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 9, true)], cited: ["E9", ...ids(1, 8)] },
     { id: "X35e", name: "brings nothing through the id of a list the writer was not shown", bundle: eightAnd1([C(["E9"])]), replies: [say({ ...REVIEW, evidence: ["L7", "E9"] })], q: "What did the review approve?", status: "answered", says: [st(REVIEW.text, 1, true)] },
     ...[false, true].map((team): Row => {
       // 45 only_me rows: a sentence citing L1 beside team text cites all 46 items, and is private for its rows. No count
@@ -607,7 +611,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         id: "X35e", name: team ? "keeps all three sentences over team rows" : "keeps a sentence whose list id brings 45 private rows, private and with every citation", bundle: team ? teamRows(research) : research,
         replies: [say({ text: REVIEW.text, evidence: ["E46"] }, { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] }, { text: "The review closed.", evidence: ["E46"] })],
         q: "What did the review approve?", ...(team
-          ? { status: "answered", check: (rendered: Rendered) => expect(rendered.result.response.parts[0]!.statements.map(value => value.citation_indexes)).toEqual([[0], [1], [0]]) }
+          ? { status: "answered", check: (rendered: Rendered) => expect(rendered.result.response.parts[0]!.statements.map(value => value.citation_indexes)).toEqual([[0], Array.from({ length: 46 }, (_, index) => index + 1), [0]]) }
           : { status: "answered", check: (rendered: Rendered, run: ReturnType<typeof alone>) => {
             expect(run.prompt(0).lists[0].members).toHaveLength(45);
             const [first, waits, closed] = rendered.result.response.parts[0]!.statements;
@@ -616,12 +620,12 @@ describe("Ask renderer: lists (ADR-0041)", () => {
           } }),
       };
     }),
-    // Eleven team records (E9..E19) and one only_me row (E1, of L2), with L1 (seven team rows) before, among or after them:
-    // thirteen ids, over the schema's 12. A list id takes no item's slot, so the row stays and the sentence is private.
+    // Eleven team records (E9..E19) and one only_me row (E1, of L2), with L1 (seven team rows) before, among or after them.
+    // The sentence cites its text, then its rows in the order it names them, L1's seven rows included, and is private.
     ...[[...ids(9, 11), "E1", "L1"], ["L1", ...ids(9, 11), "E1"], [...ids(9, 5), "L1", ...ids(14, 6), "E1"]].map((evidence, index): Row => ({
-      id: "rev 13", name: `keeps a sentence's first 12 item ids past the cap with its list id ${["after", "before", "among"][index]} them, so a list id never takes a private row's place`,
+      id: "rev 13", name: `keeps every item id with its list id ${["after", "before", "among"][index]} them, citing the private row and every row of the list`,
       bundle: teamRows(listBundle(8, 11, [list("L1", ids(2, 7)), list("L2", ["E1"])], [C(ids(9, 11))]), ["E1"]), replies: [say({ text: "THERM-1 waits on the approved records.", evidence })],
-      q: "What waits on the approved records?", status: "answered", says: [st("THERM-1 waits on the approved records.", 12)], cited: [...ids(9, 11), "E1"],
+      q: "What waits on the approved records?", status: "answered", says: [st("THERM-1 waits on the approved records.", 19)], cited: [...ids(9, 11), ...(index === 0 ? ["E1", ...ids(2, 7)] : [...ids(2, 7), "E1"])],
     })),
     { id: "W1, W5", name: "keeps a rows sentence beside a content sentence, the content one citing L1's rows after its text", bundle: eightAnd1([WI(["L1"])]), replies: [sayWithL1(FOUR, ON_THEM)], q: "Which tickets were created on October 4, and what did the review approve?", status: "answered", says: [FOUR.text, EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
     { id: "W1, W5", name: "adds no gap for a which_say need, and notes no sentence (ADR-0054)", bundle: eightAnd1([WI(["L1"]), WS(["L1", "E9"])]), replies: [sayWithL1(FOUR, ON_THEM)], q: "Which tickets were created on October 4, and what did the review approve?", status: "answered", says: [FOUR.text, EIGHT, st(ON_THEM.text, [8, 0, 1, 2, 3, 4, 5, 6, 7])] },
@@ -657,8 +661,8 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       check: rendered => expect(rendered.result.response.parts[0]).not.toHaveProperty("records") },
     { id: "X24c", name: "keeps a row sentence beside the writer's selection by id", bundle: listBundle(3, 1, [list("L1", ids(1, 3))], [C(["E4"])]),
       replies: [writerReply([{ text: "THERM-2 is in progress.", evidence: ["E2"] }], { lists: [{ id: "L1", members: ["E2"] }] })], q: "Is THERM-2 in progress?", status: "answered", says: ["THERM-2 is in progress.", `1 of the 3 tickets created on October 4, 2026: ${facts(2)}.`] },
-    // A sentence on a list's id alone rests on every row of it the writer saw: a private row makes it private, and past a
-    // statement's 40 citations it is left out whole.
+    // A sentence on a list's id alone rests on every row of it the writer saw: a private row makes it private, and it cites
+    // every row, however many.
     { id: "W1, W6", name: "makes a count on a list's id private when a row it rests on is, citing every row", bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ text: "Eight tickets were created on October 4.", evidence: ["L1"] })], status: "answered",
       says: [st("Eight tickets were created on October 4.", 8)], cited: ids(1, 8),
       check: visibility(...ids(1, 8).map(short => ["ticket", short === "E2" ? "only_me" : "team"] as const)) },
@@ -970,6 +974,25 @@ describe("Ask renderer: lists (ADR-0041)", () => {
         earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "Which tickets?",
       }).render("Which tickets?");
       expect(rendered.result.response.since!.statements[0]!.private).toBe(true);
+    });
+    it("cites every row of a list a sentence and a since sentence cite beside text, a project row included (visibility follows citations)", async () => {
+      // Eight team rows, THERM-3 project-visible, and the team record E9: losing access to THERM-3 must hide both sentences,
+      // so both carry its citation beside every other row of the list.
+      const research = teamRows(eightAnd1([C(["E9"])]));
+      const bundle = Object.freeze({ ...research, items: research.items.map(entry => entry.short === "E3" ? Object.freeze({ ...entry, item: { ...entry.item, visibility: "project" as const } }) : entry) });
+      const leans = { text: "THERM-3's owner is waiting on the review.", evidence: ["E9", "L1"] };
+      const rendered = await alone({
+        bundle, replies: [{ blocks: [{ block: "answer", sentences: [leans] }], not_found: [], since: [leans] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "Who waits on the review?",
+      }).render("Who waits on the review?");
+      const { citations, parts, since } = rendered.result.response;
+      const project = citations.findIndex(citation => citation.visibility === "project");
+      expect(project).toBeGreaterThanOrEqual(0);
+      expect(parts[0]!.statements[0]).toMatchObject({ text: leans.text, private: false });
+      expect(parts[0]!.statements[0]!.citation_indexes).toHaveLength(9);
+      expect(parts[0]!.statements[0]!.citation_indexes).toContain(project);
+      expect(since!.statements[0]!.citation_indexes).toHaveLength(9);
+      expect(since!.statements[0]!.citation_indexes).toContain(project);
     });
     it("keeps a sentence and a since sentence citing a placed list private when the block shows a private row the writer never saw", async () => {
       // 80 team rows whose long participant lists fill the writer's half of the prompt, the last approver-only and past the
