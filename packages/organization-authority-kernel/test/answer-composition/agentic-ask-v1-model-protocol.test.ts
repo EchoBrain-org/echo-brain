@@ -567,7 +567,7 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
 
   it("shows the writer a nothing-found example the parser reads", () => {
     // Its nothing-found example is a blocks reply: an answer that cites nothing, which code leaves out (W1), and not_found.
-    const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\})\. Do not attach/u.exec(ANSWER_PROMPT)?.[1];
+    const nothingFound = /If neither the evidence nor a list answers the question, return (\{.*?\}): that sentence cites nothing/u.exec(ANSWER_PROMPT)?.[1];
     expect(parseBlocksAnswer(JSON.parse(nothingFound!))).toMatchObject({ placed: [], sentences: [{ evidence: [] }], not_found: ["<the requested fact>"] });
   });
 

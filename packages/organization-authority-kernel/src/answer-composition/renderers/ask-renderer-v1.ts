@@ -96,13 +96,10 @@ const INCOMPLETE_SEARCH_NOTICE = "Research stopped before it finished, so releva
 const LIMITED_COVERAGE_GAP = "Some source coverage was incomplete, so relevant context may be missing.";
 const LIST_FALLBACK_GAP = "I found these items, but could not write the rest of the answer.";
 const WHICH_GAP = "I could not confirm the full list of items asked for.";
-const UNSUPPORTED_GAP = "Part of the answer was left out because no item's text supports it.";
 /** A list block whose narrowing code could not read (ADR-0054): it shows nothing, never the whole list, and the reader is told. */
 const LIST_DROPPED_GAP = "A list was left out because its selection could not be read.";
 /** A selection that matched no member of a list some of whose members do not record the fact it selects by: no absence is proven. */
 const UNRECORDED_GAP = "Some list items do not record the fact used to select them.";
-/** The writer's one repair for a sentence resting on list rows or list ids alone. */
-const ROWS_REASON = "a sentence cites list rows or list ids but no evidence text: place a \"list\" block to show which items exist and members' title, dates, status and owner (whole, with \"where\" or with \"members\"); what no evidence text says belongs in \"not_found\"";
 /** The writer's one repair for a list block whose selection code cannot read (ADR-0054): it is never widened. */
 const LIST_REASON = "a \"list\" block's selection could not be read: give the whole list with only \"list\", or narrow it with \"where\" ({\"field\": owner or status with a \"value\", or a date field with \"since\" and \"until\" as YYYY-MM-DD}) or with \"members\" (an array of item ids it shows), and no other keys";
 const FIT_GAP = "Some evidence could not fit in this response.";
@@ -461,11 +458,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (list !== null) return writerById.has(list) ? [list] : [];
         return shownRows.has(id) ? writerLists.filter(view => view.members.some(member => member.id === id)).map(view => view.id) : [];
       }))];
-      /** A sentence resting on list rows or list ids: it cites one the writer saw, and no evidence text it read. */
-      const restsOnRows = (sentence: AnswerSentence) => !sentence.evidence.some(short => textGiven.has(short)) &&
-        sentence.evidence.some(id => shownRows.has(id) || writerById.has(parseAgenticListIdV1(id) ?? "L0"));
-      // A sentence resting on rows or list ids takes the writer's one repair when a repair can still run; the repaired
-      // reply, or a first reply no repair can follow, is kept, and code leaves such a sentence out.
+      // A list block code cannot read takes the writer's one repair when a repair can still run; the repaired reply, or a
+      // first reply no repair can follow, is kept.
       const callsBefore = input.gate.stats().calls;
       /** The last reply parsed: kept when the repair's reply is unusable. */
       const last: { answer: Answer | null } = { answer: null };
@@ -477,9 +471,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         const since = earlier === undefined ? {} : { since: true };
         const parsed = parseBlocksAnswer(value, since);
         last.answer = parsed;
-        // A list block code cannot read, or a sentence resting on rows, takes the writer's one repair; a list block still
-        // unreadable after it is dropped, never widened.
-        const reasons = [...(parsed.placed.some(placed => placed.unreadable === true) ? [LIST_REASON] : []), ...(parsed.sentences.some(restsOnRows) ? [ROWS_REASON] : [])];
+        // A list block code cannot read takes the writer's one repair; one still unreadable after it is dropped, never widened.
+        const reasons = parsed.placed.some(placed => placed.unreadable === true) ? [LIST_REASON] : [];
         if (reasons.length > 0 && repairable()) throw new AgenticAskOutputErrorV1(reasons.join("; "));
         return parsed;
       };
@@ -610,8 +603,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         // no list say the list asked for is unconfirmed (ADR-0041). After a usable reply no research label adds content.
         if (reply === null && unlisted) writerGaps.push({ text: WHICH_GAP, partial: true });
         const sentences = reply?.sentences ?? [];
-        // A sentence the kept reply still rests on rows or list ids is left out, and the part says so, never what it claimed.
-        if (sentences.some(restsOnRows)) writerGaps.push({ text: UNSUPPORTED_GAP, partial: true });
         // ---- the lists the writer placed (ADR-0054): code fills each from the desk, where the writer put it ----
         // The whole list and a where read every member, past the rows the writer was shown; members by id only the rows it
         // was shown. A narrowing code could not read, or members that name no row it was shown, show nothing and the reader
@@ -653,6 +644,19 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (shown === undefined) return [];
           return [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])].filter(short => privateItem(byShort.get(short)!.item));
         };
+        /**
+         * The rows a sentence that cites no evidence text stands on (ADR-0054 W1, as widened): a row the writer saw, or every
+         * row of a list the writer saw that it cites, with the rows a block placing that list shows. A row states its
+         * member's title, dates, status and owner, so a sentence may state those, or a count across rows, from them. Each
+         * row is cited, so the sentence is as private as every row it rests on, and one resting on more than a statement's
+         * 40 citations is left out whole.
+         */
+        const rowFacts = (id: string): readonly string[] => {
+          if (shownRows.has(id)) return [id];
+          const list = parseAgenticListIdV1(id);
+          const shown = list === null ? undefined : writerById.get(list);
+          return shown === undefined ? [] : [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])];
+        };
         /** The sentence with code's note within a statement's 4 KiB: one too long to take the note whole, a wide row, is cut, never the note. */
         const fittedNote = (text: string, note: string) => {
           const whole = withNote(text, note);
@@ -660,14 +664,18 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           correct("model_text_truncated");
           return `${boundedBytes(text, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 - bytes(` ${note}`))} ${note}`;
         };
-        /** A writer's or `since` sentence as code keeps it: on the text the writer read (W1), then the rows it may carry, and the lists it uses; or none. */
+        /**
+         * A writer's or `since` sentence as code keeps it (W1): on the text the writer read, then the rows it may carry, and
+         * the lists it uses; with no text, on the rows or lists it cites (rowFacts); or, citing nothing it saw, none.
+         */
         const drafted = (sentence: Pick<AnswerSentence, "text" | "evidence">) => {
           const read = sentence.evidence.filter(short => textGiven.has(short));
-          if (read.length === 0) { correct("writer_uncited_sentence_dropped"); return undefined; }
+          const onRows = read.length > 0 ? [] : [...new Set(sentence.evidence.flatMap(rowFacts))];
+          if (read.length === 0 && onRows.length === 0) { correct("writer_uncited_sentence_dropped"); return undefined; }
           // An id that is no text, row or list the writer saw cites nothing.
           const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
           if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
-          return { text: sentence.text, shorts: [...read, ...sentence.evidence.flatMap(rowsOf)], read, uses: listsCitedBy(sentence.evidence) };
+          return { text: sentence.text, shorts: read.length > 0 ? [...read, ...sentence.evidence.flatMap(rowsOf)] : onRows, read, uses: listsCitedBy(sentence.evidence) };
         };
         /**
          * An item as code checks it against the evidence text it stands on (ADR-0051): a quote that is not word for word in
@@ -676,9 +684,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
          */
         const verified = (sentence: AnswerSentence): AnswerSentence => {
           const item = sentence.item;
-          const read = sentence.evidence.flatMap(short => textGiven.has(short) ? [byShort.get(short)!] : []);
+          const text = sentence.evidence.flatMap(short => textGiven.has(short) ? [byShort.get(short)!] : []);
+          // A sentence on rows alone is checked against the rows it rests on; a quote needs text, so one on rows reads as text.
+          const read = text.length > 0 ? text : sentence.evidence.flatMap(rowFacts).map(short => byShort.get(short)!);
           if (read.length === 0) return sentence;
-          if (item.kind === "quote" && !quoteIsWordForWordV2(item.text, read.flatMap(entry => [agenticEvidenceLabelV1(entry.item, timeZone), entry.item.text ?? ""]))) {
+          if (item.kind === "quote" && (text.length === 0 || !quoteIsWordForWordV2(item.text, read.flatMap(entry => [agenticEvidenceLabelV1(entry.item, timeZone), entry.item.text ?? ""])))) {
             correct("writer_quote_unquoted");
             return { ...sentence, text: attributed(item.from, item.text), item: textItem(item) };
           }

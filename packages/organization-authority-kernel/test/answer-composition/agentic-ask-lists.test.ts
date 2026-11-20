@@ -57,12 +57,8 @@ const EMPTY = use();
 const useL1 = use({ id: "L1" });
 const cite = (text: string, count: number, shared = false, from = 0) => ({ text, citation_indexes: Array.from({ length: count }, (_, index) => from + index), private: !shared });
 
-/** What notice records when the writer ran and was not shown one list research read (ADR-0054). */
-const ROWS_REASON = 'a sentence cites list rows or list ids but no evidence text: place a "list" block to show which items exist and members\' title, dates, status and owner (whole, with "where" or with "members"); what no evidence text says belongs in "not_found"';
-const UNSUPPORTED = "Part of the answer was left out because no item's text supports it.";
 /** With no usable writer reply, code states the plan's which_items lists and says so (ADR-0041, kept by ADR-0054). */
 const FALLBACK = "I found these items, but could not write the rest of the answer.";
-const RECORDS = "I found these records, but could not write a verified summary.";
 const MISSING = "I couldn't find this in the sources you can access.";
 const STOPPED = "Research stopped before it finished, so relevant context may be missing.";
 const COVERAGE = "Some source coverage was incomplete, so relevant context may be missing.";
@@ -136,7 +132,6 @@ async function run(row: Row) {
     .toEqual({ outcome: row.out, status: row.status ?? row.out, gap: row.gap, notice: row.notice, rejected: (row.rejected ?? []).map(text => expect.stringContaining(text)) });
   if (row.says !== undefined) expect(part.statements.map((value: any, index: number) => typeof row.says![index] === "object" && row.says![index] !== null && "text" in row.says![index] ? value : value.text)).toEqual(row.says);
   if (row.stop !== undefined) expect(research.stop.reason).toBe(row.stop);
-  if (row.repaired) expect(ran.writer[1]!.validation_error).toContain(ROWS_REASON);
   if (row.citations !== undefined) expect(response.citations).toHaveLength(row.citations);
   if (row.listed !== undefined) expect(h.port.list).toHaveBeenCalledTimes(row.listed);
   if (row.wl !== undefined) expect(ran.writer[0]!.lists[0]).toMatchObject(row.wl);
@@ -439,10 +434,11 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
         listed(id, { kind, occurred_at: "2026-10-04", label: "THERM DVT sync (2026-10-04)", ...(line === undefined ? {} : { list_label: `${line} (THERM DVT sync, 2026-10-04)` }), ...(kind === "action" ? { attributes: { owner: "Dana Lee" } } : {}) }))),
       steps: [read([{ tool: "list", args: { source: "meetings", since: "2026-10-04", until: "2026-10-04" } }]), fin(WI, "L1")], w: [useL1], out: "answered",
       says: [cite("4 items from meetings dated on October 4, 2026: THERM DVT sync (2026-10-04) (1 meeting); Keep the DVT gate on hold (THERM DVT sync, 2026-10-04) (1 decision); Send fixture drawings to vendor (THERM DVT sync, 2026-10-04) (1 action, owner Dana Lee); Accuracy fails at 42 °C (THERM DVT sync, 2026-10-04) (1 rationale).", 4, true)] },
-    ...[say(FOUR, ids(1, 4)), useL1].map((repair): Row => ({
-      id: "CF5a", name: `sends a sentence naming 4 of the 8 pages by their rows back once; ${repair !== useL1 ? "repeated, nothing of it survives and the fallback states all 8" : "dropped, the list the repair places alone is answered"}`, ...O4,
-      steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(FOUR, ids(1, 4)), repair], repaired: true,
-      ...(repair !== useL1 ? { out: "partial", gap: FALLBACK, says: [cite(FULL8, 8)], check: ({ writer }: Run) => expect(writer[1]!.rejected_response).toContain("The pages are") } : { out: "answered", says: [FULL8] }),
+    // A row states its member's title, dates, status and owner: a sentence naming members on their rows stands on them.
+    ...[[], [{ id: "L1" }]].map((lists): Row => ({
+      id: "CF5a", name: `keeps a sentence naming 4 of the 8 pages on their rows, citing those rows${lists.length === 0 ? "" : ", beside the list the writer places"}`, ...O4,
+      steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say(FOUR, ids(1, 4), lists)], out: "answered",
+      says: lists.length === 0 ? [cite(FOUR, 4)] : [FOUR, FULL8],
     })),
     { id: "CF9a", name: "refuses a which_items finish on opened sections alone once, then releases the sentence as written, adding no page selection (ADR-0054)", ...O4,
       steps: [...READ4, fin(WI, ...SECTIONS), fin(WI, "L1", ...SECTIONS)], w: [say(FOUR, SECTIONS)], rejected: [`${UNLISTED} (L1). `], out: "answered", says: [FOUR], wl: { id: "L1", count: 8, checked: 4 } },
@@ -457,18 +453,18 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       rejected: [`${UNLISTED} (L1). `], out: "answered", says: ["The tickets created on October 4 are THERM-1, THERM-2, THERM-3 and THERM-4."], wl: { count: 12, checked: 4, complete: true } },
     { id: "CF8a", name: "refuses a content finish on the list with what each kind of support is, then answers from the page research opened", ...DVT, desk: () => oct4(),
       steps: [read([OCT4_LIST], C), fin(C, "L1"), read(opens(["E3"]), C), fin(C, "E9")], w: [say(HOLD, ["E9"])], rejected: [`need N1 "whether DVT is on hold" ${HINT}`], out: "answered", says: [HOLD] },
-    ...([[[claim(["E3"], [{ id: "L1" }]), nothing("whether DVT is on hold")], "Not found: whether DVT is on hold."], [[claim(["E3"], [{ id: "L1" }]), claim(["E3"], [{ id: "L1" }])], UNSUPPORTED]] as const)
-      .map(([w, gap]): Row => ({
-        id: "CF8b (misdeclared)", name: `never answers what a listed page says from its row: a claim on the row goes back once and ends "${gap}"`, ...DVT, desk: () => oct4(),
-        steps: [read([OCT4_LIST]), fin(WI, "L1")], w, repaired: true, gap,
-        // A repair that says only what it did not find is answered as not found; one that repeats the claim keeps the list it placed.
-        ...(gap === UNSUPPORTED ? { out: "partial", says: [FULL8] } : { out: "not_found", says: [] }),
+    // Code cannot tell a row fact from a claim about what the page says: a sentence on a row is the writer's, kept with
+    // its row cited and its visibility; the prompt says what a row can support (ADR-0054 W1, as widened).
+    ...([[claim(["E3"], [{ id: "L1" }]), undefined], [nothing("whether DVT is on hold"), "Not found: whether DVT is on hold."]] as const)
+      .map(([reply, gap]): Row => ({
+        id: "CF8b (misdeclared)", name: gap === undefined ? "keeps a sentence the writer rests on a listed page's row, with the list it places" : "answers as not found when the writer says only what it did not find", ...DVT, desk: () => oct4(),
+        steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [reply], gap,
+        ...(gap === undefined ? { out: "answered", says: ["Yes, DVT is on hold, and EVT passed.", FULL8] } : { out: "not_found", says: [] }),
       })),
-    ...([[claim(["E3"]), `${MISSING} ${UNSUPPORTED}`], [{ ...claim(["E3"]), not_found: ["whether DVT is on hold"] }, `Not found: whether DVT is on hold. ${UNSUPPORTED}`]] as const).map(([reply, gap]): Row => ({
-      id: "X28", name: `leaves out a repeated claim on a row after a content need was not found: the part names nothing, partial (${reply.not_found.length ? "with" : "without"} the writer's not_found)`, ...DVT, desk: () => oct4(),
-      steps: [read([OCT4_LIST], C), read(opens(["E3"]), C), none(C)], w: [reply, reply], repaired: true, stop: "finished", out: "partial", says: [],
-      // With nothing of the reply left, the fallback shows the record research read in full (ADR-0054).
-      ...(reply.not_found.length ? { status: "not_found", citations: 0, gap } : { status: "records_only", gap: RECORDS }),
+    ...([[claim(["E3"]), undefined], [{ ...claim(["E3"]), not_found: ["whether DVT is on hold"] }, "Not found: whether DVT is on hold."]] as const).map(([reply, gap]): Row => ({
+      id: "X28", name: `keeps the writer's sentence on a row after a content need was not found (${reply.not_found.length ? "with" : "without"} the writer's not_found)`, ...DVT, desk: () => oct4(),
+      steps: [read([OCT4_LIST], C), read(opens(["E3"]), C), none(C)], w: [reply], stop: "finished", says: ["Yes, DVT is on hold, and EVT passed."], citations: 1,
+      ...(gap === undefined ? { out: "answered" } : { out: "partial", status: "partial", gap }),
     })),
     { id: "CF8c (misdeclared)", name: "keeps the section's answer as written for a question declared which_items: the kind adds nothing (ADR-0054)", q: "What does the gate review page say about DVT?", need: "what the gate review page says about DVT", desk: () => oct4(), steps: [read([OCT4_LIST], WI), read(opens(["E3"]), WI), fin(WI, "L1", "E9")], w: [say(HOLD, ["E9"])], out: "answered", says: [HOLD] },
     { id: "CF8d (misdeclared)", name: "refuses a which_say finish until a page is read, then keeps the sentence as written", ...DVT, desk: () => oct4(), steps: [read([OCT4_LIST], WS), fin(WS, "L1"), read(opens(["E3"]), WS), fin(WS, "L1", "E9")], w: [say(HOLD, ["E9"])],
@@ -499,9 +495,9 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     })),
     { id: "R4b", name: "states the four pages explicitly selected by id without expanding to the inventory", ...R4, w: [use({ id: "L1", members: ids(1, 4) })], out: "answered", citations: 4,
       says: [`4 of the 8 Confluence pages created on October 4, 2026: ${[pageFacts(OCT4_TITLES[0]!, "October 5, 2026"), ...OCT4_TITLES.slice(1, 4).map(title => pageFacts(title))].join("; ")}.`] },
-    { id: "R6, R10", name: "leaves out a sentence citing only the list's id after one repair, and says a claim was left out", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")],
-      w: [say("All eight are current pages.", ["L1"], [{ id: "L1" }]), say("All eight are current pages.", ["L1"], [{ id: "L1" }])], repaired: true, out: "partial", says: [FULL8], gap: UNSUPPORTED },
-    { id: "R6", name: "answers with the list alone once the writer drops a list-id sentence after its repair", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say("All eight are current pages.", ["L1"]), useL1], repaired: true, out: "answered", says: [FULL8] },
+    { id: "R6, R10", name: "keeps a sentence citing only the list's id beside the list it places, citing every row the writer saw", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")],
+      w: [say("All eight are current pages.", ["L1"], [{ id: "L1" }])], out: "answered", says: ["All eight are current pages.", FULL8], citations: 8 },
+    { id: "R6", name: "answers with a sentence on the list's id alone, citing its 8 rows", ...O4, steps: [read([OCT4_LIST]), fin(WI, "L1")], w: [say("All eight are current pages.", ["L1"])], out: "answered", says: [cite("All eight are current pages.", 8)] },
     { id: "R7 (R2a)", name: "answers which tickets mention BUG-412 once all 8 were opened, the list's id beside the two: no note", q: "Which Jira tickets created on October 4, 2026 mention BUG-412?", need: "tickets created on 2026-10-04 that mention BUG-412",
       desk: () => jira(tickets(1, 8), { body: bodyText }), steps: [read([TICKETS_LIST]), read(opens(ids(1, 4))), read(opens(ids(5, 4))), fin(WS, "L1", "E3", "E5")], w: [say("THERM-3 and THERM-5 mention BUG-412.", ["L1", "E3", "E5"])],
       out: "answered", says: ["THERM-3 and THERM-5 mention BUG-412."], wl: { id: "L1", count: 8, checked: 8 } },
@@ -576,12 +572,10 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "X15", name: "keeps both unqualified once all 8 were opened, stating no list the writer did not place (Known limit)", ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), true), bothOpen(opens(ids(5, 4)), true), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E12"], WS])], w: [sayAll([[TRACE, ["E12"]], [FOUR, SECTIONS]])],
       out: "answered", says: [TRACE, FOUR] },
-    ...[sayAll([[TWO, ["L1", "E11", "E12"]]]), sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]])].map((repair): Row => ({
-      id: "X15 (W4, W1)", name: `keeps a sentence on a which_say list's members, stating no list the writer did not place, and ${repair.blocks.length === 1 ? "accepts the repair that drops a rows sentence" : "leaves out a repeated rows sentence"}`, ...X15,
+    { id: "X15 (W4, W1)", name: "keeps a sentence on a which_say list's members and a sentence on two rows' dates, stating no list the writer did not place", ...X15,
       steps: [bothOpen([OCT4_LIST], false), bothOpen(opens(ids(1, 4)), false), bothOpen(opens(ids(5, 4)), false), step([FINISH], ["found", ["L1"], WI], ["found", ["L1", "E11", "E12"], WS])],
-      w: [sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]]), repair], repaired: true, wl: { id: "L1", count: 8, checked: 8 },
-      says: [TWO], ...(repair.blocks.length === 1 ? { out: "answered" } : { out: "partial", gap: UNSUPPORTED }),
-    })),
+      w: [sayAll([[TWO, ["L1", "E11", "E12"]], ["The PRD and the verification plan were also created that day.", ["E5", "E6"]]])], wl: { id: "L1", count: 8, checked: 8 },
+      says: [TWO, "The PRD and the verification plan were also created that day."], out: "answered" },
     { id: "X17a", name: "states a where date range with its condition, and keeps the writer's sentence beside a statement that names some members (Known limit)", ...WEEK,
       w: [say("THERM-43 follow-up and THERM-47 follow-up are due this week.", ["E3", "E7"], [due("2026-10-18", "2026-10-24")])], out: "answered", says: ["THERM-43 follow-up and THERM-47 follow-up are due this week.", THIS_WEEK],
       check: ({ writer }) => expect(writer[0]).toMatchObject({ today: "2026-10-18" }) },
@@ -591,7 +585,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
     { id: "X17d", name: "selects the overdue by an open range through yesterday", ...WEEK, w: [use(due(undefined, "2026-10-17"))], out: "answered", says: [`1 ${LEAD12} is due through October 17, 2026: THERM-41 follow-up.`] },
     ...([["Asia/Tokyo", `3 of the 8 Confluence pages created on October 4, 2026 were updated since October 11, 2026: ${OCT4_TITLES.slice(0, 3).join("; ")}.`], ["America/Los_Angeles", `1 of the 8 Confluence pages created on October 4, 2026 was updated since October 11, 2026: ${OCT4_TITLES[2]}.`]] as const)
       .map(([zone, text]): Row => ({ id: "X18a", name: `selects pages by an updated date on a list read by creation date, each day ${zone}'s`, ...x18(zone), w: [use({ id: "L1", where: { field: "updated", since: "2026-10-11" } })], out: "answered", says: [text] })),
-    { id: "X18b", name: "sends a sentence on a row's date alone back once, the reason naming where; repeated, nothing survives and the fallback states the list, partial", ...x18("UTC"), w: [say("The PRD was updated after October 10.", ["E5"]), say("The PRD was updated after October 10.", ["E5"])], repaired: true, out: "partial", says: [FULL8], gap: FALLBACK },
+    { id: "X18b", name: "keeps a sentence on a row's date, citing that row", ...x18("UTC"), w: [say("The PRD was updated after October 10.", ["E5"])], out: "answered", says: [cite("The PRD was updated after October 10.", 1)] },
     { id: "X19a", name: "answers which Jira tickets mention BUG-412 from search as content: no list, no note", ...X19, steps: [read([SEARCH_412], C), fin(C, ...ids(1, 9))], w: [say(HIT_NAMES, ids(1, 9))], out: "answered", says: [cite(HIT_NAMES, 9)] },
     { id: "X19b (misdeclared)", name: "declared which_say, it is refused until it cites a list, then its sentence kept as written (Known limit)", ...X19,
       steps: [read([SEARCH_412], WS), fin(WS, ...ids(1, 9)), read([ALL_TICKETS], WS, "open", ids(1, 9)), fin(WS, "L1", ...ids(1, 9))], w: [say(HIT_NAMES, ids(1, 9))], rejected: [`${UNLISTED} (from lists), or list them first`],
