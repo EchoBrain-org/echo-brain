@@ -61,6 +61,6 @@ test("takes a long natural-language question on two lines, as the product's ques
   assert.ok(question.length > 240 && new Set(question.toLowerCase().match(/[\p{L}\p{N}]+/gu)).size > 32);
   assert.deepEqual(caseProblems(copy), []);
   const over = JSON.parse(readFileSync(CASES_FILE, "utf8"));
-  over.cases.find((item) => item.group === "standalone").question = "x".repeat(4_001);
-  assert.match(caseProblems(over).join(), /Shorten the question to at most 4,000 characters/u);
+  over.cases.find((item) => item.group === "standalone").question = "What\u0007 changed?";
+  assert.match(caseProblems(over).join(), /Remove control characters from the question/u);
 });
