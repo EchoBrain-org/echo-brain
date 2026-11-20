@@ -8,6 +8,8 @@ import {
   buildReadableSearchGenerationV1,
   listReadableSearchGenerationRecordsV1,
   listReadableSearchGenerationV1,
+  READABLE_SEARCH_LIST_MAX_V1,
+  READABLE_SEARCH_RESPONSE_MAX_V1,
   readReadableSearchGenerationAtomsV1,
   READABLE_SEARCH_ADMISSION_BUDGET_V1,
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID_V1,
@@ -821,6 +823,21 @@ describe("immutable readable-search generation v1", () => {
       // An exclusion never admits: unknown policies and unsorted records are refused.
       expect(() => search({ record_sha256s: [B0.record_sha256, many[0]!.record_sha256].sort().reverse(), policy_ids: [] })).toThrow("record narrowing");
       expect(() => search({ record_sha256s: [], policy_ids: ["team" as never] })).toThrow("known policies");
+    });
+
+    it("returns up to twenty-five search hits and lists past fifty, saying when more exist", () => {
+      const directory = tempDirectory();
+      const many = Array.from({ length: 60 }, (_, order) => inRecord("wide", 1, order, `launch item ${order}`));
+      const active = warmed(directory, many);
+      const searched = searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: READABLE_SEARCH_RESPONSE_MAX_V1 });
+      expect(searched.items).toHaveLength(25);
+      expect(searched.truncated).toBe(true);
+      expect(() => searchReadableSearchGenerationV1({ ...active, reader: REVIEWER, query: "launch", limit: 26 })).toThrow("one through 25");
+      const listed = listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 60 });
+      expect(listed.items).toHaveLength(60);
+      expect(listed.truncated).toBe(false);
+      expect(listReadableSearchGenerationV1({ ...active, reader: REVIEWER, limit: 59 }).truncated).toBe(true);
+      expect(READABLE_SEARCH_LIST_MAX_V1).toBeGreaterThan(50);
     });
 
     it("recomputes BM25 statistics over the narrowed records, as a project scope does", () => {

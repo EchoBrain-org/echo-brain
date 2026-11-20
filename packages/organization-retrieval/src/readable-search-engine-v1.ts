@@ -70,6 +70,16 @@ export const READABLE_SEARCH_ADMISSION_BUDGET_V1 = Object.freeze({
 export type ReadableSearchAdmissionLimitV1 = keyof typeof READABLE_SEARCH_ADMISSION_BUDGET_V1;
 
 /**
+ * The most hits one search returns: a page the research model can read in one step. More matches set `truncated`.
+ */
+export const READABLE_SEARCH_RESPONSE_MAX_V1 = 25;
+/**
+ * The most atoms one list returns: enough for a whole approved record in one open. More set `truncated`; the Authority
+ * sizes its own inventory pages below this.
+ */
+export const READABLE_SEARCH_LIST_MAX_V1 = 1_000;
+
+/**
  * The limit a refused build exceeded, or undefined for any other failure. A
  * refused build touches no files: the published generation stays in place.
  */
@@ -1135,7 +1145,7 @@ export interface SearchReadableSearchGenerationV1Input {
   readonly query: string;
   /** Authority-authorized project scope. It narrows association only. */
   readonly project_id?: string;
-  /** Defaults to 10 and is deliberately bounded to the V1 response ceiling. */
+  /** Defaults to 10, at most `READABLE_SEARCH_RESPONSE_MAX_V1`. */
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before relevance slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
@@ -1165,7 +1175,7 @@ export interface ListReadableSearchGenerationV1Input {
   readonly active_generation: ReadableSearchActiveGenerationV1;
   readonly reader: ReadableSearchReaderV1;
   readonly project_id?: string;
-  /** Deliberately larger than search, but bounded for an evidence inventory. */
+  /** Defaults to 50, at most `READABLE_SEARCH_LIST_MAX_V1`. */
   readonly limit?: number;
   /** Desk-only kind narrowing, applied before inventory slicing. */
   readonly kinds?: readonly ReadableSearchAtomV1["item_kind"][];
@@ -2039,6 +2049,16 @@ function readAndValidateReadableSearchSegment(
   }
 }
 
+/** A search's hit count: 10 by default, at most the response maximum. */
+function searchLimit(value: number | undefined): number {
+  const limit = value ?? 10;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > READABLE_SEARCH_RESPONSE_MAX_V1)
+    throw new Error(
+      `readable-search engine limit must be a safe integer from one through ${READABLE_SEARCH_RESPONSE_MAX_V1}`,
+    );
+  return limit;
+}
+
 /**
  * Reads one active, immutable readable-search generation. It does not open Authority,
  * record, or a migration ledger, and it never creates or modifies state.
@@ -2056,11 +2076,7 @@ function validateAndWarmReadableSearchGenerationV1(
   validDigest(active.retrieval_contract_sha256, "active retrieval contract");
   assertExactHead(active.exact_head, "active exact_head");
   assertReader(input.reader);
-  const limit = input.limit ?? 10;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
-    throw new Error(
-      "readable-search engine limit must be a safe integer from one through ten",
-    );
+  const limit = searchLimit(input.limit);
   const terms = analyzeReadableSearchQuery(input.query);
   const generations = join(
     input.state_directory,
@@ -2205,11 +2221,7 @@ export function searchReadableSearchGenerationV1(
   assertReader(input.reader);
   const records = readerRecordNarrowing(input.record_sha256s);
   const excluded = readerExclusion(input.exclude);
-  const limit = input.limit ?? 10;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
-    throw new Error(
-      "readable-search engine limit must be a safe integer from one through ten",
-    );
+  const limit = searchLimit(input.limit);
   const handle = activeGenerationHandle(input.active_generation);
   const terms = analyzeReadableSearchQuery(input.query);
   const admitted = scopedSegments(
@@ -2246,8 +2258,8 @@ export function listReadableSearchGenerationV1(
   const records = readerRecordNarrowing(input.record_sha256s);
   const excluded = readerExclusion(input.exclude);
   const limit = input.limit ?? 50;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50)
-    throw new Error("readable-search inventory limit must be a safe integer from one through fifty");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > READABLE_SEARCH_LIST_MAX_V1)
+    throw new Error(`readable-search inventory limit must be a safe integer from one through ${READABLE_SEARCH_LIST_MAX_V1}`);
   const handle = activeGenerationHandle(input.active_generation);
   const admitted = scopedSegments(
     handle.segments,
