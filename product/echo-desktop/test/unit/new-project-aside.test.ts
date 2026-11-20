@@ -215,4 +215,17 @@ describe('New project before and after Create', () => {
     await store.checkFile(sheet.files[0]!.id); await flush();
     expect(uploads()).toHaveLength(4); expect(store.getState().sheet).toBeNull(); expect(store.getState().toast).toBe('Fresh is ready · 4 files');
   });
+
+  it('takes a whole folder of files, each saved on its own: no count of its own', async () => {
+    const store = await startWithFiles();
+    dropFile.mockImplementation(async (file: File) => ok({ handle: `h-${file.name}`, name: file.name }));
+    await store.dropFiles(Array.from({ length: 30 }, (_, at) => new File(['a'], `Spec ${at}.md`)));
+    await store.chooseFiles();
+    const sheet = store.getState().sheet;
+    if (sheet?.kind !== 'new-project') throw new Error('Missing New project sheet');
+    expect(sheet.files).toHaveLength(36);
+    expect(sheet.notice).toBeUndefined();
+    const shown = await newProjectView(store);
+    expect(byTestId(shown, 'new-project-add-files')[0]!.props.disabled).toBeFalsy();
+  });
 });

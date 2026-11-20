@@ -11,7 +11,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_TIMELINE_TURNS, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -2766,7 +2766,6 @@ export function confirmMemberChange(): void {
 
 // ---- new project -----------------------------------------------------------------
 
-const TOO_MANY_FILES = 'Add up to 20 files.';
 /** Said when New project closes after Create with files that may not have been saved, people who may not have been added, or both. */
 const UNSAVED_FILES = 'Some files may not have been saved.';
 const UNADDED_PEOPLE = 'Some people may not have been added.';
@@ -3116,7 +3115,6 @@ export async function chooseFiles(): Promise<void> {
 export async function dropFiles(files: readonly File[]): Promise<void> {
   const sheet = newProjectSheet();
   if (!sheet || files.length === 0) return;
-  if (sheet.files.length + files.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, sheet.seq); return; }
   const chosen: { name: string; handle?: FileHandle; failure?: Failure }[] = [];
   for (const file of files) {
     const result = await dropFile(file);
@@ -3129,7 +3127,6 @@ export async function dropFiles(files: readonly File[]): Promise<void> {
 function addFiles(mine: number, chosen: readonly { name: string; handle?: FileHandle; failure?: Failure }[]): void {
   const sheet = newProjectSheet(mine);
   if (!sheet || chosen.length === 0) return;
-  if (sheet.files.length + chosen.length > MAX_PROJECT_FILES) { setNewProject({ notice: TOO_MANY_FILES }, mine); return; }
   const added: ProjectFile[] = chosen.map(file => ({
     id: ++rowIds, name: file.name, requestId: crypto.randomUUID(), kept: false,
     ...(file.handle ? { handle: file.handle, status: 'waiting' as const } : { status: 'failed' as const, failure: file.failure }),

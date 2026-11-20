@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_TIMEOUT_MS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS, MAX_PROJECT_FILES,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_TIMEOUT_MS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS,
   noticeOf, paramsLimit, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
@@ -283,7 +283,6 @@ async function mainMethod<M extends keyof MainMethods>(method: M, params: MainMe
         properties: ['openFile', 'multiSelections'], filters: DOCUMENT_FILTERS,
       });
       if (chosen.canceled) return { ok: true, value: { files: [], refused: [] } };
-      if (chosen.filePaths.length > MAX_PROJECT_FILES) return refused('too_many_files');
       const files: FileHandle[] = [];
       const names: string[] = [];
       for (const path of chosen.filePaths) {

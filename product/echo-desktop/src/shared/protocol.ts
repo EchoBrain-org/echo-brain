@@ -508,8 +508,6 @@ export type Audience =
  * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
  */
 export const MAX_CAPTURE_PROJECTS = 20;
-/** New project takes up to 20 files. */
-export const MAX_PROJECT_FILES = 20;
 /**
  * Copy answer takes one whole answer, as a saved turn holds one: up to the
  * bound of a timeline put, in characters. It bounds what the page may hand
