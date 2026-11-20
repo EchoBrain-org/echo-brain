@@ -50,19 +50,20 @@ export const PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1 = 300_000;
 /** Transport: a receipt's share of its answer event's byte bound. */
 export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 /**
- * Canonical JSON bytes of any one event, the answer event included: above a whole answer (256 KiB) and its receipt
- * (64 KiB), with 64 KiB for the event's own keys, so a valid answer always fits its event (384 KiB).
+ * Transport: canonical JSON bytes of any one event, the answer event included: above a whole answer
+ * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) and its receipt, with 64 KiB for the event's own keys, so a valid answer always
+ * fits its event.
  */
 const PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 = PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 + PERSON_ASK_RECEIPT_MAX_BYTES_V1 + 64 * 1024;
-/** Characters of one stream line the decoder buffers before it fails closed: above the largest event and its `data: ` framing. */
+/** Transport: characters of one stream line the decoder buffers before it fails closed, above the largest event and its `data: ` framing. */
 export const PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1 = PERSON_ASK_PROGRESS_EVENT_MAX_BYTES_V1 + 128 * 1024;
 /**
- * UTF-8 bytes of one whole stream; a client stops reading and fails closed
- * beyond it. The bounds above keep a run well under it (about 810 KB at
- * worst: the answer event plus every step event), and the desktop's CLI
- * output cap sits above it.
+ * Transport and host: UTF-8 bytes of one whole stream, what the clients' buffers hold (the desktop keeps a run's whole
+ * CLI output, MAX_OUTPUT_BYTES, twice this). Research has no step count, so this is the one bound on how much a run may
+ * stream: sixteen answer events' worth, room for thousands of steps beside the answer. A client stops reading and
+ * fails closed beyond it, saying so.
  */
-export const PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 = 1536 * 1024;
+export const PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 = 16 * PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1;
 
 /**
  * What ECHO is doing now, from what it actually ran: `searching` while a

@@ -1307,8 +1307,8 @@ describe("Ask renderer: answer layout v2 (ADR-0051)", () => {
       { block: "answer", sentences: [{ text: `${"𝔹".repeat(690)} 0.`, evidence: ["E1", "E2", "E3", "E4"] }] },
       { block: "table", columns, rows: Array.from({ length: rows }, (_, index) => ({ cells: columns.map(column => `${column} ${"𝔸".repeat(70)} ${index + 1}`), evidence: [1, 2, 3, 4].map(n => `E${4 * (index + 1) + n}`) })) },
     );
-    // A production context window, so the writer is shown all forty records its rows cite.
-    const on = await alone({ bundle: research, replies: [big], context_tokens: 131_072 }).render("What applies?");
+    // The model's own context window, so the writer is shown every record its rows cite.
+    const on = await alone({ bundle: research, replies: [big], context_tokens: 1_000_000 }).render("What applies?");
     const released = part(on);
     expect(released).not.toHaveProperty("gap_details");
     expect(released).toMatchObject({ status: "partial", gap: "Some evidence could not fit in this response." });

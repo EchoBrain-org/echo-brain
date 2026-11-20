@@ -54,10 +54,12 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
 }
 
 /**
- * Canonical JSON bytes of one whole answer: room for a long multi-part answer. Every bound above it in the chain (the
- * Ask progress answer event and stream, the desktop's CLI output, timeline put and copy) is sized from this one.
+ * Transport: canonical JSON bytes of one whole answer, the one bound on what an answer carries. Sized above the model's
+ * own maximum reply (128,000 tokens, at about four bytes a token, about 512 KB) with its citations, so no answer the
+ * writer can write is refused for size. Every bound above it in the chain (the Ask progress answer event, line and
+ * stream, the desktop's CLI output, timeline put and copy) is sized from this one.
  */
-export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 256 * 1024;
+export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 1024 * 1024;
 /** A released answer's fallback record: the evidence's own words, cut to a short quotation (evidence text in transit is `PERSON_EVIDENCE_TEXT_MAX_BYTES_V1`). */
 export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3 * 1024;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
