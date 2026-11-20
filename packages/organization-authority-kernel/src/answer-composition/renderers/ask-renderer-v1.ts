@@ -635,8 +635,6 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           const shown = list === null ? undefined : writerById.get(list);
           return shown === undefined ? [] : [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])];
         };
-        /** The sentence with code's note, whole: a statement has no length of its own. */
-        const fittedNote = (text: string, note: string) => withNote(text, note);
         /**
          * A writer's, table's or `since` sentence as code keeps it (W1): on the text the writer read, then every row it may
          * carry (rowFacts), and the lists it uses; with no text, on the rows or lists it cites; or, citing nothing it saw, none.
@@ -758,14 +756,12 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         }, naming.length + index, block));
 
         // List statements come first, then the writer's items (W6, W3). The answer (ADR-0051) reads what is kept answer first,
-        // then the lists code states with no usable reply, then the writer's blocks in order, each placed list at its block. It has no count of statements or citations of its own: only its
-        // byte bound, which cuts it from its end, and the 40 citations one statement may carry. A statement that would cite
-        // more, through the private rows its list id brings, is left out whole, never cut short of them, and the statements
-        // after it are kept.
+        // then the lists code states with no usable reply, then the writer's blocks in order, each placed list at its block.
+        // It has no count of statements or citations of its own: only its byte bound, which cuts it from its end. A
+        // statement keeps every citation its rows bring.
         const statementKeys = new Set<string>();
         const keptReads: Entry[] = [];
         const fitted: Laid[] = [];
-        const fittedKeys = new Set<string>();
         let dropped = false;
         for (const sentence of [...listStatements, ...placedStatements, ...writerSentences] as readonly Laid[]) {
           // Temporary model guardrail (ADR-0041): only exact text with the same cited objects and privacy is a repeat.
@@ -776,18 +772,15 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
             continue;
           }
-          const fresh = new Set(sentence.shorts.map(keyOf).filter(key => !fittedKeys.has(key)));
           statementKeys.add(statementKey);
-          for (const key of fresh) fittedKeys.add(key);
           fitted.push(sentence);
           keptReads.push(...(sentence.read ?? []).map(short => byShort.get(short)!));
         }
         const kept = new Set(fitted);
         // ---- an Ask again's since (ADR-0047): what is different now, read here so the lists it uses are known ----
-        // Each sentence stands on text the writer read (W1), as the writer's own sentences do, and repeats are dropped. A
-        // sentence citing more than one statement may (its lists' rows included) is left out alone, as a writer's sentence
-        // is; the rest stand. A list the writer gave whose every sentence was left out says nothing, never that nothing
-        // changed.
+        // Each sentence stands on text the writer read (W1), as the writer's own sentences do, and repeats are dropped; it
+        // keeps every citation its lists' rows bring. A list the writer gave whose every sentence was left out says nothing,
+        // never that nothing changed.
         const sinceDrafts = (given: NonNullable<Answer["since"]>) => {
           const keys = new Set<string>();
           const drafts = given.flatMap(sentence => {
@@ -845,7 +838,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           if (note === undefined) return sentence;
           const shape: DraftShape = sentence.shape.kind !== "list" ? sentence.shape
             : { ...sentence.shape, caption: `${sentence.shape.caption} ${note}` };
-          return { ...sentence, text: fittedNote(sentence.text, note), shape };
+          return { ...sentence, text: withNote(sentence.text, note), shape };
         });
         const statements: Statement[] = order.map(sentence => statementOf(sentence.text, sentence.shorts));
         // A list statement cites rows for which items exist; only the text the kept sentences stand on can be limited coverage.
