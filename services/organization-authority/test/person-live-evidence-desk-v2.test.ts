@@ -183,6 +183,27 @@ describe('thin live ticket dispatcher', () => {
     vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('unavailable', 'Fixture local failure'));
     await expect(desk.search({ query: 'launch' })).rejects.toMatchObject({ message: 'Fixture local failure' });
   });
+  it('answers a search across sources from the others when one source\'s query rule refuses its words, and says which and why', async () => {
+    const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.page);
+    vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('invalid_request', 'Shorten the question or search query to at most 240 Unicode code points.'));
+    vi.mocked(f.page.search).mockRejectedValueOnce(new AuthorityOperationError('invalid_request', 'Fixture page query rule'));
+    const result = await desk.search({ query: 'launch', limit: 4 });
+    expect(result.items.map(item => item.id)).toEqual(['ticket-1', 'ticket-2', 'ticket-3']);
+    expect(result.notice).toBe('Meetings and documents could not be searched with these words, so these results leave them out: Shorten the question or search query to at most 240 Unicode code points. Live pages could not be searched with these words, so these results leave them out: Fixture page query rule');
+    // The same words would be refused again, so this is no availability notice.
+    expect(result.notice_kind).toBe('informational');
+    // A search of meetings alone refuses as asked, and one every source refuses keeps the refusal.
+    vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('invalid_request', 'Fixture rule'));
+    await expect(desk.search({ query: 'launch', source: 'meeting' })).rejects.toMatchObject({ code: 'invalid_request' });
+    vi.mocked(f.base.search).mockRejectedValueOnce(new AuthorityOperationError('invalid_request', 'Fixture rule'));
+    await expect(deskWith(f.base).search({ query: 'launch' })).rejects.toMatchObject({ code: 'invalid_request', message: 'Fixture rule' });
+  });
+  it('asks each live source for up to twenty-five hits by default', async () => {
+    const f = mixedFixture();
+    await deskWith(f.base, f.ticket, f.page).search({ query: 'launch' });
+    expect(f.ticket.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+    expect(f.page.search).toHaveBeenCalledWith(expect.objectContaining({ limit: 25 }));
+  });
   it('observes actual list and open calls once without changing provider routing or results', async () => {
     const f = mixedFixture(); const desk = deskWith(f.base, f.ticket, f.page);
     const events: CoreRuntimeObservationV1[] = [];
