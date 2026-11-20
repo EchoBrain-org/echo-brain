@@ -1745,8 +1745,8 @@ CREATE TABLE authority_person_updates_v2 (
   audience_project_id TEXT,
   -- Canonical JSON arrays are checked by the admission adapter. These snapshots
   -- bind immutable request custody; current associations live in their own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK (unixepoch(received_at) IS NOT NULL),
   PRIMARY KEY (organization_id, membership_id, request_id),
@@ -1769,7 +1769,7 @@ CREATE TABLE authority_person_updates_v2 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 3 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   ),
   FOREIGN KEY (membership_id, organization_id, principal_id, membership_type)
     REFERENCES authority_memberships(membership_id, organization_id, principal_id, membership_type),
@@ -2070,8 +2070,8 @@ CREATE TABLE authority_person_documents_v1 (
   audience_kind TEXT NOT NULL CHECK(audience_kind IN ('only_me','team','project','projects')),
   audience_project_id TEXT,
   -- Immutable initial association; the current association has its own table.
-  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array' AND json_array_length(submitted_association_project_ids_json) BETWEEN 0 AND 20),
-  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array' AND json_array_length(audience_project_ids_json) BETWEEN 0 AND 20),
+  submitted_association_project_ids_json TEXT NOT NULL CHECK(json_valid(submitted_association_project_ids_json) AND json_type(submitted_association_project_ids_json) = 'array'),
+  audience_project_ids_json TEXT NOT NULL CHECK(json_valid(audience_project_ids_json) AND json_type(audience_project_ids_json) = 'array'),
   project_id TEXT,
   received_at TEXT NOT NULL CHECK(unixepoch(received_at) IS NOT NULL),
   UNIQUE(organization_id, membership_id, request_id),
@@ -2098,7 +2098,7 @@ CREATE TABLE authority_person_documents_v1 (
       AND json_array_length(audience_project_ids_json) = 1
       AND json_extract(audience_project_ids_json, '$[0]') = audience_project_id) OR
     (request_version = 2 AND audience_kind = 'projects' AND audience_project_id IS NULL AND project_id IS NULL
-      AND json_array_length(audience_project_ids_json) BETWEEN 1 AND 20)
+      AND json_array_length(audience_project_ids_json) >= 1)
   )
 ) STRICT;
 CREATE INDEX authority_person_documents_feed_v1 ON authority_person_documents_v1(organization_id, received_at DESC, document_id);

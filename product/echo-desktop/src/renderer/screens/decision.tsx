@@ -1,10 +1,10 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { MAX_CAPTURE_PROJECTS, type ProjectSummary } from '../../shared/protocol.js';
+import type { ProjectSummary } from '../../shared/protocol.js';
 import { dateTime } from '../format.js';
 import { dueOnWords } from '../needs.js';
 import {
-  decide, destinationFrom, keptItems, loadProjects, lockDecisionRoute, lockDecisionRoutes, ONLY_ME, retryImpact, routedProjects,
+  decide, destinationFrom, keptItems, loadProjects, lockDecisionRoute, lockDecisionRoutes, ONLY_ME, retryImpact,
   setDecisionOwner, setDecisionRoute, setDecisionRoutes, tickDecisionRoute, tickDecisionRoutes, type DecisionState, type Destination,
   type State,
 } from '../store.js';
@@ -157,11 +157,11 @@ function short(text: string): string {
 
 /**
  * Where an item goes, and who reads it there (ADR-0049, as on Capture): a place button, whose menu holds places only (your
- * projects, several, up to 20 named by the whole meeting; No project; Don't keep), then the Only me lock beside it, and
+ * projects, as many as you like; No project; Don't keep), then the Only me lock beside it, and
  * who can read it in words. With no project the lock stays on and says why. Escape or a click elsewhere closes the menu.
  */
-function Where({ label, shown, lock, readers, readersId, named, projects, state, frozen, name, lockName, testid, lockTestid, onTick, onNoProject, onDrop, onLock }: {
-  label: string; shown: Shown; lock: LockShown | null; readers: string | null; readersId?: string; named: readonly string[]; projects: readonly ProjectSummary[];
+function Where({ label, shown, lock, readers, readersId, projects, state, frozen, name, lockName, testid, lockTestid, onTick, onNoProject, onDrop, onLock }: {
+  label: string; shown: Shown; lock: LockShown | null; readers: string | null; readersId?: string; projects: readonly ProjectSummary[];
   state: State; frozen: boolean; name: string; lockName: string; testid: string; lockTestid: string;
   onTick(projectId: string): void; onNoProject(): void; onDrop(): void; onLock(): void;
 }) {
@@ -190,7 +190,7 @@ function Where({ label, shown, lock, readers, readersId, named, projects, state,
         {open && (
           <div class="menu route-menu" role="group" aria-label={name} data-testid="route-menu">
             <div class="menu-label">Projects</div>
-            <ProjectPicker projects={projects} ticked={shown.ticked} partly={shown.partly} named={named} max={MAX_CAPTURE_PROJECTS} onTick={onTick} disabled={frozen}
+            <ProjectPicker projects={projects} ticked={shown.ticked} partly={shown.partly} onTick={onTick} disabled={frozen}
               more={state.projects.next !== null && !state.projects.loading} onMore={() => void loadProjects(true)} />
             <div class="menu-rule" />
             {/* Either, never both, and neither while projects are ticked: Capture's choices for the same places. */}
@@ -214,12 +214,12 @@ function Where({ label, shown, lock, readers, readersId, named, projects, state,
 }
 
 /** One item's place and lock: where this decision or action goes, and who reads it there. */
-function ItemRoute({ item, decision, state, projects, names, named, frozen }: {
-  item: Item; decision: DecisionState; state: State; projects: readonly ProjectSummary[]; names: ReadonlyMap<string, string>; named: readonly string[]; frozen: boolean;
+function ItemRoute({ item, decision, state, projects, names, frozen }: {
+  item: Item; decision: DecisionState; state: State; projects: readonly ProjectSummary[]; names: ReadonlyMap<string, string>; frozen: boolean;
 }) {
   const destination = decision.routes[item.signal_id] ?? null;
   return <Where label={placeLabel(destination, names)} shown={shownOf(destination)} lock={lockOf(destination)} readers={readersOf(destination)}
-    readersId={`route-readers-${item.signal_id}`} named={named}
+    readersId={`route-readers-${item.signal_id}`}
     projects={projects} state={state} frozen={frozen} name={`Where it goes: ${short(item.text)}`} lockName={`Only me: ${short(item.text)}`}
     testid="route-chip" lockTestid="route-lock" onTick={id => tickDecisionRoute(item.signal_id, id)} onNoProject={() => setDecisionRoute(item.signal_id, ONLY_ME)}
     onDrop={() => setDecisionRoute(item.signal_id, null)} onLock={() => lockDecisionRoute(item.signal_id)} />;
@@ -277,11 +277,9 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
   // Sending, or maybe sent: Approve and Reject resend the same choices.
   const frozen = decision.busy || decision.unknown === true;
   const approvable = !decision.busy && keptItems(decision).length > 0;
-  // Every chip counts the whole meeting's projects toward the 20 one approval may name.
-  const named = [...routedProjects(decision.routes)];
   const quotes = notesOf(open.items);
   const holds = counts(open.items);
-  const route = (item: Item) => <ItemRoute item={item} decision={decision} state={state} projects={projects} names={names} named={named} frozen={frozen} />;
+  const route = (item: Item) => <ItemRoute item={item} decision={decision} state={state} projects={projects} names={names} frozen={frozen} />;
   return (
     <div class="card-page" data-testid="decision">
       <article class="card-main" aria-labelledby="decision-ask">
@@ -310,7 +308,7 @@ function Proposal({ state, decision }: { state: State; decision: DecisionState }
         <section class="card-panel" aria-labelledby="decision-route">
           <div class="route-all">
             <div class="section-label" id="decision-route">All items</div>
-            <Where label={allPlace(decision, names)} shown={allShown(decision)} lock={allLock(decision)} readers={null} named={named} projects={projects} state={state}
+            <Where label={allPlace(decision, names)} shown={allShown(decision)} lock={allLock(decision)} readers={null} projects={projects} state={state}
               frozen={frozen} name="Where all items go" lockName="Only me: all items" testid="route-all" lockTestid="route-all-lock" onTick={tickDecisionRoutes}
               onNoProject={() => setDecisionRoutes(ONLY_ME)} onDrop={() => setDecisionRoutes(null)} onLock={lockDecisionRoutes} />
           </div>

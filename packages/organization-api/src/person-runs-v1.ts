@@ -1,7 +1,6 @@
 import { validatePersonAnswerCitationV6 } from './person-answer-v4.js';
 import type { PersonAnswerCitationV6 } from './person-answer-v8.js';
 import { validatePersonImpactCardV1, type PersonImpactCardV1 } from './person-impact-card-v1.js';
-import { PERSON_UPLOAD_PROJECT_SET_MAX } from './person-upload-audience-v3.js';
 import { validateProjectIdV1 } from './project-context-v1.js';
 import {
   asEnumerableRecord, assertDigest, assertExactKeys, assertId, assertString, assertTimestamp, assertUnique as unique, boundedLine as line, boundedList as list, fail, isCalendarDay, oneOf,
@@ -492,7 +491,7 @@ function decision(value: unknown): PersonOpenItemDecisionV1 {
     first_line: entry.first_line === null ? null : line(entry.first_line, 'Open item decision first line'),
     approved_at: entry.approved_at as string,
     // A decision's projects are among its record's associations.
-    project_ids: Object.freeze(list(entry.project_ids, 'Open item decision project list', PERSON_UPLOAD_PROJECT_SET_MAX).map(id => validateProjectIdV1(id, 'Open item decision project id'))),
+    project_ids: Object.freeze(list(entry.project_ids, 'Open item decision project list', ANY).map(id => validateProjectIdV1(id, 'Open item decision project id'))),
   });
 }
 

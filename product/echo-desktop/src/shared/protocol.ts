@@ -501,11 +501,6 @@ export type Audience =
   | { readonly kind: 'team' };
 
 /**
- * The most projects a capture is filed in, and the most whose members can
- * read it: the API's own bound (PERSON_UPLOAD_PROJECT_SET_MAX).
- */
-export const MAX_CAPTURE_PROJECTS = 20;
-/**
  * Copy answer takes one whole answer, as a saved turn holds one: up to the
  * bound of a timeline put, in characters. It bounds what the page may hand
  * the clipboard, never what an answer may say.
@@ -716,7 +711,7 @@ export interface HostMethods {
   'employees.reissue': { params: { expect: Expect; email: string; invitation_handle: string }; result: InvitationSaved };
   /** Revoke access: ends the employee's membership at once. */
   'employees.revoke': { params: { expect: Expect; email: string }; result: null };
-  /** `project_ids`: the projects it is filed in, at most MAX_CAPTURE_PROJECTS, in any order. */
+  /** `project_ids`: the projects it is filed in, any number, in any order. */
   'notes.submit': { params: { expect: Expect; request_id: string; text: string; audience: Audience; project_ids: readonly string[] }; result: Receipt };
   /** The renderer names a file only by a handle main issued; main swaps in the path. */
   'documents.upload': {

@@ -53,8 +53,6 @@ describe('person-owned review contract', () => {
   });
 
   it.each([
-    ['more than twenty project ids in a route', { routes: routes(Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`)) }],
-    ['more than twenty project ids in all', { routes: routes(...Array.from({ length: 21 }, (_, index) => [`prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`])) }],
     ['unsorted project ids', { routes: routes([projectB, projectA]) }],
     ['duplicate project ids', { routes: routes([projectA, projectA]) }],
     ['invalid project id', { routes: routes(['project']) }],
@@ -98,6 +96,10 @@ describe('person-owned review contract', () => {
       .toMatchObject({ schema_version: 1, routes: mixed, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] });
     expect(validatePersonReviewRequestV1(request({ action: 'reject', routes: [] }))).toMatchObject({ action: 'reject', routes: [] });
     expect(validatePersonReviewRequestV1(request({ routes: routes(null, []) }))).toMatchObject({ routes: routes(null, []) });
+    // A route and an approval name any number of projects.
+    const many21 = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    expect(validatePersonReviewRequestV1(request({ routes: routes(many21) }))).toMatchObject({ routes: routes(many21) });
+    expect(validatePersonReviewRequestV1(request({ routes: routes(...many21.map(id => [id])) }))).toMatchObject({ routes: routes(...many21.map(id => [id])) });
     // Owners have no count of their own: one per action, as many as the meeting has.
     const many = Array.from({ length: 100 }, (_, index) => ({ signal_id: `act-${index}`, owner: 'Rafael Moreno' }));
     expect(validatePersonReviewRequestV1(request({ routes: mixed, owners: many }))).toMatchObject({ owners: many });
@@ -105,6 +107,13 @@ describe('person-owned review contract', () => {
 
   it('accepts a review_open of items, reasons, names and records, with any line breaks in the meeting\'s words', () => {
     expect(validatePersonReviewResultV1('review_open', opened())).toEqual(opened());
+    // No count or length of its own: suggestions, names, quotes, titles and first lines are carried as the response holds them.
+    const longer = opened({ suggested_projects: Array.from({ length: 25 }, (_, index) => ({ project_id: `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, name: 'N'.repeat(400) })),
+      participants: ['P'.repeat(2_000)], review: { ...review, title: 'T'.repeat(2_000), first_line: 'L'.repeat(2_000) },
+      items: [{ ...item, quotes: Array.from({ length: 250 }, (_, index) => `Quote ${index}`) }] });
+    expect(validatePersonReviewResultV1('review_open', longer)).toEqual(longer);
+    const many = Array.from({ length: 150 }, (_, index) => ({ ...review, approval_id: `apr_${String(index).padStart(64, '0')}` }));
+    expect(validatePersonReviewResultV1('reviews', { reviews: many }).reviews).toHaveLength(150);
     const records = [{ approval_id: `apr_${'c'.repeat(64)}`, project_ids: [projectA] }, { approval_id: `apr_${'d'.repeat(64)}`, project_ids: [] }];
     expect(validatePersonReviewResultV1('review_open', opened({ review: { ...review, status: 'approved', records }, records })).records).toEqual(records);
     expect(validatePersonReviewResultV1('review_open', opened({ items: [{ ...item, project_ids: null }, { ...action, owner_editable: false }] })).items).toHaveLength(2);
@@ -123,7 +132,6 @@ describe('person-owned review contract', () => {
     ['the retired proposal text', { content: 'Review' }],
     ['the retired owner proposals', { owners: [] }],
     ['no records', { records: undefined }],
-    ['too many suggested projects', { suggested_projects: Array.from({ length: 21 }, () => ({ project_id: projectA, name: 'Project A' })) }],
     ['an item of another kind', { items: [{ ...item, kind: 'rationale' }] }],
     ['a decision without its status', { items: [{ ...item, status: null }] }],
     ['an action with a status', { items: [{ ...action, status: 'decided' }] }],
@@ -216,7 +224,6 @@ describe('person-owned review contract', () => {
 
   it.each([
     ['an empty first line', { first_line: '' }],
-    ['a first line over 300 characters', { first_line: 'L'.repeat(301) }],
     ['a first line of two lines', { first_line: 'Launch the pilot.\nNext week.' }],
     ['a negative action count', { action_count: -1 }],
     ['an action count past the safe integers', { action_count: 2 ** 53 }],

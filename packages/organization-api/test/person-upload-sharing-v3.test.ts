@@ -26,11 +26,16 @@ describe('multi-project Person upload contracts', () => {
     expect(() => validatePersonDocumentSearchV2({ schema_version: 2, kind: 'echo-person-document-search-v2', project_id: first, query: 'MRD', limit: 10, cursor: null, audience })).toThrow();
   });
 
-  it('rejects unsorted, duplicate, oversized, or mismatched receipt sets', () => {
+  it('takes any number of projects in either set', () => {
+    const many = Array.from({ length: 25 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const submit = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'MRD', text: 'The project starts Tuesday.', association_project_ids: many, audience: { kind: 'projects', project_ids: many } };
+    expect(validatePersonUpdateSubmitV3(submit)).toMatchObject({ association_project_ids: many, audience: { project_ids: many } });
+  });
+
+  it('rejects unsorted, duplicate, or mismatched receipt sets', () => {
     const base = { schema_version: 3, kind: 'echo-person-update-submit-v3', request_id, title: 'MRD', text: 'The project starts Tuesday.', association_project_ids: associations, audience };
     expect(() => validatePersonUpdateSubmitV3({ ...base, association_project_ids: [second, first] })).toThrow(/sorted/);
     expect(() => validatePersonUpdateSubmitV3({ ...base, audience: { kind: 'projects', project_ids: [first, first] } })).toThrow(/sorted/);
-    expect(() => validatePersonUpdateSubmitV3({ ...base, association_project_ids: Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`) })).toThrow();
     expect(() => validatePersonUpdateReceiptV3({ schema_version: 3, kind: 'echo-person-update-receipt-v3', request_id, context_id: `ctx_${'a'.repeat(64)}`, received_at: '2026-09-23T00:00:00.000Z', association_project_ids: associations, audience, state: 'received', extra: true })).toThrow();
   });
 });

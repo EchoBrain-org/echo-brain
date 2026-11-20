@@ -3,7 +3,6 @@ import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_HOME_ROWS_V1,
   PERSON_OPEN_ITEMS_PAGE_V1,
-  PERSON_UPLOAD_PROJECT_SET_MAX,
   validatePersonAnswerCitationV6,
   validatePersonRunsResultV1,
   type PersonAnswerCitationV6,
@@ -371,7 +370,7 @@ function decisionOf(decision: PersonReadableDecisionV1, first_line: string | nul
   return Object.freeze({
     approval_id: decision.approval_id, record_sha256: decision.record_sha256,
     title: impactCardLineV1(decision.title) || 'Approved meeting', first_line, approved_at: decision.approved_at,
-    project_ids: Object.freeze(decision.project_ids.slice(0, PERSON_UPLOAD_PROJECT_SET_MAX)),
+    project_ids: Object.freeze([...decision.project_ids]),
   });
 }
 /**

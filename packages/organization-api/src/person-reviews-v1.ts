@@ -91,8 +91,9 @@ function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
 }
 function digest(value: unknown): asserts value is string { text(value); if (!/^sha256:[a-f0-9]{64}$/.test(value)) fail('Invalid meeting digest'); }
+/** Any number of projects, sorted and unique. */
 function projectIds(value: unknown): asserts value is readonly string[] {
-  if (!Array.isArray(value) || value.length > 20) fail(label);
+  if (!Array.isArray(value)) fail(label);
   let previous: string | undefined;
   for (const id of value) { validateProjectIdV1(id); if (previous !== undefined && previous >= id) fail(label); previous = id; }
 }
@@ -140,9 +141,9 @@ export function validatePersonReviewRequestV1(value: unknown): PersonReviewReque
     const review = row as PersonReviewRequestV1 & { readonly operation: 'review' };
     text(row.command_id, 128);
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(row.command_id) || (row.action !== 'approve' && row.action !== 'reject')) fail(label);
-    // An approval keeps at least one item and names at most 20 projects; a rejection routes and owns nothing.
+    // An approval keeps at least one item; a rejection routes and owns nothing.
     if (review.action === 'reject' ? review.routes.length !== 0 || review.owners.length !== 0
-      : review.routes.every(route => route.project_ids === null) || new Set(review.routes.flatMap(route => route.project_ids ?? [])).size > 20) fail(label);
+      : review.routes.every(route => route.project_ids === null)) fail(label);
   }
   return Object.freeze({ ...row }) as PersonReviewRequestV1;
 }
@@ -159,36 +160,37 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
     return item;
   };
-  const array = (value: unknown, limit: number): unknown[] => { if (!Array.isArray(value) || value.length > limit) fail('Invalid meeting collection'); return value; };
+  // No count of its own: the response's byte bound is its one bound.
+  const array = (value: unknown): unknown[] => { if (!Array.isArray(value)) fail('Invalid meeting collection'); return value; };
   const project = (value: unknown) => validateProjectIdV1(value);
   // The meeting's or the model's words: any text, line breaks included, bounded with the whole response.
-  const words = (value: unknown, maximum = 20_000) => { if (typeof value !== 'string' || value.length === 0 || value.length > maximum) fail('Invalid meeting review text'); };
+  const words = (value: unknown) => { if (typeof value !== 'string' || value.length === 0) fail('Invalid meeting review text'); };
   const signal = (value: unknown) => { if (typeof value !== 'string' || !SIGNAL.test(value)) fail('Invalid meeting review signal'); };
-  const quotes = (value: unknown) => { for (const quote of array(value, 200)) words(quote); };
+  const quotes = (value: unknown) => { for (const quote of array(value)) words(quote); };
   const records = (value: unknown) => {
     const seen = new Set<unknown>();
-    for (const entry of array(value, ROUTES_MAX)) {
+    for (const entry of array(value)) {
       const record = object(entry, ['approval_id','project_ids'], ['private']);
       if (typeof record.approval_id !== 'string' || !/^apr_[0-9a-f]{64}$/.test(record.approval_id) || seen.has(record.approval_id)) fail('Invalid meeting review record');
       seen.add(record.approval_id); projectIds(record.project_ids); privateDestination(record, 'Invalid meeting review record');
     }
   };
   const review = (value: unknown) => {
-    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','all_day','records']); text(item.approval_id); text(item.title, 1024); projectIds(item.project_ids);
+    const item = object(value, ['approval_id','title','project_ids','status','decided_on','first_line','action_count','meeting_at','all_day','records']); text(item.approval_id); text(item.title, Number.POSITIVE_INFINITY); projectIds(item.project_ids);
     if (!['pending','publishing','approved','rejected','superseded'].includes(String(item.status)) || ![null, 'desktop', 'slack'].includes(item.decided_on as string | null)) fail('Invalid meeting review state');
-    if (item.first_line !== null) text(item.first_line, 300);
+    if (item.first_line !== null) text(item.first_line, Number.POSITIVE_INFINITY);
     if (!Number.isSafeInteger(item.action_count) || (item.action_count as number) < 0) fail('Invalid meeting review action count');
     if (item.meeting_at !== null) assertTimestamp(item.meeting_at, 'Meeting review time');
     if (typeof item.all_day !== 'boolean' || (item.all_day && item.meeting_at === null)) fail('Invalid meeting review time');
     records(item.records);
     if (item.status !== 'approved' && (item.records as unknown[]).length > 0) fail('Invalid meeting review record');
   };
-  if (operation === 'reviews') for (const item of array(row.reviews, 100)) review(item);
+  if (operation === 'reviews') for (const item of array(row.reviews)) review(item);
   if (operation === 'review_open') {
     review(row.review); digest(row.snapshot_sha256); records(row.records);
-    for (const name of array(row.participants, 500)) words(name, 1024);
+    for (const name of array(row.participants)) words(name);
     const items = new Set<unknown>();
-    for (const value of array(row.items, ROUTES_MAX)) {
+    for (const value of array(row.items)) {
       const item = object(value, ['signal_id','kind','text','subject','status','due_at','due_on','quotes','owner','owner_editable','project_ids'], ['private']);
       signal(item.signal_id); if (items.has(item.signal_id)) fail('Invalid meeting review signal'); items.add(item.signal_id);
       words(item.text); if (item.subject !== null) words(item.subject); quotes(item.quotes);
@@ -204,11 +206,11 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
       if (item.project_ids !== null) projectIds(item.project_ids);
       privateDestination(item, 'Invalid meeting review item');
     }
-    for (const value of array(row.reasons, ROUTES_MAX)) {
+    for (const value of array(row.reasons)) {
       const item = object(value, ['signal_id','text','supports','quotes']); signal(item.signal_id); words(item.text); quotes(item.quotes);
-      for (const supported of array(item.supports, 1000)) signal(supported);
+      for (const supported of array(item.supports)) signal(supported);
     }
-    for (const value of array(row.suggested_projects, 20)) { const item = object(value, ['project_id','name']); project(item.project_id); text(item.name, 256); }
+    for (const value of array(row.suggested_projects)) { const item = object(value, ['project_id','name']); project(item.project_id); text(item.name, Number.POSITIVE_INFINITY); }
   }
   if (operation === 'review' && (!['publishing','approved','rejected'].includes(String(row.status)) || !['desktop', 'slack'].includes(String(row.decided_on)))) fail('Invalid meeting outcome');
   return Object.freeze({ ...row }) as unknown as PersonReviewResultsV1[K];

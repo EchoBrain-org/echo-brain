@@ -524,11 +524,12 @@ describe('Home decisions and impact checks', () => {
     store.setDecisionRoute('dec-1', null);
     store.setDecisionRoutes(store.ONLY_ME);
     expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': store.ONLY_ME });
-    // No more than 20 projects in all.
+    // Any number of projects in all.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
     store.setDecisionRoute('act-1', to(...many.slice(0, 20)));
     store.setDecisionRoute('dec-1', to(...many.slice(20)));
-    expect(store.getState().decision?.routes).toEqual({ 'dec-1': null, 'act-1': to(...many.slice(0, 20)) });
+    expect(store.getState().decision?.routes).toEqual({ 'dec-1': to(...many.slice(20)), 'act-1': to(...many.slice(0, 20)) });
+    store.setDecisionRoute('dec-1', null);
     store.setDecisionOwner('act-1', ' R. Moreno ');
     rpc.mockImplementationOnce(async () => ok({ status: 'publishing', decided_on: 'desktop' }));
     await store.decide('approve');
@@ -559,12 +560,13 @@ describe('Home decisions and impact checks', () => {
     store.tickDecisionRoutes(therm);
     store.tickDecisionRoutes(supplier);
     expect(routes()).toEqual({ 'dec-1': store.ONLY_ME, 'act-1': null });
-    // At most 20 projects in all: a 21st goes on no item, and one the meeting names already goes on every kept item.
+    // Any number of projects in all: a 21st goes on every kept item like any other.
     const many = Array.from({ length: 21 }, (_, index) => `prj_00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
     store.setDecisionRoute('dec-1', to(...many.slice(0, 19)));
     store.setDecisionRoute('act-1', to(...many.slice(19, 20)));
     store.tickDecisionRoutes(many[20]!);
-    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 19)), 'act-1': to(...many.slice(19, 20)) });
+    expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 19), many[20]!), 'act-1': to(...many.slice(19, 21)) });
+    store.tickDecisionRoutes(many[20]!);
     store.tickDecisionRoutes(many[19]!);
     expect(routes()).toEqual({ 'dec-1': to(...many.slice(0, 20)), 'act-1': to(...many.slice(19, 20)) });
   });

@@ -249,20 +249,20 @@ describe('the decision card', () => {
 });
 
 describe('the project picker', () => {
-  it('part-ticks a project only some items have, and once the meeting names its most, offers only the projects it names', async () => {
+  it('part-ticks a project only some items have, and offers every project however many are named', async () => {
     const { ProjectPicker } = await import('../../src/renderer/screens/project-picker.js');
     const projects = [project(THERM, 'THERM'), project(ECHO, 'ECHO'), project(SUPPLIER, 'SUPPLIER')];
     const picker = (props: { ticked: readonly string[]; partly?: readonly string[]; named?: readonly string[] }) =>
-      render(ProjectPicker({ projects, onTick: () => undefined, onMore: () => undefined, more: false, max: 2, ...props }));
+      render(ProjectPicker({ projects, onTick: () => undefined, onMore: () => undefined, more: false, ...props }));
     const boxes = (tree: unknown) => elements(tree).filter(node => node.type === 'input')
       .map(node => ({ checked: node.props.checked, indeterminate: node.props.indeterminate, disabled: node.props.disabled }));
-    // All items, Mixed: THERM on every kept item, ECHO on some. The two are the most here, so SUPPLIER would be one too many.
+    // All items, Mixed: THERM on every kept item, ECHO on some. SUPPLIER stays open: a meeting names any number of projects.
     const all = picker({ ticked: [THERM], partly: [ECHO], named: [THERM, ECHO] });
     expect(boxes(all)).toEqual([{ checked: true, indeterminate: false, disabled: false }, { checked: false, indeterminate: true, disabled: false },
-      { checked: false, indeterminate: false, disabled: true }]);
-    expect(text(byTestId(all, 'projects-limit')[0])).toBe('Up to 2 projects.');
-    // One item's chip, nothing ticked on it: the projects other items name stay open to it.
-    expect(boxes(picker({ ticked: [], named: [THERM, ECHO] })).map(box => box.disabled)).toEqual([false, false, true]);
+      { checked: false, indeterminate: false, disabled: false }]);
+    expect(byTestId(all, 'projects-limit')).toEqual([]);
+    // One item's chip, nothing ticked on it: every project stays open to it.
+    expect(boxes(picker({ ticked: [], named: [THERM, ECHO] })).map(box => box.disabled)).toEqual([false, false, false]);
     // Counting its own ticks alone (Capture), a free place leaves every project open.
     const own = picker({ ticked: [THERM] });
     expect(boxes(own).map(box => box.disabled)).toEqual([false, false, false]);

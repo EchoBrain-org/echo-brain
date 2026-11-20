@@ -10,7 +10,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_CAPTURE_PROJECTS, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -4594,12 +4594,11 @@ export function openProjects(): void {
   setCompose({ ...compose, picking: { place: compose.place, projects: compose.projects } });
 }
 
-/** Ticks a project in the place list, or unticks it: either way the place is a project choice. No more than the API takes. */
+/** Ticks a project in the place list, or unticks it: either way the place is a project choice. */
 export function tickProject(project: ProjectSummary): void {
   const compose = state.compose;
   if (!compose?.picking || project.status !== 'active') return;
   const ticked = compose.projects.some(entry => entry.project_id === project.project_id);
-  if (!ticked && compose.projects.length >= MAX_CAPTURE_PROJECTS) return;
   editCompose({ place: 'projects', projects: ticked ? compose.projects.filter(entry => entry.project_id !== project.project_id) : [...compose.projects, project] });
 }
 
@@ -5733,21 +5732,13 @@ function routedItems(decision: DecisionState): readonly ReviewOpen['items'][numb
 export function keptItems(decision: DecisionState): readonly ReviewOpen['items'][number][] {
   return routedItems(decision).filter(item => (decision.routes[item.signal_id] ?? null) !== null);
 }
-/** Every project the routes name, each once, locked or not: what counts toward the meeting's MAX_CAPTURE_PROJECTS. */
-export function routedProjects(routes: Readonly<Record<string, Destination>>): Set<string> {
-  return new Set(Object.values(routes).flatMap(destination => destination?.projects ?? []));
-}
-/** Routes the card may send: at most MAX_CAPTURE_PROJECTS projects in all, as at most so many in one item. */
-function withinProjects(routes: Readonly<Record<string, Destination>>): boolean {
-  return routedProjects(routes).size <= MAX_CAPTURE_PROJECTS;
-}
 
 /** One item's destination: not kept (null), Only me, or exactly these projects, locked or not. */
 export function setDecisionRoute(signalId: string, destination: Destination): void {
   const decision = state.decision;
   if (!decision) return;
   const routes = { ...decision.routes, [signalId]: destination === null ? null : destinationOf(destination.projects, destination.private) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on one item. The lock stays as it was while projects stay ticked; the first project ticked
@@ -5778,7 +5769,7 @@ export function setDecisionRoutes(destination: Destination): void {
   const targets = destination === null || keptItems(decision).length === 0 ? items : keptItems(decision);
   const value = destination === null ? null : destinationOf(destination.projects, destination.private);
   const routes = { ...decision.routes, ...Object.fromEntries(targets.map(item => [item.signal_id, value])) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * A project ticked or unticked on every kept item at once (on every item when none is kept), each keeping its other projects
@@ -5795,7 +5786,7 @@ export function tickDecisionRoutes(projectId: string): void {
     const others = (now?.projects ?? []).filter(id => id !== projectId);
     return [item.signal_id, destinationOf(off ? others : [...others, projectId], keptPrivate(now))];
   })) };
-  if (withinProjects(routes)) editChoices({ routes });
+  editChoices({ routes });
 }
 /**
  * The Only me lock on every kept item filed in projects at once: each locked, or unlocked when each already is. An item in
