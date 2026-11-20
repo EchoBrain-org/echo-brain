@@ -92,9 +92,6 @@ export interface PersonAnswerResponseV8 {
   readonly follow_ups?: readonly string[];
 }
 
-/** The most follow-ups one answer drafts. */
-export const PERSON_ANSWER_FOLLOW_UPS_MAX_V1 = 10;
-
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */
 export function validatePersonWorkspaceRefV1(value: unknown, label = 'Workspace ref'): PersonWorkspaceRefV1 {
   if (typeof value === 'string' && value.startsWith('project:')) {

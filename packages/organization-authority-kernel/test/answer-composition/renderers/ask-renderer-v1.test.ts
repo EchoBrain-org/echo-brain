@@ -366,8 +366,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   const WAITS = "THERM-2 (Fixture work 2, owner Dana Lee) waits on the approved record.";
   const RECORDS = "I found these records, but could not write a verified summary.";
   const FIT = "Some evidence could not fit in this response.";
-  /** The gap for a sentence left out because its list rows take it past a statement's 40 citations: true, unlike FIT. */
-  const OVER = "Part of the answer was left out because it rests on more items than one sentence can cite.";
   const LEG = "The list of tickets could not be read to its end, so more may exist.";
   const visibility = (...expected: readonly (readonly [string, string])[]) => (rendered: Rendered) => expect(rendered.result.response.citations.map(value => [value.kind, value.visibility])).toEqual(expected);
   it.each(["complete", "truncated", "unverified", "unchecked", "missing fact"] as const)("types a selected no-match only after verified complete coverage: %s", async state => {
@@ -535,26 +533,31 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     expect(rendered.result.response.citations).toHaveLength(2);
     expect(corrections).toEqual({ writer_unknown_id_dropped: 2 });
   });
-  it("leaves out whole a sentence citing more items than a sentence may, never releasing it without its private citation", async () => {
-    // 41 readable records, only E41 private: cut to its first 12 ids, the sentence would be released public.
+  it("keeps a sentence citing any number of items, with every citation, private when any of them is", async () => {
+    // 41 readable records, only E41 private: the sentence cites all 41, so it is private.
     const research = records(41);
     const bundle41: AgenticEvidenceBundleV1 = { ...research, items: research.items.map(entry => entry.short === "E41" ? { ...entry, item: { ...entry.item, visibility: "only_me" as const } } : entry) };
     const run = alone({ bundle: bundle41, replies: [writerReply([{ text: "The reviews approved all forty-one.", evidence: ids(1, 41) }, { text: "The review approved record 1.", evidence: ["E1"] }])] });
     const { rendered, corrections } = await observed(() => run.render("What did the reviews approve?"));
-    expect(rendered.result.response.parts[0]!.statements).toEqual([{ text: "The review approved record 1.", citation_indexes: [0], private: false }]);
-    expect(rendered.cited).toEqual(["E1"]);
-    expect(corrections).toMatchObject({ model_entry_dropped: 1 });
+    expect(rendered.result.response.parts[0]!.statements).toEqual([
+      { text: "The reviews approved all forty-one.", citation_indexes: Array.from({ length: 41 }, (_, index) => index), private: true },
+      { text: "The review approved record 1.", citation_indexes: [0], private: false },
+    ]);
+    expect(rendered.cited).toEqual(ids(1, 41));
+    expect(corrections).not.toHaveProperty("model_entry_dropped");
     expect(corrections).not.toHaveProperty("model_items_capped");
   });
-  it("separates a missing fact from output-fit diagnostics", async () => {
-    // A sentence whose list id brings 45 private rows would cite past a statement's 40: it is left out, and says so.
+  it("separates a missing fact from the rest of the gap, and keeps a sentence whose list id brings 45 private rows", async () => {
+    // The sentence's list id brings the list's 45 private rows: it stands, private, citing them all.
     const rendered = await alone({ bundle: listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]), replies: [writerReply([
       { text: REVIEW.text, evidence: ["E46"] }, { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] },
     ], { not_found: ["the approver"] })] }).render("What did the review approve, and who approved it?");
     const part = rendered.result.response.parts[0]!;
     expect(part.gap_details).toEqual({ not_found: "Not found: the approver." });
-    expect(part.gap).toBe(`Not found: the approver. ${OVER}`);
-    expect(part.gap).not.toBe(part.gap_details!.not_found);
+    expect(part.gap).toBe("Not found: the approver.");
+    const waits = part.statements.find(statement => statement.text === "The fixture work waits on the review.")!;
+    expect(waits.private).toBe(true);
+    expect(waits.citation_indexes.length).toBeGreaterThanOrEqual(46);
   });
   type Rendered = Awaited<ReturnType<ReturnType<typeof alone>["render"]>>;
   interface Row {
@@ -597,15 +600,20 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     { id: "X35b", name: "cites its text alone through a list with no private row the writer saw", bundle: teamRows(eightAnd1([C(["E9"])])), replies: [say({ text: WAITS, evidence: ["L1", "E9"] })], q: "What waits on the approved record?", status: "answered", says: [st(WAITS, 1, true)], cited: ["E9"] },
     { id: "X35e", name: "brings nothing through the id of a list the writer was not shown", bundle: eightAnd1([C(["E9"])]), replies: [say({ ...REVIEW, evidence: ["L7", "E9"] })], q: "What did the review approve?", status: "answered", says: [st(REVIEW.text, 1, true)] },
     ...[false, true].map((team): Row => {
-      // 45 only_me rows: a sentence citing L1 beside team text would cite 46 items, past the answer's 40. The rows a list id
-      // brings take no slot of the writer's 12 ids; it is kept whole or left out with every one after it, never cut to fit.
+      // 45 only_me rows: a sentence citing L1 beside team text cites all 46 items, and is private for its rows. No count
+      // leaves it out: it is kept whole, with every citation.
       const research = listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]);
       return {
-        id: "X35e", name: team ? "keeps all three sentences over team rows" : "leaves out a sentence whose list id would pass a statement's 40 citations, and keeps the ones after it", bundle: team ? teamRows(research) : research,
+        id: "X35e", name: team ? "keeps all three sentences over team rows" : "keeps a sentence whose list id brings 45 private rows, private and with every citation", bundle: team ? teamRows(research) : research,
         replies: [say({ text: REVIEW.text, evidence: ["E46"] }, { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] }, { text: "The review closed.", evidence: ["E46"] })],
         q: "What did the review approve?", ...(team
           ? { status: "answered", check: (rendered: Rendered) => expect(rendered.result.response.parts[0]!.statements.map(value => value.citation_indexes)).toEqual([[0], [1], [0]]) }
-          : { status: "partial", gap: OVER, says: [st(REVIEW.text, 1, true), st("The review closed.", 1, true)], check: (_: Rendered, run: ReturnType<typeof alone>) => expect(run.prompt(0).lists[0].members).toHaveLength(45) }),
+          : { status: "answered", check: (rendered: Rendered, run: ReturnType<typeof alone>) => {
+            expect(run.prompt(0).lists[0].members).toHaveLength(45);
+            const [first, waits, closed] = rendered.result.response.parts[0]!.statements;
+            expect([first!.text, waits!.text, closed!.text]).toEqual([REVIEW.text, "The fixture work waits on the review.", "The review closed."]);
+            expect([waits!.private, waits!.citation_indexes.length]).toEqual([true, 46]);
+          } }),
       };
     }),
     // Eleven team records (E9..E19) and one only_me row (E1, of L2), with L1 (seven team rows) before, among or after them:
@@ -654,8 +662,9 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     { id: "W1, W6", name: "makes a count on a list's id private when a row it rests on is, citing every row", bundle: teamRows(eightAnd1([C(["E9"])]), ["E2"]), replies: [say({ text: "Eight tickets were created on October 4.", evidence: ["L1"] })], status: "answered",
       says: [st("Eight tickets were created on October 4.", 8)], cited: ids(1, 8),
       check: visibility(...ids(1, 8).map(short => ["ticket", short === "E2" ? "only_me" : "team"] as const)) },
-    { id: "W1, X35e", name: "leaves out whole a count on a list's id that would cite past a statement's 40", bundle: listBundle(45, 1, [list("L1", ids(1, 45))], [C(["E46"])]),
-      replies: [say({ ...REVIEW, evidence: ["E46"] }, { text: "Forty-five tickets were created on October 4.", evidence: ["L1"] })], q: "What did the review approve?", status: "partial", gap: OVER, says: [st(REVIEW.text, 1, true)] },
+    { id: "W1, X35e", name: "keeps a count on a list's id citing all 45 rows, private for them", bundle: listBundle(45, 1, [list("L1", ids(1, 45))], [C(["E46"])]),
+      replies: [say({ ...REVIEW, evidence: ["E46"] }, { text: "Forty-five tickets were created on October 4.", evidence: ["L1"] })], q: "What did the review approve?", status: "answered",
+      check: rendered => expect(rendered.result.response.parts[0]!.statements.map(value => [value.text, value.citation_indexes.length, value.private])).toEqual([[REVIEW.text, 1, false], ["Forty-five tickets were created on October 4.", 45, true]]) },
     ...([["X24a", WS(["L1", "E9"]), undefined], ["X24b", WI(ids(1, 8)), "I could not confirm the full list of items asked for."]] as const).map(([id, need, gap]): Row => ({
       id, name: `gives the records a failed writer falls back to ${id === "X24a" ? "with no gap for a which_say list (ADR-0054)" : "the gap of a which_items need left on rows"}`, bundle: eightAnd1([need]), replies: [{ wrong: true }, { still: "wrong" }], calls: 2,
       q: "Which tickets created on October 4 mention BUG-412?", status: "records_only", gap: gap === undefined ? RECORDS : `${RECORDS} ${gap}`, check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1." })]),
@@ -798,33 +807,35 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       ] });
       expect(one.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
     });
-    // 45 only_me rows: an item citing L1 beside text would cite 46 items, past the 40 one statement may cite in blocks too.
+    // 45 only_me rows: an item citing L1 beside text cites 46 items, in blocks too; no count leaves it out.
     const pastOne = () => listBundle(45, 2, [list("L1", ids(1, 45))], [C(["E46", "E47"])]);
     const WAITS_ON = { text: "The fixture work waits on the review.", evidence: ["L1", "E47"] };
-    it("leaves out whole an item whose list id would cite more than a statement's 40 items, and keeps the items after it (W6)", async () => {
+    it("keeps an item whose list id cites 46 items, in its block, private for its rows (W6)", async () => {
       const part = await arranged(pastOne(), { lists: [], not_found: [], blocks: [
         { block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] },
         { block: "points", ordered: false, items: [WAITS_ON, { text: "The review closed.", evidence: ["E46"] }] },
       ] });
-      expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, "The review closed."]);
-      expect(part).toMatchObject({ status: "partial", gap: OVER });
-      expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "text", statements: [1] }]);
+      expect(part.statements.map(value => value.text)).toEqual([REVIEW.text, WAITS_ON.text, "The review closed."]);
+      expect(part.statements[1]).toMatchObject({ private: true });
+      expect(part.statements[1]!.citation_indexes).toHaveLength(46);
+      expect(part).not.toHaveProperty("gap");
+      expect(part.blocks).toEqual([{ kind: "answer", statements: [0] }, { kind: "points", ordered: false, statements: [1, 2] }]);
     });
-    it("leaves out whole an Ask again's since whose list id would cite more than a statement's 40 items", async () => {
+    it("keeps an Ask again's since whose list id cites 46 items, private for its rows", async () => {
       const rendered = await alone({
         bundle: pastOne(), replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON] }],
         earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
       }).render("What did the review approve?");
-      expect(rendered.result.response).not.toHaveProperty("since");
+      expect(rendered.result.response.since!.statements.map(value => [value.text, value.citation_indexes.length, value.private])).toEqual([[WAITS_ON.text, 46, true]]);
       expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
     });
-    it("leaves out only the since sentence whose list id would cite more than 40 items, keeping the others", async () => {
+    it("keeps every since sentence, however many items each cites", async () => {
       const CLOSED = { text: "The review closed.", evidence: ["E47"] };
       const rendered = await alone({
         bundle: pastOne(), replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON, CLOSED] }],
         earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
       }).render("What did the review approve?");
-      expect(rendered.result.response.since?.statements.map(value => value.text)).toEqual([CLOSED.text]);
+      expect(rendered.result.response.since?.statements.map(value => value.text)).toEqual([WAITS_ON.text, CLOSED.text]);
     });
   });
 

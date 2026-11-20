@@ -43,10 +43,11 @@ describe('Workspace answer V8 (research tool contract v1)', () => {
     // An answer that found nothing may still draft what the person asked for.
     const nothing = { ...response([]), outcome: 'not_found', parts: [{ question: 'Ask Sam to call the vendor.', status: 'not_found', statements: [], gap: 'I couldn\'t find this in the sources you can access.' }] };
     expect(validatePersonAnswerResponseV8({ ...nothing, follow_ups: [first] }).follow_ups).toEqual([first]);
-    for (const follow_ups of [[], [first, first], ['run_0f6c1a2e-3b4d'], [1], 'itm_abcd', Array.from({ length: 11 }, (_, at) => `itm_${String(at).padStart(8, '0')}`)]) {
+    for (const follow_ups of [[], [first, first], ['run_0f6c1a2e-3b4d'], [1], 'itm_abcd']) {
       expect(() => validatePersonAnswerResponseV8({ ...response(), follow_ups })).toThrow();
     }
-    expect(validatePersonAnswerResponseV8({ ...response(), follow_ups: Array.from({ length: 10 }, (_, at) => `itm_${String(at).padStart(8, '0')}`) }).follow_ups).toHaveLength(10);
+    // As many as the writer drafted.
+    expect(validatePersonAnswerResponseV8({ ...response(), follow_ups: Array.from({ length: 25 }, (_, at) => `itm_${String(at).padStart(8, '0')}`) }).follow_ups).toHaveLength(25);
   });
 
   it('refuses every retired answer version', () => {

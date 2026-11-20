@@ -1,8 +1,4 @@
 import {
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
-  PERSON_ANSWER_CHOICES_MAX_V1,
-  PERSON_ANSWER_CHOICES_MIN_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
   PERSON_QUESTION_MAX_CODE_POINTS_V1,
   PersonQueryInputError,
   validatePersonAnswerResponseV8,
@@ -76,7 +72,7 @@ export const FOLLOW_UP_RESOLVER_PROMPT = [
   "Return one resolution:",
   "- \"same\": the new question stands on its own. It names its own subject, or does not refer to the earlier question or answer at all. Leave such a question exactly as it is; never rewrite it.",
   "- \"resolved\": the new question refers to something in the earlier question or answer (\"it\", \"that ticket\", \"the second one\", \"her ticket\", \"that meeting\") and exactly one thing there fits. Give \"question\": the new question rewritten as one full question that stands on its own, naming that thing the way the earlier answer names it (a ticket key, a title, a person's name) and keeping everything else the person asked. Give \"about\": the numbers of the sources that are that thing or that the sentences naming it cite; [] when only the earlier question names it.",
-  "- \"clarify\": two or more things in the earlier question or answer could fit. Give \"choices\": one for each thing that could fit, 2 to 4 of them, each a short \"label\" naming the thing (at most 60 characters) and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
+  "- \"clarify\": two or more things in the earlier question or answer could fit. Give \"choices\": one for each thing that could fit, each a short \"label\" naming the thing and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
   "",
   "Rules:",
   "- Resolve only when exactly one thing fits. When two or more could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
@@ -95,10 +91,10 @@ export const followUpResolutionSchema: StructuredGenerationJsonSchema = Object.f
   type: "object", additionalProperties: false, required: ["resolution"], properties: {
     resolution: { type: "string", enum: [...RESOLUTIONS] },
     question: { type: "string", maxLength: QUESTION_CHARS },
-    about: { type: "array", maxItems: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, items: { type: "integer" } },
-    choices: { type: "array", maxItems: PERSON_ANSWER_CHOICES_MAX_V1, items: {
+    about: { type: "array", items: { type: "integer" } },
+    choices: { type: "array", items: {
       type: "object", additionalProperties: false, required: ["label", "question"], properties: {
-        label: { type: "string", maxLength: PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 }, question: { type: "string", maxLength: QUESTION_CHARS },
+        label: { type: "string" }, question: { type: "string", maxLength: QUESTION_CHARS },
       },
     } },
   },
@@ -150,12 +146,11 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
   }
   if (resolution === "same") return SAME;
   if (resolution === "resolved") return Object.freeze({ resolution, question: fullQuestion(body.question, "\"question\""), about: aboutOf(body.about, sources) });
-  if (offered.length < PERSON_ANSWER_CHOICES_MIN_V1 || offered.length > PERSON_ANSWER_CHOICES_MAX_V1) {
-    throw new AgenticAskOutputErrorV1(`"clarify" needs ${PERSON_ANSWER_CHOICES_MIN_V1} to ${PERSON_ANSWER_CHOICES_MAX_V1} "choices", one for each thing that could fit`);
-  }
+  // As many choices as things could fit; the prompt asks for two or more, since one thing that fits is "resolved".
+  if (offered.length === 0) throw new AgenticAskOutputErrorV1(`"clarify" needs "choices", one for each thing that could fit`);
   const choices = offered.map((raw, index): PersonAnswerChoiceV1 => {
     const entry = object(raw);
-    const label = entry === null ? "" : cleanModelLine(entry.label, PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1);
+    const label = entry === null ? "" : cleanModelLine(entry.label, Number.POSITIVE_INFINITY);
     if (label.length === 0) throw new AgenticAskOutputErrorV1(`choice ${index + 1} needs a "label" naming the thing it is about`);
     return Object.freeze({ label, question: fullQuestion(entry!.question, `choice ${index + 1}'s "question"`) });
   });

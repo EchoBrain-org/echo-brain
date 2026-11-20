@@ -1,7 +1,7 @@
 import { validatePersonTicketCitationV1 } from './person-ticket-citation-v1.js';
 import { validatePersonPageCitationV1 } from './person-page-citation-v1.js';
 import {
-  PERSON_ANSWER_FOLLOW_UPS_MAX_V1, PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
+  PERSON_ANSWER_OUTCOMES_V8, validatePersonWorkspaceRefV1, type PersonAnswerCitationV8, type PersonAnswerEvidenceCitationV8, type PersonAnswerOpenRefV8, type PersonAnswerResponseV8,
   type PersonAnswerCitationV6, type PersonEvidenceKindV5,
 } from './person-answer-v8.js';
 import { validatePersonFollowUpCitationV1, validatePersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
@@ -13,13 +13,7 @@ import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, ty
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
-  PERSON_ANSWER_CHOICES_MAX_V1,
-  PERSON_ANSWER_CHOICES_MIN_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
   type PersonAnswerChoiceV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -43,8 +37,6 @@ import {
 
 /** A statement's text: one claim, within 4 KiB. */
 export const PERSON_ANSWER_STATEMENT_MAX_BYTES_V4 = 4 * 1024;
-/** The citations one statement may carry, in an answer of any length (ADR-0051 lifts only an answer's own count). */
-export const PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 = 40;
 
 /** Optional Ask headers; older Authorities ignore them, preserving client-first upgrades. */
 export const PERSON_ASK_CLIENT_NOW_HEADER_V1 = 'x-echo-client-now';
@@ -261,8 +253,9 @@ function statement(value: unknown, citations: readonly PersonAnswerCitationV8[],
   assertExactKeys(input, ['text', 'citation_indexes', 'private'], label);
   if (fallback) evidenceText(input.text, `${label} text`, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
   else text(input.text, `${label} text`, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, true);
-  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || input.citation_indexes.length > PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
-  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length, PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4);
+  // A statement cites at least one item, and every item it rests on: its visibility follows all of them.
+  if (!Array.isArray(input.citation_indexes) || input.citation_indexes.length === 0 || typeof input.private !== 'boolean') fail(`${label} is invalid`);
+  const indexes = citationIndexes(input.citation_indexes, `${label} citation_indexes`, citations.length);
   const expectedPrivate = indexes.some((index) => ['only_me', 'approver_only'].includes(citations[index]!.visibility));
   if (input.private !== expectedPrivate) fail(`${label} private is inconsistent with cited visibility`);
   return Object.freeze({ text: input.text as string, citation_indexes: indexes, private: input.private });
@@ -352,8 +345,9 @@ function fullQuestion(value: unknown, label: string): string {
 }
 
 /** Distinct whole indexes below `bound`, at most `maximum` of them. */
-function citationIndexes(value: unknown, label: string, bound: number, maximum: number): readonly number[] {
-  const indexes = boundedList(value, label, maximum).map((index) => {
+/** Indexes into `bound` citations, each once; as many as the statement cites. */
+function citationIndexes(value: unknown, label: string, bound: number): readonly number[] {
+  const indexes = boundedList(value, label, Number.MAX_SAFE_INTEGER).map((index) => {
     if (!Number.isSafeInteger(index) || (index as number) < 0 || (index as number) >= bound) fail(`${label} is invalid`);
     return index as number;
   });
@@ -364,7 +358,7 @@ function citationIndexes(value: unknown, label: string, bound: number, maximum: 
 /**
  * The asker's previous turn (ADR-0047): its purpose, full question and time, its answer's sentences as released (each
  * within a statement's bytes), and its citations, each once, as that answer carried them, which each sentence cites by
- * index (at most a statement's 40). The whole request keeps its 64 KiB bound.
+ * index. There is no count of sentences or citations: the request's transport bound is what limits it.
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
@@ -372,29 +366,29 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   const question = fullQuestion(input.question, 'Ask previous question');
   assertTimestamp(input.asked_at, 'Ask previous asked_at');
-  const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1).map(item => answerCitation(item, 8)));
+  const citations = Object.freeze(boundedList(input.citations, 'Ask previous citations', Number.MAX_SAFE_INTEGER).map(item => answerCitation(item, 8)));
   const keys = new Set(citations.map(item => personAnswerCitationKeyV8(item.citation)));
   if (keys.size !== citations.length) fail('Ask previous contains duplicate citations');
-  const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1).map((raw): PersonAnswerPreviousStatementV1 => {
+  const statements = Object.freeze(boundedList(input.statements, 'Ask previous statements', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerPreviousStatementV1 => {
     const item = object(raw, 'Ask previous statement');
     assertExactKeys(item, ['text', 'citation_indexes'], 'Ask previous statement');
     // An answer's sentence as it was released: trimmed NFC text, line breaks allowed.
     text(item.text, 'Ask previous statement text', PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, true);
     return Object.freeze({
       text: item.text as string,
-      citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1),
+      citation_indexes: citationIndexes(item.citation_indexes, 'Ask previous statement citation_indexes', citations.length),
     });
   }));
   return Object.freeze({ purpose, question, asked_at: input.asked_at as string, statements, citations });
 }
 
-/** A clarify answer's choices (ADR-0047): 2 to 4, each a label of at most 60 characters and a full question, each different. */
+/** A clarify answer's choices (ADR-0047): at least one, each a one-line label and a full question, each different. */
 function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
-  const choices = Object.freeze(boundedList(value, 'Ask response choices', PERSON_ANSWER_CHOICES_MAX_V1, PERSON_ANSWER_CHOICES_MIN_V1).map((raw) => {
+  const choices = Object.freeze(boundedList(value, 'Ask response choices', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
     const input = object(raw, 'Ask response choice');
     assertExactKeys(input, ['label', 'question'], 'Ask response choice');
     return Object.freeze({
-      label: boundedLine(input.label, 'Ask response choice label', PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1),
+      label: boundedLine(input.label, 'Ask response choice label', Number.MAX_SAFE_INTEGER),
       question: fullQuestion(input.question, 'Ask response choice question'),
     });
   }));
@@ -419,7 +413,7 @@ export function validatePersonAnswerCitationV6(value: unknown): PersonAnswerCita
 export function validatePersonAnswerCitationV8(value: unknown): PersonAnswerCitationV8 { return answerCitation(value, 8); }
 /** The ids of the follow-ups an answer drafted, in the writer's order: at least one, each once. */
 function answerFollowUps(value: unknown): readonly string[] {
-  const ids = boundedList(value, 'Ask response follow-up list', PERSON_ANSWER_FOLLOW_UPS_MAX_V1, 1).map(id => openItemId(id, 'Ask response follow-up id'));
+  const ids = boundedList(value, 'Ask response follow-up list', Number.MAX_SAFE_INTEGER, 1).map(id => openItemId(id, 'Ask response follow-up id'));
   assertUnique(ids, 'Ask response follow-up list');
   return Object.freeze(ids);
 }

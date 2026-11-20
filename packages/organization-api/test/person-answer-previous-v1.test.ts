@@ -2,12 +2,8 @@ import { canonicalJsonBytes, canonicalSha256 } from '@echo-brain/federation-prot
 import { describe, expect, it } from 'vitest';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1,
   PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
-  PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
-  PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1,
   PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
-  PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
 } from '../src/index.js';
@@ -43,15 +39,13 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
   });
 
   it('holds the whole earlier answer: its statements as released, each with a statement\'s own citations, inside the request', () => {
-    expect([PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1, PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1]).toEqual([200, 4 * 1024, 400, 40]);
-    const citations = Array.from({ length: 41 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
-    // Twelve sentences, past the old 8; one of 1,000 characters, past the old 400; one citing 40 of 41 citations, past the old 4 and 12.
-    const statements = [...Array.from({ length: 11 }, (_, index) => ({ text: `Sentence ${index}.`, citation_indexes: [index] })),
-      { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 40 }, (_, index) => index) }];
-    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(12);
+    const citations = Array.from({ length: 60 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(10_000 + index) }, label: `THERM-${index}` }));
+    // No count of sentences or citations: 250 sentences, past the old 200; one citing 60 citations, past the old 40.
+    const statements = [...Array.from({ length: 249 }, (_, index) => ({ text: `S${index}.`, citation_indexes: [index % 60] })),
+      { text: `${'é'.repeat(1_000)}`, citation_indexes: Array.from({ length: 60 }, (_, index) => index) }];
+    expect(validatePersonAnswerRequestV3(ask(previous({ citations, statements }))).previous!.statements).toHaveLength(250);
     for (const value of [
-      previous({ citations, statements: [{ text: 'é'.repeat(2_049), citation_indexes: [] }] }),
-      previous({ citations, statements: [{ text: 'Forty-one citations.', citation_indexes: Array.from({ length: 41 }, (_, index) => index) }] }),
+      previous({ citations, statements: [{ text: 'é'.repeat(PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1 / 2 + 1), citation_indexes: [] }] }),
     ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
     // A sentence may cite nothing the asker can still read; one that cites nothing at all is still the asker's context.
     expect(validatePersonAnswerRequestV3(ask(previous({ statements: [{ text: 'It is on hold.', citation_indexes: [] }] }))).previous!.statements[0]!.citation_indexes).toEqual([]);
@@ -142,17 +136,19 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
     ]) expect(() => validatePersonAnswerResponseV8(value)).toThrow();
   });
 
-  it('asks which one with clarify: two to four full questions, the question asked, and no part or citation', () => {
+  it('asks which one with clarify: any number of full questions, each label one line of any length, and no part or citation', () => {
     const accepted = validatePersonAnswerResponseV8(clarified());
     expect(accepted).toEqual(clarified());
     expect(Object.isFrozen(accepted.choices![0])).toBe(true);
     const four = Array.from({ length: 4 }, (_, index) => ({ label: `Ticket ${index}`, question: `What are the details on THERM-${index}?` }));
     expect(validatePersonAnswerResponseV8(clarified({ choices: four })).choices).toHaveLength(4);
-    expect(validatePersonAnswerResponseV8(clarified({ choices: [{ label: 'L'.repeat(PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1), question: 'What is A?' }, { label: 'B', question: 'What is B?' }] })).choices).toHaveLength(2);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: [{ label: 'L'.repeat(600), question: 'What is A?' }, { label: 'B', question: 'What is B?' }] })).choices).toHaveLength(2);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] })).choices).toHaveLength(5);
+    expect(validatePersonAnswerResponseV8(clarified({ choices: four.slice(0, 1) })).choices).toHaveLength(1);
     for (const value of [
-      clarified({ choices: four.slice(0, 1) }), clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] }),
+      clarified({ choices: [] }),
       clarified({ choices: [four[0], { ...four[1], question: four[0]!.question }] }), clarified({ choices: [four[0], { ...four[1], label: four[0]!.label }] }),
-      clarified({ choices: [four[0], { ...four[1], label: 'L'.repeat(PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 + 1) }] }),
+      clarified({ choices: [four[0], { ...four[1], label: 'two\nlines' }] }),
       clarified({ choices: [four[0], { ...four[1], question: 'q'.repeat(4_001) }] }), clarified({ choices: [four[0], { ...four[1], extra: 1 }] }),
       (({ choices: _choices, ...rest }) => rest)(clarified()), (({ question: _question, ...rest }) => rest)(clarified()),
       clarified({ citations: [ticket] }), clarified({ parts: answered().parts }), clarified({ notice: 'Research stopped early.' }), clarified({ since: { statements: [] } }),

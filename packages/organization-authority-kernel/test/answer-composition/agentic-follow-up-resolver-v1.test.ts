@@ -87,14 +87,16 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
       .toMatchObject({ choices: [{ question: long }, { question }] });
   });
 
-  it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source, a long label", async () => {
+  it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source; a long label and five choices stand", async () => {
     const { value, corrections } = await observed(async () => [
       parseFollowUpResolutionV1({ ...RESOLVED, resolution: " Resolved ", about: ["2", 2, "S1"] }, 2),
       parseFollowUpResolutionV1({ resolution: "clarify", choices: [{ label: "L".repeat(80), question: "What is A?" }, { label: "B", question: "What is B?" }] }, 0),
+      parseFollowUpResolutionV1({ resolution: "clarify", choices: ["A", "B", "C", "D", "E"].map(name => ({ label: name, question: `What is ${name}?` })) }, 0),
     ]);
     expect(value[0]).toEqual({ resolution: "resolved", question: "What are the details on THERM-482?", about: [1, 0] });
-    expect(value[1]).toMatchObject({ choices: [{ label: `${"L".repeat(59)}…` }, { label: "B" }] });
-    expect(corrections).toEqual({ model_enum_respelled: 1, model_id_respelled: 2, model_repeat_dropped: 1, model_text_truncated: 1 });
+    expect(value[1]).toMatchObject({ choices: [{ label: "L".repeat(80) }, { label: "B" }] });
+    expect((value[2] as { readonly choices: readonly unknown[] }).choices).toHaveLength(5);
+    expect(corrections).toEqual({ model_enum_respelled: 1, model_id_respelled: 2, model_repeat_dropped: 1 });
   });
 
   it.each([
@@ -106,8 +108,7 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(4_000)}?` }, /"question": Shorten the question to at most 4,000 characters/u],
     ["resolved about a source not shown", { ...RESOLVED, about: [3] }, /from 1 to 2/u],
     ["resolved about no list", { ...RESOLVED, about: 1 }, /list of source numbers/u],
-    ["clarify with one choice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }] }, /2 to 4/u],
-    ["clarify with five choices", { resolution: "clarify", choices: ["A", "B", "C", "D", "E"].map(name => ({ label: name, question: `What is ${name}?` })) }, /2 to 4/u],
+    ["clarify with no choice", { resolution: "clarify", choices: [] }, /needs "choices"/u],
     ["clarify with no label", { resolution: "clarify", choices: [{ label: " ", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /needs a "label"/u],
     ["clarify asking one thing twice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "what is a?" }] }, /different thing/u],
   ])("sends back %s for its one repair", (_name, reply, reason) => {

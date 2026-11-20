@@ -159,30 +159,29 @@ describe("agentic Ask model protocol parity", () => {
     expect(kinds(["which_items"], {})).toEqual(["none", "none"]);
   });
 
-  it("keeps list ids in a need's evidence only for Ask, within the 40-id cap", () => {
+  it("keeps list ids in a need's evidence only for Ask, and every id a need or a sentence names", () => {
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const need = (evidence: readonly string[], options?: Parameters<typeof parseStep>[1]) =>
       parseStep({ parts: [{ question: "q", needs: [{ need: "which pages", status: "found", evidence }], notes: "" }], actions: [{ tool: "finish", args: {} }] }, options).parts[0]!.needs[0]!.evidence;
     // A task goal, and every caller before ADR-0041, drops them; a list id after 40 item ids is never the one cut: research
     // cited the rows, was asked for the list's id, and appended it.
     const mixed = ["L1", "[l2]", " L 3 ", "E4", "4", "L1", "N1", "L0"];
-    expect([need(mixed, { lists: true }), need(mixed), need([...items(1, 39), "L1", "L2"], { lists: true }).length, need([...items(1, 43), "L1"], { lists: true })])
-      .toEqual([["L1", "L2", "L3", "E4"], ["E4"], 40, [...items(1, 39), "L1"]]);
+    expect([need(mixed, { lists: true }), need(mixed), need([...items(1, 39), "L1", "L2"], { lists: true }).length, need([...items(1, 43), "L1"], { lists: true }), need(items(1, 60)).length])
+      .toEqual([["L1", "L2", "L3", "E4"], ["E4"], 41, [...items(1, 43), "L1"], 60]);
     // A sentence's list ids support nothing (W1), so a list id takes no item's slot: its 40 item ids stay wherever its list
     // ids stand, and the list ids beside them, which the writer's repair and the renderer read. A sentence citing more than
     // 40 items is dropped whole, never kept with some of its citations.
     const sentence = (evidence: readonly string[]) => parseBlocksAnswer(writerReply([{ text: "x", evidence }])).sentences[0]?.evidence;
-    for (const [evidence, kept] of [
-      [[...items(1, 41), "L2"], undefined], [[...items(1, 40), "L1"], [...items(1, 40), "L1"]], [["L1", ...items(1, 40)], ["L1", ...items(1, 40)]],
-      [[...items(1, 6), "L1", ...items(7, 35)], undefined], [["L1", "E2"], ["L1", "E2"]],
-    ]) expect(sentence(evidence!)).toEqual(kept);
+    for (const evidence of [
+      [...items(1, 41), "L2"], [...items(1, 40), "L1"], ["L1", ...items(1, 40)], [...items(1, 6), "L1", ...items(7, 35)], ["L1", "E2"],
+    ]) expect(sentence(evidence)).toEqual(evidence);
     // The same twelve items whatever the list ids' positions.
     for (const evidence of [["L1", ...items(9, 11), "E1"], [...items(9, 11), "E1", "L1"], [...items(9, 5), "L1", ...items(14, 6), "E1"]]) {
       expect(sentence(evidence).filter(id => id.startsWith("E"))).toEqual([...items(9, 11), "E1"]);
     }
   });
 
-  it("drops whole a writer's entry citing more items than it may, never keeping some of its citations (ADR-0054)", () => {
+  it("keeps a writer's entry with every item it cites, however many: no count drops it", () => {
     const items = (from: number, count: number) => Array.from({ length: count }, (_, index) => `E${from + index}`);
     const over = items(1, 41);
     // Repeats and ids code cannot read are cleaned first, and list ids take no item's slot: only distinct readable items count.
@@ -196,13 +195,13 @@ describe("agentic Ask model protocol parity", () => {
       { block: "quote", text: "Over quote.", from: "Ana", evidence: over },
     ];
     let parsed: ReturnType<typeof parseBlocksAnswer> | undefined;
-    expect(corrected(() => { parsed = parseBlocksAnswer({ blocks, not_found: [] }); })).toEqual({ model_entry_dropped: 7, model_repeat_dropped: 2 });
-    expect(parsed!.sentences.map(sentence => [sentence.text, sentence.evidence.length])).toEqual([
-      ["Within.", 42], ["Point.", 1], ["Item: Fix; Owner: Ana.", 1], ["2026-10-21: Event.", 1], ["Ticket: THERM-48; Status: Open.", 1],
-    ]);
-    // A since sentence over its bound is dropped whole, and alone: the since list keeps its other sentences.
+    // Only a repeat and an id code cannot read are dropped; every entry stands with all it cites.
+    expect(corrected(() => { parsed = parseBlocksAnswer({ blocks, not_found: [] }); })).toEqual({ model_entry_dropped: 1, model_repeat_dropped: 2 });
+    expect(parsed!.sentences.filter(sentence => sentence.evidence.length >= 41).length).toBe(7);
+    expect(parsed!.sentences.find(sentence => sentence.text === "Within.")!.evidence).toHaveLength(42);
+    // A since sentence citing many items stands beside the others.
     const since = (evidence: readonly string[]) => parseBlocksAnswer({ ...writerReply([{ text: "x", evidence: ["E1"] }]), since: [{ text: "Changed.", evidence }, { text: "Also.", evidence: ["E1"] }] }, { since: true }).since;
-    expect([since(over), since(items(1, 12))?.length]).toEqual([[{ text: "Also.", evidence: ["E1"] }], 2]);
+    expect([since(over)?.map(sentence => sentence.evidence.length), since(items(1, 12))?.length]).toEqual([[41, 1], 2]);
   });
 
   it("preserves every requested member of a which_items need beyond the old evidence and read caps", () => {
@@ -294,7 +293,7 @@ describe("agentic Ask model protocol parity", () => {
     expect((answerBlocksSinceSchema.properties as Record<string, Record<string, unknown>>).since).not.toHaveProperty("maxItems");
   });
 
-  it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, at most 10", () => {
+  it("reads the follow-ups a writer drafts (ADR-0053): a task each, the rest optional, as many as it drafts", () => {
     const reply = writerReply([{ text: "Done.", evidence: ["E1"] }]);
     const read = (follow_ups: unknown) => parseBlocksAnswer({ ...reply, follow_ups });
     // An ordinary reply has none, and says so by leaving the key out.
@@ -303,18 +302,19 @@ describe("agentic Ask model protocol parity", () => {
     expect(read([{ task: "  Call the\nvendor ", owner: " Sam Lee ", due_on: "2026-11-20", about: "E1" }, { task: "Book the room" }]).follow_ups).toEqual([
       { task: "Call the vendor", owner: "Sam Lee", due_on: "2026-11-20", about: "E1" }, { task: "Book the room" },
     ]);
-    // An entry with no task, or no object, says nothing; a field that is not text is left out; past 10 entries are cut.
+    // An entry with no task, or no object, says nothing; a field that is not text is left out; every other entry is kept.
     expect(read([{ task: "" }, "Call Sam", { task: "Chase the quote", owner: 7, due_on: null, about: null }]).follow_ups).toEqual([{ task: "Chase the quote" }]);
     expect(corrected(() => read([{ task: "" }, "Call Sam", { task: "Chase the quote" }]))).toEqual({ model_entry_dropped: 2 });
-    expect(read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))).follow_ups).toHaveLength(10);
-    expect(corrected(() => read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))))).toEqual({ model_items_capped: 2 });
+    expect(read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))).follow_ups).toHaveLength(12);
+    expect(corrected(() => read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))))).toEqual({});
     // A task is kept whole, however long: the follow-up it is saved as stores the writer's whole line.
     expect(read([{ task: "x".repeat(1_300) }]).follow_ups![0]!.task).toHaveLength(1_300);
     expect(corrected(() => read([{ task: "x".repeat(1_300) }]))).toEqual({});
     // Only a writer told to draft follow-ups must give them: its reply shape adds them, [] for none, as an Ask again's adds since.
     for (const [schema, base] of [[answerBlocksFollowUpsSchema, answerBlocksSchema], [answerBlocksSinceFollowUpsSchema, answerBlocksSinceSchema]] as const) {
       expect(schema.required).toEqual([...(base.required as string[]), "follow_ups"]);
-      expect(schema).toMatchObject({ properties: { follow_ups: { maxItems: 10, items: { required: ["task"], properties: { task: { type: "string" }, due_on: { format: "date" } } } } } });
+      expect(schema).toMatchObject({ properties: { follow_ups: { items: { required: ["task"], properties: { task: { type: "string" }, due_on: { format: "date" } } } } } });
+      expect((schema.properties as { follow_ups: object }).follow_ups).not.toHaveProperty("maxItems");
       expect((schema.properties as { follow_ups: { items: { properties: { task: object } } } }).follow_ups.items.properties.task).not.toHaveProperty("maxLength");
     }
     // The prompt shows the key it adds, with an example draft the parser keeps.
@@ -421,8 +421,8 @@ describe("agentic Ask model protocol parity", () => {
       ["a task need's kind, which is never read", needs([content({ need: "A", kind: "Which Items" })]), task, {}],
       ["need ids in other spellings, or unreadable", needs([content({ id: " n2 ", need: "A" }), content({ id: 4, need: "B" }), content({ id: "E5", need: "C" })]), ask, { model_id_respelled: 2, model_entry_dropped: 1 }],
       ["evidence ids respelled, repeated or unreadable", needs([content({ need: "A", evidence: ["e4", "E4", "THERM-48"] })]), ask, { model_id_respelled: 1, model_repeat_dropped: 1, model_entry_dropped: 1 }],
-      ["more evidence ids than a need holds", needs([content({ need: "A", evidence: items(1, 41) })]), ask, { model_items_capped: 1 }],
-      ["more evidence ids than a task need holds", needs([content({ need: "A", evidence: items(1, 41) })]), task, { model_items_capped: 1 }],
+      ["many evidence ids in a need: no cap, nothing to correct", needs([content({ need: "A", evidence: items(1, 41) })]), ask, {}],
+      ["many evidence ids in a task need: no cap, nothing to correct", needs([content({ need: "A", evidence: items(1, 41) })]), task, {}],
       ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
       ["seven needs in a part: no cap, nothing to correct", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, {}],
       ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
@@ -687,10 +687,10 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
     expect(corrected(() => expect(parseBlocksAnswer(reply([null, { block: "chart" }, points(6), points(6)])).sentences).toHaveLength(12))).toEqual({ model_entry_dropped: 2 });
     const many = Array.from({ length: 14 }, () => ({ block: "text", sentences: [{ text: "x", evidence: ["E1"] }] }));
     expect(corrected(() => expect(parseBlocksAnswer(reply(many)).sentences).toHaveLength(14))).toEqual({});
-    // The schema bounds only the answer's sentences, and every text's length.
+    // The schema bounds only the answer's sentences (its one or two sentence lead), and every text's length.
     const variants = (((answerBlocksSchema.properties as Schema).blocks as Schema).items as Schema).anyOf as Schema[];
     const most = (value: Schema): readonly string[] => Object.entries(value).flatMap(([key, child]) => key === "maxItems" ? [String(child)] : child !== null && typeof child === "object" ? most(child as Schema) : []);
-    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2,40", "40", "40", "40", "40", "40", "40", ""]);
+    expect([(answerBlocksSchema.properties as Schema).blocks.maxItems, ...variants.map(variant => most(variant).join(","))]).toEqual([undefined, "2", "", "", "", "", "", "", ""]);
   });
 
   it("bounds each list and text in its reply schemas exactly where the parser cuts it", () => {
@@ -740,12 +740,12 @@ describe("answer layout v2: the writer arranges its answer from the block catalo
         if (node.type === "array") {
           seen.add(name);
           const most = node.maxItems as number | undefined;
-          // Past its bound the answer's sentences read as text; an entry citing more items than its bound is dropped whole,
-          // never kept with some of its citations; every other list is cut at its bound, and the cut counted.
+          // Past its bound the answer's sentences read as text; an entry's evidence is never counted, so no entry is dropped
+          // for it; every other list with a bound is cut there, and the cut counted.
           const drops = (count: number) => "model_entry_dropped" in read(put(path, entries(value[0], count)));
           const kept = name.endsWith("(answer).sentences")
             ? parseBlocksAnswer(put(path, entries(value[0], 64)), { since }).sentences.filter(sentence => sentence.item?.kind === "answer").length === most
-            : name.endsWith(".evidence") ? !drops(most!) && drops(most! + 1) && !caps(path, value[0], most! + 1)
+            : name.endsWith(".evidence") ? most === undefined && !drops(64) && !caps(path, value[0], 64)
             : most === undefined ? !caps(path, value[0], 64) : !caps(path, value[0], most) && caps(path, value[0], most + 1);
           if (!kept) differ.push(`${name}: ${most}`);
           (value as unknown[]).forEach((entry, at) => visit(node.items as Schema, entry, [...path, at], `${name}[]`));

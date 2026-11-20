@@ -8,14 +8,12 @@ import {
   PERSON_ANSWER_EVENT_TEXT_MAX_BYTES_V2,
   PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2,
   PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2,
-  PERSON_ANSWER_FOLLOW_UPS_MAX_V1,
   PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2,
   PERSON_ANSWER_QUOTE_TEXT_MAX_BYTES_V2,
   PERSON_ANSWER_STATEMENT_MAX_BYTES_V4,
   PERSON_ANSWER_WHO_MAX_BYTES_V2,
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
-  PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
   PERSON_ANSWER_CARD_ENTITY_PATTERN_V2,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
@@ -37,8 +35,6 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  */
 /** The most rows a list call with `limit` asks for: one list page, as many as one desk fetch returns. */
 export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
-/** Distinct items one need, or one writer entry, may cite: a statement's own citation bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
-export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
 /** Hits one search returns: the desks' own maximum for one search (records, originals and live sources each return up to 25). */
 export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
 const QUESTION_CHARS = 400;
@@ -139,7 +135,7 @@ const ASK_ACTION_ARGS = {
   list: ["source", "kind", "status", "owner", "role", "channel", "since", "until", "date_field", "limit"],
 } as const satisfies Readonly<Record<StepTool, readonly (keyof StepArgs)[]>>;
 function actionArgs(ask: boolean): Readonly<Record<StepTool, readonly (keyof StepArgs)[]>> { return ask ? ASK_ACTION_ARGS : ACTION_ARGS; }
-const ids = { type: "array", maxItems: AGENTIC_ASK_MAX_EVIDENCE_IDS_V1, items: { type: "string", maxLength: 16 } } as const;
+const ids = { type: "array", items: { type: "string", maxLength: 16 } } as const;
 const selectionIds = { type: "array", items: ids.items } as const;
 const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
 const calendarDateArgument = { type: "string", minLength: 10, maxLength: 10, format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
@@ -288,7 +284,7 @@ export const answerBlocksSinceSchema: StructuredGenerationJsonSchema = withSince
  * The follow-ups a writer drafts (ADR-0053): at most 10, each a task, and optionally the owner's name, the day it is due
  * and the id of the one evidence item it is about.
  */
-const followUpDrafts = { type: "array", maxItems: PERSON_ANSWER_FOLLOW_UPS_MAX_V1, items: {
+const followUpDrafts = { type: "array", items: {
   type: "object", additionalProperties: false, required: ["task"], properties: {
     task: { type: "string" }, owner: { type: "string", maxLength: FOLLOW_UP_OWNER_CHARS }, due_on: eventDate, about: { type: "string", maxLength: 16 },
   },
@@ -366,21 +362,14 @@ export function cleanModelId(value: unknown): string | null {
   if (id !== null && id !== value) observeCoreModelCorrectionV1("model_id_respelled");
   return id;
 }
-/** Raw entries read from one evidence array before the cap. */
-const EVIDENCE_IDS_READ = 64;
 /**
- * A need's evidence ids, each once. Without `lists` (a task's need) the first 12 ids are kept, as before ADR-0041. With
- * `lists` (Ask), list ids such as L1 are read beside item ids from a bounded read, and a list id, which carries meaning
- * there (the finish check reads it), never takes an item's place: past 12 ids every list id stays and item ids fill the
- * rest, in their order. `all` preserves a which_items need's complete selection intent; presentation bounds never trim
- * that member set.
+ * A need's evidence ids, each once, in their order: every id a need names is kept. With `lists` (Ask), list ids such as
+ * L1 are read beside item ids.
  */
-function cleanIds(value: unknown, lists = false, all = false): readonly string[] {
+function cleanIds(value: unknown, lists = false): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  const read = lists && !all ? value.slice(0, EVIDENCE_IDS_READ) : value;
-  if (read.length < value.length) observeCoreModelCorrectionV1("model_items_capped", value.length - read.length);
-  for (const [index, raw] of read.entries()) {
+  for (const raw of value) {
     const id = (lists ? parseAgenticListIdV1(raw) : null) ?? cleanId(raw);
     if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
@@ -388,35 +377,23 @@ function cleanIds(value: unknown, lists = false, all = false): readonly string[]
       result.push(id);
       if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
     }
-    if (!lists && !all && result.length === AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) {
-      if (index + 1 < read.length) observeCoreModelCorrectionV1("model_items_capped", read.length - index - 1);
-      break;
-    }
   }
-  if (all || result.length <= AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return Object.freeze(result);
-  const listIds = result.filter(id => parseAgenticListIdV1(id) !== null).slice(0, AGENTIC_ASK_MAX_EVIDENCE_IDS_V1);
-  let items = AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 - listIds.length;
-  const kept = result.filter(id => listIds.includes(id) || (parseAgenticListIdV1(id) === null && items-- > 0));
-  if (kept.length < result.length) observeCoreModelCorrectionV1("model_items_capped", result.length - kept.length);
-  return Object.freeze(kept);
+  return Object.freeze(result);
 }
 /**
  * The evidence of a writer's sentence, item, row, event, fact, quote or since sentence: its ids, each once, list ids such
  * as L1 beside its item ids. Its list ids support nothing (W1), so a list id is no item and takes no item's slot; the
  * writer's repair reads them, and they bring their lists' private rows into the entry's citations. Repeats and ids code
- * cannot read are dropped first. Null when the entry cites more than 12 distinct items: it is then dropped whole, never
- * kept with some of its citations (ADR-0054).
+ * cannot read are dropped; every other id is kept, however many: a statement cites everything it rests on.
  */
-function writerIds(value: unknown): readonly string[] | null {
+function writerIds(value: unknown): readonly string[] {
   if (!Array.isArray(value)) return Object.freeze([]);
   const result: string[] = [];
-  let items = 0;
   for (const raw of value) {
     const id = parseAgenticListIdV1(raw) ?? cleanId(raw);
     if (id === null) observeCoreModelCorrectionV1("model_entry_dropped");
     else if (result.includes(id)) observeCoreModelCorrectionV1("model_repeat_dropped");
     else {
-      if (parseAgenticListIdV1(id) === null && ++items > AGENTIC_ASK_MAX_EVIDENCE_IDS_V1) return null;
       result.push(id);
       if (id !== raw) observeCoreModelCorrectionV1("model_id_respelled");
     }
@@ -514,7 +491,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
     if (kind !== undefined && entry !== null) respelled(entry.kind, kind);
     result.push(Object.freeze({
       ...(id === undefined ? {} : { id }), need, ...(kind === undefined ? {} : { kind }),
-      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists, kind === "which_items"),
+      status: entry === null ? "open" : needStatus(entry.status), evidence: entry === null ? Object.freeze([]) : cleanIds(entry.evidence, lists),
     }));
   }
   return Object.freeze(result);
@@ -811,14 +788,13 @@ export function parseBlocksAnswer(value: unknown, options: { readonly since?: bo
 }
 
 /**
- * A reply's "follow_ups" (ADR-0053): the first 10 entries with a task, each field one line within its schema bound, a
+ * A reply's "follow_ups" (ADR-0053): every entry with a task, each field one line within its schema bound, a
  * field that is not text left out. Only their shape is read here: the renderer checks each task, owner, day and id.
  */
 function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
   const given: readonly unknown[] = Array.isArray(body.follow_ups) ? body.follow_ups : [];
   const drafts: AnswerFollowUp[] = [];
-  for (const [index, raw] of given.entries()) {
-    if (drafts.length === PERSON_ANSWER_FOLLOW_UPS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped", given.length - index); break; }
+  for (const raw of given) {
     const entry = object(raw);
     // A task of any length: the item it is saved as stores the writer's whole line.
     const task = entry === null ? "" : cleanModelLine(entry.task, Number.POSITIVE_INFINITY);
