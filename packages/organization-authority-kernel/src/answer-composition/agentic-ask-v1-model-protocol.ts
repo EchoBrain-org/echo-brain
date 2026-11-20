@@ -16,7 +16,6 @@ import {
   validatePersonQueryText,
   type PersonAnswerCardEntityV2,
   PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4,
-  PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1,
   PERSON_ANSWER_CARD_ENTITY_PATTERN_V2,
 } from "@echo-brain/organization-api";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
@@ -70,8 +69,7 @@ const EVENT_ACTOR = "the person explicitly recorded as performing or reporting t
 const LABEL_CHARS = PERSON_ANSWER_FACT_LABEL_MAX_BYTES_V2;
 const VALUE_CHARS = PERSON_ANSWER_FACT_VALUE_MAX_BYTES_V2;
 const FROM_CHARS = PERSON_ANSWER_QUOTE_FROM_MAX_BYTES_V2;
-/** A drafted follow-up's task as a follow-up stores what is expected (ADR-0053), and the longest owner name it keeps. */
-export const FOLLOW_UP_TASK_CHARS = PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1.expected_chars;
+/** The longest owner name a drafted follow-up keeps: the open items API's name bound. */
 const FOLLOW_UP_OWNER_CHARS = 200;
 
 /** A model response failed its closed, request-local protocol. */
@@ -295,7 +293,7 @@ export const answerBlocksSinceSchema: StructuredGenerationJsonSchema = withSince
  */
 const followUpDrafts = { type: "array", maxItems: PERSON_ANSWER_FOLLOW_UPS_MAX_V1, items: {
   type: "object", additionalProperties: false, required: ["task"], properties: {
-    task: { type: "string", maxLength: FOLLOW_UP_TASK_CHARS }, owner: { type: "string", maxLength: FOLLOW_UP_OWNER_CHARS }, due_on: eventDate, about: { type: "string", maxLength: 16 },
+    task: { type: "string" }, owner: { type: "string", maxLength: FOLLOW_UP_OWNER_CHARS }, due_on: eventDate, about: { type: "string", maxLength: 16 },
   },
 } } as const;
 /** `schema` with the follow-ups an answer drafts (ADR-0053), which the reply must give, [] when it drafts none. */
@@ -829,7 +827,8 @@ function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
   for (const [index, raw] of given.entries()) {
     if (drafts.length === PERSON_ANSWER_FOLLOW_UPS_MAX_V1) { observeCoreModelCorrectionV1("model_items_capped", given.length - index); break; }
     const entry = object(raw);
-    const task = entry === null ? "" : cleanModelLine(entry.task, FOLLOW_UP_TASK_CHARS);
+    // A task of any length: the item it is saved as stores the writer's whole line.
+    const task = entry === null ? "" : cleanModelLine(entry.task, Number.POSITIVE_INFINITY);
     if (task.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     const field = (value: unknown, maximum: number) => { const line = cleanModelLine(value, maximum); return line.length === 0 ? undefined : line; };
     const [owner, due, about] = [field(entry!.owner, FOLLOW_UP_OWNER_CHARS), field(entry!.due_on, 64), field(entry!.about, 16)];

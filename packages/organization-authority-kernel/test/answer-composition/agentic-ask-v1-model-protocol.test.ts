@@ -308,11 +308,14 @@ describe("agentic Ask model protocol parity", () => {
     expect(corrected(() => read([{ task: "" }, "Call Sam", { task: "Chase the quote" }]))).toEqual({ model_entry_dropped: 2 });
     expect(read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))).follow_ups).toHaveLength(10);
     expect(corrected(() => read(Array.from({ length: 12 }, (_, at) => ({ task: `Task ${at}` }))))).toEqual({ model_items_capped: 2 });
-    expect(read([{ task: "x".repeat(130) }]).follow_ups![0]!.task).toHaveLength(120);
+    // A task is kept whole, however long: the follow-up it is saved as stores the writer's whole line.
+    expect(read([{ task: "x".repeat(1_300) }]).follow_ups![0]!.task).toHaveLength(1_300);
+    expect(corrected(() => read([{ task: "x".repeat(1_300) }]))).toEqual({});
     // Only a writer told to draft follow-ups must give them: its reply shape adds them, [] for none, as an Ask again's adds since.
     for (const [schema, base] of [[answerBlocksFollowUpsSchema, answerBlocksSchema], [answerBlocksSinceFollowUpsSchema, answerBlocksSinceSchema]] as const) {
       expect(schema.required).toEqual([...(base.required as string[]), "follow_ups"]);
-      expect(schema).toMatchObject({ properties: { follow_ups: { maxItems: 10, items: { required: ["task"], properties: { task: { maxLength: 120 }, due_on: { format: "date" } } } } } });
+      expect(schema).toMatchObject({ properties: { follow_ups: { maxItems: 10, items: { required: ["task"], properties: { task: { type: "string" }, due_on: { format: "date" } } } } } });
+      expect((schema.properties as { follow_ups: { items: { properties: { task: object } } } }).follow_ups.items.properties.task).not.toHaveProperty("maxLength");
     }
     // The prompt shows the key it adds, with an example draft the parser keeps.
     const last = ANSWER_FOLLOW_UPS_PROMPT.split("\n").at(-1)!;

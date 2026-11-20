@@ -26,7 +26,6 @@ import {
   cleanId,
   cleanLine,
   cleanModelId,
-  FOLLOW_UP_TASK_CHARS,
   parseBlocksAnswer,
   partQuestion,
   textItem,
@@ -525,7 +524,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           }
           const screened = screen.names(line);
           if (screened) observeCoreModelCorrectionV1("follow_up_task_screened");
-          const task = screened ? screen.scrub(line, FOLLOW_UP_TASK_CHARS) : line;
+          const task = screened ? screen.scrub(line, Number.POSITIVE_INFINITY) : line;
           // A task that was only an outside title says nothing of ECHO's own.
           if (task.length === 0 || /^a cited item[.!]?$/iu.test(task)) { observeCoreModelCorrectionV1("follow_up_dropped"); continue; }
           let owner = draft.owner ?? "";
