@@ -663,10 +663,9 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
   const inlineCard = (attrs: unknown) => ({ type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'inlineCard', attrs }] }] });
   it.each<[string, unknown]>([
     ['non-ADF body', 'not-v3-ADF'],
-    ['unknown body node', { type: 'doc', version: 1, content: [{ type: 'unknown' }] }],
     ['NUL body text', { type: 'doc', version: 1, content: [{ type: 'text', text: '\u0000bad' }] }],
     ...[undefined, null, 'done', 'IN_PROGRESS'].map((state): [string, unknown] => [`checklist completion state ${JSON.stringify(state)}`, checklist(state)]),
-    ...[{}, { url: 7 }, { url: 'https://example.test/\u0000' }, { url: 'https://example.test', data: {} }]
+    ...[{}, { url: 7 }, { url: 'https://example.test/\u0000' }]
       .map((attrs): [string, unknown] => [`inline link card ${JSON.stringify(attrs)}`, inlineCard(attrs)]),
   ])('refuses a malformed %s on open after metadata discovery', async (_name, description) => {
     const f = fixture();
@@ -676,6 +675,27 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(discovered.items[0]).not.toHaveProperty('text');
     await expect(source.open({ item: discovered.items[0]!.id })).rejects.toMatchObject({ code: 'invalid_output' });
     expect(f.releases.map(release => release.operation)).toEqual(['search']);
+  });
+
+  it('opens a ticket with a pasted screenshot or a macro, omitting what it cannot read and saying so', async () => {
+    const f = fixture();
+    f.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Steps to reproduce' }] },
+      { type: 'mediaSingle', content: [{ type: 'media', attrs: { id: 'never-return-media', type: 'file', collection: 'never-return' } }] },
+      { type: 'extension', attrs: { extensionKey: 'never-return-macro', parameters: { secret: 'never-return-parameter' } } },
+      { type: 'unknown' },
+      { type: 'paragraph', content: [{ type: 'inlineCard', attrs: { url: 'https://example.test', data: { name: 'never-return-card' } } }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Crash after login' }] },
+    ] } }));
+    const { source } = await f.make();
+    const opened = await source.open({ item: (await source.search({ query: 'ship' })).items[0]!.id });
+    const text = opened.items[0]!.text!;
+    expect(text).toContain('Steps to reproduce');
+    expect(text).toContain('[Unsupported embedded content omitted.]');
+    expect(text).toContain('Crash after login');
+    expect(text).not.toContain('never-return');
+    expect(opened).toMatchObject({ truncated: false, anchor_truncated: false, notice: 'Some Jira ticket content could not be fully represented as text.' });
+    expect(opened.items[0]!.citation.text_sha256).toBe(digest(text));
   });
 
   it('opens a ticket containing an inline link card without fetching the linked page', async () => {

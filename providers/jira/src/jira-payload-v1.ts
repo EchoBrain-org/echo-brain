@@ -39,6 +39,8 @@ export interface ParsedJiraIssueV1 {
   readonly truncated: boolean;
   /** The released text itself was cut to its bound; a label cut alone leaves the text whole (ADR-0041). */
   readonly text_truncated: boolean;
+  /** Embedded content the text cannot represent (a screenshot, a macro) was omitted with a marker. */
+  readonly incomplete: boolean;
 }
 
 /**
@@ -79,9 +81,17 @@ function issueSummary(fields: Record<string, unknown>): string {
   return fields.summary;
 }
 
-/** An issue's description as text, empty when it has none; embedded content it cannot read is refused. */
-function issueDescription(fields: Record<string, unknown>): string {
-  return fields.description === null ? '' : normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, { unsupported: 'reject' }).text.trim();
+/**
+ * An issue's description as text, empty when it has none. Embedded content it cannot read (a screenshot, a macro) is
+ * omitted with a marker and `incomplete`, and a description past the host-protection bounds Confluence pages use keeps
+ * its start with `cut`: the ticket still opens, and the reader says what it left out.
+ */
+function issueDescription(fields: Record<string, unknown>): { readonly text: string; readonly incomplete: boolean; readonly cut: boolean } {
+  if (fields.description === null) return { text: '', incomplete: false, cut: false };
+  const normalized = normalizeAtlassianDocumentTextV1(fields.description, JIRA_PERSON_PROVIDER_V1, {
+    unsupported: 'omit', oversize: 'cut', maximum_bytes: 512 * 1024, maximum_nodes: 50_000, maximum_depth: 64,
+  });
+  return { text: normalized.text.trim(), incomplete: normalized.incomplete, cut: normalized.cut };
 }
 
 /** An issue's status name, its assignee's display name and its due day, when it has them. */
@@ -114,11 +124,13 @@ export function parseJiraIssueV1(value: unknown, input: { readonly cloudid: stri
   // That means no related context was discoverable, not that no link exists.
   // A field that is present must still have the expected safe array shape.
   const relatedLinks = input.related && fields.issuelinks !== undefined ? relatedIssueIds(fields.issuelinks, id) : Object.freeze({ ids: Object.freeze([]), truncated: false });
-  const content = input.inventory ? undefined : jiraBoundText(`${key}: ${summary}\n\n${issueDescription(fields)}`.trim(), 3072);
+  const description = input.inventory ? undefined : issueDescription(fields);
+  const content = description === undefined ? undefined : jiraBoundText(`${key}: ${summary}\n\n${description.text}`.trim(), 3072);
   const citation: PersonTicketCitationV1 = Object.freeze({ kind: 'ticket', tool_id: 'jira', external_scope_id: input.cloudid,
     ticket_id: id, permalink: `${input.origin}/browse/${key}`, text_sha256: sha256Digest(content?.text ?? '') });
   return Object.freeze({ id, key, project_id: project.id, created_at: created.toISOString(), related_issue_ids: relatedLinks.ids, related_truncated: relatedLinks.truncated,
-    truncated: label.truncated || (content?.truncated ?? false), text_truncated: content?.truncated ?? false,
+    truncated: label.truncated || (content?.truncated ?? false) || (description?.cut ?? false), text_truncated: (content?.truncated ?? false) || (description?.cut ?? false),
+    incomplete: description?.incomplete ?? false,
     value: Object.freeze({ citation, label: label.text, visibility: 'only_me', occurred_at, date_kind: 'created', dates: Object.freeze({ created: created.toISOString(), ...(updated === undefined ? {} : { updated: new Date(updated).toISOString() }), ...(due_at === undefined ? {} : { due: due_at }) }),
       attributes: Object.freeze({ status, ...(owner === undefined ? {} : { owner }), ...(due_at === undefined ? {} : { due_at }) }),
       ...(content === undefined ? {} : { text: content.text }) }) });

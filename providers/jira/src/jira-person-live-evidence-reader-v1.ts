@@ -22,6 +22,8 @@ const REVALIDATION_BATCH_SIZE = 50;
  * 25 still fits the shared 64 KiB result bound, which 50 would not.
  */
 const LIST_MAX_ITEMS = 25;
+/** Said with an open whose ticket text left out embedded content (a screenshot, a macro), as Confluence says it for a page. */
+const INCOMPLETE_NOTICE = 'Some Jira ticket content could not be fully represented as text.';
 /** One-hop expansion is deliberately bounded; deeper traversal requires an explicit existing open. */
 const OPEN_RELATED_MAX_ITEMS = 4;
 
@@ -342,7 +344,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
       // ticket's own text was cut only when its released text was (ADR-0041).
       return Object.freeze({ items: remember([selected, ...visibleRelated]),
         truncated: selected.truncated || selected.related_truncated || visibleRelated.some(item => item.truncated) || visibleRelated.length !== relatedIds.length || relatedIds.length !== selected.related_issue_ids.length,
-        anchor_truncated: selected.text_truncated });
+        anchor_truncated: selected.text_truncated, ...(selected.incomplete ? { notice: INCOMPLETE_NOTICE } : {}) });
     }, signal);
   }
 
