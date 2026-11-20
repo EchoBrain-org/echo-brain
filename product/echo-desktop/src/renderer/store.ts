@@ -3762,8 +3762,8 @@ export function fullTurns(view: AskState): readonly string[] {
 /**
  * Asks, on the timeline (ADR-0047). One question at a time: a second never
  * replaces one on its way. Typed with Ask open, it continues the conversation:
- * it carries the earlier turn opened, or else the latest when it was asked in
- * the last hour (`previous`), unless `how` says how it is asked; Ask again
+ * it carries the earlier turn opened, or else the latest, however long ago
+ * (`previous`), unless `how` says how it is asked; Ask again
  * carries the turn it asks again. Either carries that turn's sentences only
  * once what they cite is known now: a check of the last five minutes, waited
  * for or made while the question shows on its way; none when no check can
@@ -3782,7 +3782,7 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const againOf = how?.againOf;
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
-    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued, Date.now()) : null;
+    : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued) : null;
   const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();

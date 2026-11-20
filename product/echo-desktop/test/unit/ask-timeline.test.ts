@@ -123,12 +123,12 @@ describe('the timeline\'s rules', () => {
     expect(turns.map(each => shownInFull(each, turns, [one!.id]))).toEqual([true, false, true]);
   });
 
-  it('continues the turn opened, or else the latest asked in the last hour, and nothing else', () => {
-    const [old, recent] = [turn('Old?', 2 * DAY, status()), turn('Recent?', 59 * 60_000, status())];
-    expect(followedTurn([old!, recent!], null, NOW.getTime())).toBe(recent);
-    expect(followedTurn([old!, recent!], old!.id, NOW.getTime())).toBe(old);
-    expect(followedTurn([old!, recent!], null, NOW.getTime() + 2 * 60_000)).toBeNull();
-    expect(followedTurn([], null, NOW.getTime())).toBeNull();
+  it('continues the turn opened, or else the latest, however long ago it was asked', () => {
+    const [old, recent] = [turn('Old?', 30 * DAY, status()), turn('Recent?', 2 * DAY, status())];
+    expect(followedTurn([old!, recent!], null)).toBe(recent);
+    expect(followedTurn([old!, recent!], old!.id)).toBe(old);
+    expect(followedTurn([old!], null)).toBe(old);
+    expect(followedTurn([], null)).toBeNull();
   });
 
   it('says when a turn was asked as its row does: the time for today, the day before that, and the year of another year', () => {
@@ -812,7 +812,7 @@ describe('Ask on the timeline', () => {
 });
 
 describe('follow-ups, "Which one?" and Ask again (C3)', () => {
-  it('carries the latest turn asked in the last hour while Ask is open, the turn opened over it, and nothing from a page', async () => {
+  it('carries the latest turn while Ask is open, however long ago it was asked, the turn opened over it, and nothing from a page', async () => {
     const [old, recent] = [turn('Old?', 2 * DAY, status()), turn('Recent?', 30 * 60_000, status())];
     seed(old, recent);
     const store = await startStore();
@@ -830,11 +830,11 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await store.ask('and when is it due?');
     expect(calls('ask.run')[3]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and that one?' });
     expect(store.getState().ask?.opened).toBe(old.id);
-    // The latest asked over an hour ago, nothing opened: asked on its own.
+    // The latest asked hours ago, nothing opened: a question typed with Ask open is still a follow-up of it.
     store.toggleTurn(old.id);
     vi.setSystemTime(NOW.getTime() + 2 * HOUR);
     await store.ask('Something new?');
-    expect(calls('ask.run')[4]).not.toHaveProperty('previous');
+    expect(calls('ask.run')[4]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and when is it due?' });
   });
 
   it('continues a turn chosen from the bar\'s suggestions, the latest included, which stays in full', async () => {
