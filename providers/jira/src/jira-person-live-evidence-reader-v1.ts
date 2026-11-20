@@ -52,8 +52,15 @@ function limit(value: number): number {
   return value;
 }
 
-/** A relaxed retry drops one word at a time; past this many words it would be too broad and too long. */
-const RELAXED_SEARCH_MAX_TERMS = 6;
+/**
+ * A relaxed retry of up to this many words drops one word at a time. Past it, that form would grow with the square of
+ * the words, so a longer query matches any one of its words instead, and the page is ranked by how many it matches.
+ */
+const RELAXED_DROP_ONE_MAX_WORDS = 6;
+/** One search page: a list page's size, which fits the shared 64 KiB result bound. */
+const SEARCH_MAX_ITEMS = 25;
+/** Said with a relaxed search's results, so they never read as matching every word. */
+const RELAXED_NOTICE = 'No Jira ticket matched every word of this search; these tickets match some of them.';
 
 interface SearchTerms {
   /** Distinct literal keywords, compared case-insensitively. */
@@ -67,8 +74,8 @@ interface SearchTerms {
 /** Shared keyword semantics. Never caller-authored JQL or Lucene operators. */
 function searchTerms(query: string): SearchTerms {
   if (typeof query !== 'string' || query.trim() === '' || Buffer.byteLength(query, 'utf8') > 1024 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(query)) jiraFailure('invalid_request');
+  // Any number of words: the 1 KiB query bound protects the JQL, and the relaxed retry keeps a long query from matching nothing.
   const terms = [...new Map(query.trim().split(/\s+/u).map(term => [term.toLowerCase(), term])).values()];
-  if (terms.length > 32) jiraFailure('invalid_request');
   const normalized = terms.map(term => term.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toUpperCase());
   const keyed = normalized.map(term => JIRA_TICKET_KEY.test(term));
   const keys = [...new Set(normalized.filter((_, index) => keyed[index]))];
@@ -77,16 +84,21 @@ function searchTerms(query: string): SearchTerms {
 
 /**
  * Every term as an escaped literal text clause. The relaxed form, for one
- * retry after an empty search, matches all terms but one word: an OR of
- * each word dropped in turn, with every named key kept in every clause, so a
- * key nothing matched never falls out of the search. With two words and no
- * key that is a plain OR; with one word and a key, the key's clause alone.
+ * retry after an empty search, keeps every named key in every clause, so a
+ * key nothing matched never falls out of the search. Up to
+ * RELAXED_DROP_ONE_MAX_WORDS words it matches all terms but one word: an OR of
+ * each word dropped in turn. With two words and no key that is a plain OR;
+ * with one word and a key, the key's clause alone. Past it, it matches any
+ * one word alongside the keys.
  */
 function textJql(terms: readonly string[], keyed: readonly boolean[], relaxed: boolean, projectId?: string): string {
   const clause = (term: string) => `text ~ ${JSON.stringify(`"${term.replace(/[+\-&|!(){}\[\]^"~*?:\\/]/g, '\\$&')}"`)}`;
-  const expression = relaxed
-    ? terms.flatMap((_, dropped) => (keyed[dropped] ? [] : [`(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`])).join(' OR ')
-    : terms.map(clause).join(' AND ');
+  const words = terms.filter((_, index) => !keyed[index]);
+  const keys = terms.filter((_, index) => keyed[index]);
+  const expression = !relaxed ? terms.map(clause).join(' AND ')
+    : words.length <= RELAXED_DROP_ONE_MAX_WORDS
+      ? terms.flatMap((_, dropped) => (keyed[dropped] ? [] : [`(${terms.filter((_, index) => index !== dropped).map(clause).join(' AND ')})`])).join(' OR ')
+      : [...keys.map(clause), `(${words.map(clause).join(' OR ')})`].join(' AND ');
   return `${projectId === undefined ? expression : `project = ${projectId} AND (${expression})`} ORDER BY created DESC, id DESC`;
 }
 
@@ -426,7 +438,7 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
     },
     async search(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {
       validateEvidenceDateFilterV1(input, DATE_SELECTIONS);
-      const maximum = Math.min(limit(input.limit), 5);
+      const maximum = Math.min(limit(input.limit), SEARCH_MAX_ITEMS);
       const { terms, keys, keyed } = searchTerms(input.query);
       const projectId = pinnedProject?.id;
       const named = keys.slice(0, maximum);
@@ -443,15 +455,23 @@ export async function createJiraPersonLiveEvidenceReaderV1(options: {
           return searchPage({ jql, maximum, origin, inventory: true, projectId, signal: input.signal }); };
         const [byKey, firstText] = await Promise.all([keyIssues(named, origin, input.signal), text === undefined ? undefined : textPage(false)]);
         let byText = firstText;
-        // One bounded retry when nothing at all matched every term; only words are dropped.
-        if (byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined &&
-            text!.length >= 2 && words >= 1 && words <= RELAXED_SEARCH_MAX_TERMS) byText = await textPage(true);
+        // One retry when nothing at all matched every term; only words are dropped.
+        const relaxed = byKey.length === 0 && byText !== undefined && byText.selected.length === 0 && byText.token === undefined && text!.length >= 2 && words >= 1;
+        if (relaxed) byText = await textPage(true);
         await verifyConnection(input.signal);
         const seen = new Set(byKey.map(item => item.id));
-        const matches = [...byKey, ...(byText?.selected ?? []).filter(item => !seen.has(item.id))].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
+        let found = (byText?.selected ?? []).filter(item => !seen.has(item.id));
+        if (relaxed) {
+          // A relaxed page is newest first; the tickets whose titles name more of the words come first, ties keeping that order.
+          const lowered = text!.filter((_, index) => !keyed[index]).map(word => word.toLowerCase());
+          const score = (item: ParsedJiraIssueV1) => lowered.filter(word => item.value.label.toLowerCase().includes(word)).length;
+          found = found.map((item, index) => ({ item, index, score: score(item) })).sort((left, right) => right.score - left.score || left.index - right.index).map(entry => entry.item);
+        }
+        const matches = [...byKey, ...found].filter(item => matchesEvidenceDateV1(item.value.dates ?? {}, input, "created"));
         const selected = matches.slice(0, maximum);
         return Object.freeze({ items: remember(selected),
-          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated) });
+          truncated: byText?.token !== undefined || keys.length > named.length || matches.length > selected.length || selected.some(item => item.truncated),
+          ...(relaxed && selected.length > 0 ? { notice: RELAXED_NOTICE } : {}) });
       }, input.signal);
     },
     async open(input): Promise<PersonLiveEvidencePageV1<PersonTicketCitationV1>> {

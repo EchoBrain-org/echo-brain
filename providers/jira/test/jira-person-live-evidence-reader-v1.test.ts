@@ -629,7 +629,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const auditText = JSON.stringify(f.releases);
     for (const hidden of ['Ship connector', 'Launch Friday', 'launch', 'jira_item_', 'never-return', 'emailAddress']) expect(auditText).not.toContain(hidden);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: { issueIdsOrKeys: ['10001'], fields: ['summary', 'project', 'created', 'updated', 'status', 'assignee', 'duedate'] } }));
-    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 5 }) }));
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ fields: ['id'], maxResults: 10 }) }));
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !(request.body?.fields as string[] | undefined)?.includes('description'))).toBe(true);
     expect(f.request.mock.calls.filter(([request]) => request.path.includes('/issue/')).every(([request]) => !request.query?.fields?.includes('description'))).toBe(true);
     const opened = await source.open({ item: item.id });
@@ -838,7 +838,7 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     const f = fixture();
     for (const id of ['10003', '10004', '10005', '10006']) f.state.tickets.set(id, ticket(id));
     const { source } = await f.make();
-    const result = await source.search({ query: 'ECHO-6 ECHO-5 ECHO-4 ECHO-3 ECHO-2 ECHO-1' });
+    const result = await source.search({ query: 'ECHO-6 ECHO-5 ECHO-4 ECHO-3 ECHO-2 ECHO-1', limit: 5 });
     expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10006', '10005', '10004', '10003', '10002']);
     expect(result.truncated).toBe(true);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/issue/bulkfetch`, body: expect.objectContaining({ issueIdsOrKeys: ['ECHO-6', 'ECHO-5', 'ECHO-4', 'ECHO-3', 'ECHO-2'] }) }));
@@ -893,14 +893,54 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     ['one term', 'launch', [page([])]],
     ['a match for every term', 'launch connector', [page(['10001'])]],
     ['a further page of matches', 'launch connector', [page([], 'next')]],
-    ['seven terms', 'one two three four five six seven', [page([])]],
-    ['seven words and a key', 'one two three four five six seven ECHO-404', [page([])]],
     ['no word but keys', 'ECHO-404 (ECHO-404),', [page([])]],
   ] as const)('does not relax a search with %s', async (_label, query, pages) => {
     const f = fixture(); f.state.pages = [...pages];
     const { source } = await f.make();
     await source.search({ query });
     expect(f.jqls()).toHaveLength(1);
+  });
+
+  it('relaxes a long empty search to any one word, keeps named keys, and ranks tickets by how many words their titles name', async () => {
+    const literal = (term: string) => `text ~ "\\"${term}\\""`;
+    const f = fixture();
+    f.state.tickets.set('10002', ticket('10002', 'Q3 AI pricing decision for enterprise renewals'));
+    f.state.tickets.set('10003', ticket('10003', 'Pricing page copy'));
+    f.state.pages = [page([]), page(['10003', '10001', '10002'])];
+    const { source } = await f.make('ECHO');
+    const query = 'decision on Q3 AI pricing for enterprise renewals';
+    const result = await source.search({ query });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(['10002', '10003', '10001']);
+    expect(result.notice).toBe('No Jira ticket matched every word of this search; these tickets match some of them.');
+    const words = query.split(' ');
+    expect(f.jqls()).toEqual([
+      `project = 10000 AND (${words.map(literal).join(' AND ')}) ORDER BY created DESC, id DESC`,
+      `project = 10000 AND ((${words.map(literal).join(' OR ')})) ORDER BY created DESC, id DESC`,
+    ]);
+
+    const keyed = fixture(); keyed.state.pages = [page([]), page([])];
+    const withKey = await keyed.make();
+    await withKey.source.search({ query: 'one two three four five six seven ECHO-404' });
+    expect(keyed.jqls()[1]).toBe(`${literal('ECHO\\\\-404')} AND (${['one', 'two', 'three', 'four', 'five', 'six', 'seven'].map(literal).join(' OR ')}) ORDER BY created DESC, id DESC`);
+  });
+
+  it('accepts a query of any number of words, up to the 1 KiB query bound', async () => {
+    const f = fixture(); f.state.pages = [page(['10001'])];
+    const { source } = await f.make();
+    const query = Array.from({ length: 40 }, (_, index) => `w${index}`).join(' ');
+    expect((await source.search({ query })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
+  });
+
+  it('returns up to 25 search matches and says when more matched', async () => {
+    const f = fixture();
+    const ids = Array.from({ length: 25 }, (_, index) => String(10030 - index));
+    for (const id of ids) f.state.tickets.set(id, ticket(id));
+    f.state.pages = [page(ids, 'next')];
+    const { source } = await f.make();
+    const result = await source.search({ query: 'connector', limit: 50 });
+    expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
+    expect(result.truncated).toBe(true);
+    expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 25 }) }));
   });
 
   it('compiles keyword search as independent terms within the pinned project', async () => {
