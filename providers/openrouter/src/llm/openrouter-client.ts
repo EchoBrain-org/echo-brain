@@ -2,7 +2,9 @@ import { AdapterError } from "@echo-brain/organization-processing/core";
 import { annotateCoreRuntimeV1, observeCoreModelMetadataV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import {
   DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+  ExtractionInputTooLongError,
   invalidProviderResponse,
+  isContextWindowRefusal,
   isRecord,
   nonEmptyString,
   optionalPositiveInteger,
@@ -88,6 +90,12 @@ export class OpenRouterClient implements LlmProviderClient {
       throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
     }
     annotateCoreRuntimeV1({ counts: { http_status: response.status } });
+    // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
+    if (response.status === 400) {
+      let refusal: unknown;
+      try { refusal = JSON.parse(await response.text()) as unknown; } catch { refusal = undefined; }
+      if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
+    }
     // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
     if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
     try {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { OpenRouterClient } from "../../src/llm/openrouter-client.js";
 import {
+  ExtractionInputTooLongError,
   StructuredGenerationAttemptError,
   type StructuredGenerationRequest,
 } from "@echo-brain/organization-processing/llm/llm-provider";
@@ -212,6 +213,29 @@ describe('OpenRouter provider client', () => {
       await expect(refusal).rejects.toMatchObject({ http_status: status, unbilled, ...(status === 402 ? { code: 'temporarily_unavailable', retryable: true } : {}) });
     },
   );
+
+  it.each([
+    "This endpoint's maximum context length is 1000000 tokens. However, you requested about 1200000 tokens.",
+    'prompt is too long: 1200000 tokens > 1000000 maximum',
+  ])('reports a prompt past the model\'s context window as a meeting too long for one call: %s', async (message) => {
+    const refusal = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () => new Response(JSON.stringify({ error: { code: 400, message } }), { status: 400 }),
+    }).generateStructured(generationRequest);
+    await expect(refusal).rejects.toBeInstanceOf(ExtractionInputTooLongError);
+    await expect(refusal).rejects.toMatchObject({ code: 'permanently_rejected', retryable: false, unbilled: true });
+  });
+
+  it('keeps any other 400 an ordinary refusal', async () => {
+    const refusal = new OpenRouterClient({
+      credentialRef: 'env:OPENROUTER_API_KEY',
+      credentialResolver: () => 'openrouter-secret',
+      fetchImpl: async () => new Response(JSON.stringify({ error: { code: 400, message: 'invalid schema' } }), { status: 400 }),
+    }).generateStructured(generationRequest);
+    await expect(refusal).rejects.not.toBeInstanceOf(ExtractionInputTooLongError);
+    await expect(refusal).rejects.toMatchObject({ http_status: 400, unbilled: false });
+  });
 
   it('treats HTTP 200 provider errors as failures', async () => {
     await expect(

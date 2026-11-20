@@ -10,6 +10,12 @@ export const OPENROUTER_DECISION_PROCESSOR_MODEL_V1 = "anthropic/claude-sonnet-4
  * structured-generation adapter records). Both fixed processors run a Sonnet model.
  */
 export const DECISION_PROCESSOR_MAX_OUTPUT_TOKENS_V1 = 64_000;
+/**
+ * The extraction model's own context window: Claude Sonnet 4.6 (OpenRouter) and Claude Sonnet 5.5 (Claude account)
+ * both read 1,000,000 tokens (Anthropic's model table). A meeting is too long for one extraction call only when its
+ * prompt and this processor's output allowance together pass this window; the provider's own refusal decides it.
+ */
+export const DECISION_PROCESSOR_CONTEXT_TOKENS_V1 = 1_000_000;
 
 export function fixedOpenRouterDecisionProcessorConfigV1(
   instanceId: string,

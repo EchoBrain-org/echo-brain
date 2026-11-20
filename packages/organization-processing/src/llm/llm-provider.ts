@@ -132,6 +132,28 @@ export function providerStatusError(
   return new ProviderStatusError(provider, status, unbilled);
 }
 
+/**
+ * The provider refused the prompt because it, with the output allowance, passes the model's own context window: the
+ * meeting is too long for one extraction call. Nothing was generated, so it is unbilled; the same prompt would be
+ * refused again, so it is never retried. The window is the provider's, never an ECHO estimate.
+ */
+export class ExtractionInputTooLongError extends AdapterError {
+  constructor(provider: string) {
+    super('permanently_rejected', `${provider} refused the meeting: it is longer than the model's context window`, false, { unbilled: true });
+  }
+}
+
+/** A provider's own words for a prompt past the model's context window (OpenRouter, and Anthropic through it). */
+const CONTEXT_WINDOW_REFUSAL = /maximum context length|context length exceeded|prompt is too long|context window/iu;
+
+/** True when a 400 reply's error message says the prompt is past the model's context window. */
+export function isContextWindowRefusal(status: number, body: unknown): boolean {
+  if (status !== 400 || !isRecord(body)) return false;
+  const error = body['error'];
+  const message = isRecord(error) ? error['message'] : undefined;
+  return typeof message === 'string' && CONTEXT_WINDOW_REFUSAL.test(message);
+}
+
 export function invalidProviderResponse(
   provider: string,
   detail: string,

@@ -2388,7 +2388,7 @@ CREATE TABLE authority_live_source_held_extractions_v1 (
     'evidence_id', 'evidence_duplicate', 'evidence_quote', 'due_before_meeting', 'decided_question_only', 'rationale_supports',
     'schema_top_level', 'schema_signal_fields', 'schema_kind', 'schema_text', 'schema_status', 'schema_due_at',
     'schema_confidence', 'schema_supports', 'schema_evidence_shape', 'schema_evidence_item', 'schema_irrelevant_fields', 'schema_owner',
-    'output_json', 'output_contract', 'output_too_long',
+    'output_json', 'output_contract', 'output_too_long', 'input_too_long',
     'invalid_config', 'unauthorized', 'rate_limited', 'temporarily_unavailable', 'permanently_rejected', 'timeout',
     'unknown_outcome', 'invalid_output', 'cancelled', 'unknown',
     'interrupted', 'output_not_saved', 'not_recorded'
