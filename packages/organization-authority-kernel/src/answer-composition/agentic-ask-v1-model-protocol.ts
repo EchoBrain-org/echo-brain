@@ -35,9 +35,6 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  * prompt can correct it before a tool runs. Each normalization is counted by
  * name (observeCoreModelCorrectionV1), never with the text it changed.
  */
-export const AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1 = 4;
-/** Ask looks at several sources at once (research tool contract v1); a task goal keeps four. */
-export const AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 = 20;
 /** The most rows a list call with `limit` asks for: one list page, as many as one desk fetch returns. */
 export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
 /** Distinct items one need, or one writer entry, may cite: a statement's own citation bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
@@ -209,7 +206,7 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
         notes: { type: "string", maxLength: NOTES_CHARS },
       },
     } },
-    actions: { type: "array", minItems: 1, maxItems: ask ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1, items: {
+    actions: { type: "array", minItems: 1, items: {
       anyOf: Object.entries(actionArgs(ask)).filter(([name]) => (name !== 'open' || openIds?.length !== 0) && (name !== 'finish' || finishAvailable) && (name !== 'list' || listAvailable)).map(([name, names]) => ({
         type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
           tool: closedString([name]),
@@ -541,17 +538,13 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
     parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, NOTES_CHARS) }));
   }
   const actions: StepAction[] = [];
-  const most = options.lists === true ? AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 : AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
-  for (const [index, raw] of body.actions.entries()) {
+  // A step may make as many reads as it needs; each is a read the person could make.
+  for (const raw of body.actions) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"actions\" must be an object with tool and args");
     const name = tool(entry.tool);
     if (name === null) throw new AgenticAskOutputErrorV1(`unknown tool ${JSON.stringify(String(entry.tool).slice(0, 32))}; use search, open, list, or finish`);
     actions.push(Object.freeze({ tool: name, args: args(name, entry, options.lists === true) }));
-    if (actions.length === most) {
-      if (index + 1 < body.actions.length) observeCoreModelCorrectionV1("model_items_capped", body.actions.length - index - 1);
-      break;
-    }
   }
   return Object.freeze({ parts: Object.freeze(parts), actions: Object.freeze(actions) });
 }
@@ -915,7 +908,7 @@ const NEED_FIELDS = "A need's \"id\" is its id from plan; leave it out in step 1
  * it names no list tool, no inventory rule and no way to browse a source. Ask has its own (askStepPrompt).
  */
 function stepPrompt(list: boolean): string { return [
-  `You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose up to 4 actions; the system runs them and shows you the results at the next step. Each step shows opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, ${list ? "inventories, " : ""}last_results (what your last actions returned, by item id) and searches_done.`,
+  `You are Echo's research agent. A person asked a question about their organization's work. The supplied source_catalog describes the sources they can read and which connected tools provide them. You work in steps: each step you update your plan and notes and choose the actions it needs; the system runs them and shows you the results at the next step. Each step shows opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, ${list ? "inventories, " : ""}last_results (what your last actions returned, by item id) and searches_done.`,
   "",
   "How to work:",
   `1. In step 1, split the question into ${PARTS_AND_NEEDS}`,
@@ -1001,7 +994,7 @@ export const SEARCH_ONLY_STEP_PROMPT = stepPrompt(false);
 export const ASK_STEP_PROMPT = askStepPrompt();
 
 function askStepPrompt(): string { return [
-  `You are Echo's research agent. A person asked a question about their organization's work. You can see what they can see in ECHO and in the tools they connected, through three tools: search, list and open. You work in steps: each step you update your plan and notes and choose up to ${AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1} actions, which the system runs together and shows you at the next step. Each step shows source_catalog (the map: every source you can read, what it holds and what it can do), opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, lists, last_results (what your last actions returned, by id) and searches_done.`,
+  `You are Echo's research agent. A person asked a question about their organization's work. You can see what they can see in ECHO and in the tools they connected, through three tools: search, list and open. You work in steps: each step you update your plan and notes and choose the actions it needs, which the system runs together and shows you at the next step. Each step shows source_catalog (the map: every source you can read, what it holds and what it can do), opened (items you opened, in full) and seen (every other item found so far, with its details and any text or preview), then your plan, lists, last_results (what your last actions returned, by id) and searches_done.`,
   "",
   "How to look, as a person would:",
   `1. Understand the question. In step 1, split it into ${PARTS_AND_NEEDS} Work out the time window, the people (asked_by for \"I\" and \"my\"), the projects and the named items the question means.`,

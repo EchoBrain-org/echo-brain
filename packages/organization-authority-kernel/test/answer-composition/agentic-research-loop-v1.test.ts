@@ -653,10 +653,10 @@ describe("research loop: need ids", () => {
 describe("research loop: no read budget", () => {
   it("runs every read of a wide step: the audit row has no receipt bound", async () => {
     const search = vi.fn(async (input: { readonly query?: string }) => result(Array.from({ length: 60 }, (_value, index) => record(`hit-${input.query ?? ""}-${index}`))));
-    const words = ["alpha", "bravo", "charlie", "delta"];
+    const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"];
     const h = harness([reads("open", words.map(word => ({ tool: "search", args: { query: `${word} design` } }))), affects("not_found")], { search });
     await h.research.research({ trigger: "approved_record", brief: brief("Find what changed.", []) }).catch(() => undefined);
-    expect(search).toHaveBeenCalledTimes(4);
+    expect(search).toHaveBeenCalledTimes(10);
     expect((JSON.parse(h.inputs[1]!.user_prompt).last_results as { readonly error?: string }[]).filter(value => value.error !== undefined)).toEqual([]);
   });
 });

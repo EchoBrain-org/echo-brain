@@ -125,14 +125,14 @@ describe('Ask research tool contract v1', () => {
     expect(answer.parts[0]!.gap).toBe('None of the items that record the date asked for matched. 3 decisions have no recorded time, so they were not checked against these dates. They have an approval date.');
   });
 
-  it('lets one Ask step look at up to twenty sources and queries at once', async () => {
+  it('lets one Ask step look at as many sources and queries at once as it needs', async () => {
     const port = desk();
-    const queries = Array.from({ length: 20 }, (_, index) => ({ tool: 'search', args: { query: `topic ${index + 1}` } }));
+    const queries = Array.from({ length: 45 }, (_, index) => ({ tool: 'search', args: { query: `topic ${index + 1}` } }));
     const run = scripted([step(queries), step([{ tool: 'finish', args: {} }], 'not_found')]);
     await ask(port, run.model).answer({ question }).catch(() => undefined);
-    expect(port.search).toHaveBeenCalledTimes(20);
-    const schema = run.steps()[0]!.schema as { properties: { actions: { maxItems: number } } };
-    expect(schema.properties.actions.maxItems).toBe(20);
+    expect(port.search).toHaveBeenCalledTimes(45);
+    const schema = run.steps()[0]!.schema as { properties: { actions: Record<string, unknown> } };
+    expect(schema.properties.actions).not.toHaveProperty('maxItems');
   });
 
   it('answers V8 with a cited project and its leads, and streams progress V3 that names the projects source', async () => {

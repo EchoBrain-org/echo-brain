@@ -18,7 +18,6 @@ import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_LIMIT_MAX_V1,
   AGENTIC_ASK_SEARCH_LIMIT_V1,
-  AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1,
   AgenticAskOutputErrorV1,
   cleanId,
   cleanLine,
@@ -98,8 +97,11 @@ const OPEN_NEIGHBOURS = 2;
 const OPEN_BYTES = 96 * 1024;
 /** The SDK hands a tool result over 50,000 characters to the model only as a file it cannot open. */
 const DRIVEN_RESULT_CHARS = 45_000;
-/** Starting reads in flight at once: as many as one planner step's reads, so a brief of many starting items never floods a source. */
-const STARTING_READS_AT_ONCE = AGENTIC_ASK_MAX_ACTIONS_PER_STEP_V1;
+/**
+ * Starting reads in flight at once, so a brief of many starting items never floods a source with parallel requests (a
+ * provider's rate limit): a concurrency bound, not a count; every starting item is read.
+ */
+const STARTING_READS_AT_ONCE = 4;
 const MAX_SEEN_ENTRIES = 300;
 /** What a search-only brief's planner is told when it proposes list. */
 const LIST_UNAVAILABLE = "list is unavailable in this run; use search and open";

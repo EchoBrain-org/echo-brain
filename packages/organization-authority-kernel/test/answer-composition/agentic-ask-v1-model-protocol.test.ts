@@ -426,8 +426,8 @@ describe("agentic Ask model protocol parity", () => {
       ["a blank or repeated need", needs([content({ need: " " }), content({ need: "A" }), content({ need: "a" })]), ask, { model_entry_dropped: 1, model_repeat_dropped: 1 }],
       ["seven needs in a part: no cap, nothing to correct", needs(Array.from({ length: 7 }, (_, index) => content({ need: `need ${index}` }))), ask, {}],
       ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
-      ["more actions than an Ask step runs", actions(Array.from({ length: 21 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, { model_items_capped: 1 }],
-      ["more actions than a task step runs", actions(Array.from({ length: 5 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, { model_items_capped: 1 }],
+      ["many actions in an Ask step: no cap, nothing to correct", actions(Array.from({ length: 30 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, {}],
+      ["many actions in a task step: no cap, nothing to correct", actions(Array.from({ length: 12 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, {}],
       ["text past its cap", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 4 }],
       ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
     ] as const)("in a step: %s", (_name, value, options, expected) => {

@@ -54,7 +54,8 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(unsupportedBounds(sentSchema(body))).toEqual([]);
     expect(body.response_format).toMatchObject({ type: 'json_schema', json_schema: { strict: true } });
     expect(sentSchema(body)).toMatchObject({ type: 'object', additionalProperties: false, required: schema.required });
-    expect(JSON.stringify(sentSchema(body))).toContain('maxItems'); // Bounds survive as descriptions.
+    // Any bound the schema still states survives as a description.
+    if (/"(maxItems|maxLength|maximum)"/u.test(before)) expect(JSON.stringify(sentSchema(body))).toContain('Constraints');
     expect(JSON.stringify(schema)).toBe(before);
   });
 
@@ -97,8 +98,8 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     expect(body.max_tokens).toBe(allowance);
   });
 
-  it('keeps local action bounds, and sends the model\'s own maximum output whole', async () => {
-    expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 5 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(4);
+  it('keeps every action a step asks for, and sends the model\'s own maximum output whole', async () => {
+    expect(parseStep({ parts: [{ question: 'fixture', needs: [], notes: '' }], actions: Array.from({ length: 12 }, () => ({ tool: 'search', args: { query: 'fixture' } })) }).actions).toHaveLength(12);
     // The generation profile states the model's own maximum (128,000 for Sonnet 5.5); the adapter has no ceiling of its own.
     expect((await wireRequest(answerBlocksSchema, 'anthropic/claude-sonnet-5.5', 128_000)).max_tokens).toBe(128_000);
   });
