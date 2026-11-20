@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  PERSON_QUESTION_MAX_CODE_POINTS_V1,
+  PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
+  PERSON_QUERY_INPUT_MESSAGES_V1,
   PersonQueryInputError,
   personQuestionToSend,
   validatePersonAnswerRequestV3,
@@ -34,16 +35,20 @@ describe('Agentic Ask V1 public contracts', () => {
     expect(() => validatePersonQueryText(question)).toThrow(PersonQueryInputError);
   });
 
-  it('bounds a question at 4,000 code points, and names the rule each refusal breaks', () => {
-    expect(PERSON_QUESTION_MAX_CODE_POINTS_V1).toBe(4_000);
-    expect(validatePersonQuestionText('😀'.repeat(4_000))).toHaveLength(8_000);
+  it('has no question length of its own: the Ask request body bound is the only limit, and each refusal names its rule', () => {
+    // 10,000 code points (40,000 UTF-8 bytes) is a question; it fits the 64 KiB Ask request body.
+    expect(validatePersonQuestionText('😀'.repeat(10_000))).toHaveLength(20_000);
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, question: '😀'.repeat(10_000) }).question).toHaveLength(20_000);
+    // Past the body bound, the request says so.
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'a'.repeat(PERSON_ANSWER_REQUEST_MAX_BYTES_V3) }))
+      .toThrow('Ask request exceeds JSON byte bound');
     expect(validatePersonQuestionText('Who owns it?\tAnd\r\nwhen?')).toBe('Who owns it?\tAnd\r\nwhen?');
     // A symbol is a question: there is no term rule.
     expect(validatePersonQuestionText('?')).toBe('?');
     for (const [value, code] of [
       ['', 'question_empty'], [' \n ', 'question_empty'], [42, 'question_empty'], ['e\u0301', 'question_normalization'], [' Who owns it?', 'question_whitespace'],
       ['Who owns it?\n', 'question_whitespace'], ['Who\u0000 owns it?', 'question_controls'], ['Who\u007f owns it?', 'question_controls'],
-      ['Who \ud800owns it?', 'question_controls'], ['😀'.repeat(4_001), 'question_too_long'],
+      ['Who \ud800owns it?', 'question_controls'],
     ] as const) {
       let caught: unknown;
       try { validatePersonQuestionText(value); } catch (error) { caught = error; }

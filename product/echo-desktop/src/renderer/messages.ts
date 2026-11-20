@@ -41,7 +41,8 @@ const MESSAGES: Record<string, string> = {
   question_normalization: 'That question has characters ECHO cannot read. Retype it and ask again.',
   question_whitespace: 'Remove the spaces or line breaks at the start or end of the question.',
   question_controls: 'That question has hidden control characters. Retype it and ask again.',
-  question_too_long: 'That question is over 4,000 characters. Shorten it and ask again.',
+  // A request past its transport bound (the Ask's 64 KiB request body): the only limit on a question's length.
+  request_too_large: 'That is more than ECHO can send in one request. Shorten it and try again.',
   // The keyword search rule (record search).
   query_empty: 'Type something to search for.',
   query_normalization: 'That search has characters ECHO cannot read. Retype it and try again.',

@@ -272,10 +272,6 @@ button.account-row:hover { background: var(--raise); }
 .match-row svg { flex-shrink: 0; color: var(--muted); }
 .match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-row.suggestion.active { background: var(--selected); }
-/* The bar counts from 200 characters; at its limit the count turns and a line under the bar says why it stops. */
-.bar-count { flex-shrink: 0; padding: 0 4px; font-family: var(--mono); font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.bar-count.full { color: var(--signal-text); }
-.bar-note { position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%); font-size: 12px; line-height: 18px; color: var(--signal-text); white-space: nowrap; }
 
 /* Ask: the thread of its place, newest at the bottom (ADR-0047, ADR-0049). The latest turn and those asked since Ask opened
    are in full; every earlier one is a line that opens it. No borders between turns: space alone sets them apart. */

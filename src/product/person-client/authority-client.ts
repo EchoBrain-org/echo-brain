@@ -498,10 +498,16 @@ interface JsonRequest {
   readonly maximum_request_bytes?: number;
 }
 
+/** A request past its transport bound: not sent. */
+function requestTooLarge(): PersonAuthorityClientError {
+  return new PersonAuthorityClientError("request_too_large", null, "Person Authority request exceeds its body bound", { unsent: true });
+}
+
 /** A bodied request's validated canonical JSON, within its bound. */
 function requestBody(input: Pick<JsonRequest, 'body' | 'validate_request' | 'maximum_request_bytes'>): string {
   const body = canonicalJson(input.validate_request(input.body));
-  if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) throw new Error("Person Authority request exceeds its body bound");
+  // The request's transport bound, the Authority's own: past it the request is never sent, and says why.
+  if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) throw requestTooLarge();
   return body;
 }
 
@@ -596,7 +602,7 @@ export class PersonAuthorityClient {
   }): Promise<T> {
     const body = input.body === undefined ? undefined : canonicalJson(input.body);
     if (body !== undefined && Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new PersonAuthorityClientError('invalid_request', null, 'Person Authority request exceeds its body bound');
+      throw requestTooLarge();
     }
     let status: number | null = null;
     try {

@@ -67,8 +67,14 @@ describe("Agentic Ask HTTP capability gate", () => {
       const previous = { purpose: 'follow_up', question: long, asked_at: '2026-11-19T17:05:00.000Z', statements: [], citations: [] };
       expect(Buffer.byteLength(JSON.stringify({ schema_version: 3, question: long, previous }))).toBeGreaterThan(16 * 1024);
       expect((await post({ schema_version: 3, question: long, previous })).status).toBe(404);
+      // A question has no length of its own: 10,000 code points is asked.
+      const longer = '😀'.repeat(10_000);
+      expect((await post({ schema_version: 3, question: longer })).status).toBe(404);
+      // Past the server's 64 KiB body, the body bound refuses it and says so.
+      const over = await post({ schema_version: 3, question: 'x'.repeat(64 * 1024) });
+      expect(over.status).toBe(400);
+      await expect(over.json()).resolves.toEqual({ error: { code: 'invalid_request', message: 'request body is too large' } });
       for (const [refused, code, message] of [
-        [`${long}?`, 'question_too_long', 'Shorten the question to at most 4,000 characters.'],
         [' What changed?', 'question_whitespace', 'Remove spaces and line breaks from the start and end of the question.'],
         ['What\u0000 changed?', 'question_controls', 'Remove control characters from the question; line breaks and tabs are fine.'],
       ] as const) {
@@ -76,7 +82,7 @@ describe("Agentic Ask HTTP capability gate", () => {
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({ error: { code, message } });
       }
-      expect(ask).toHaveBeenCalledTimes(2);
+      expect(ask).toHaveBeenCalledTimes(3);
     } finally { await value.close(); }
   });
 

@@ -455,8 +455,10 @@ function singletonHeaders(
 }
 
 async function body(request: IncomingMessage): Promise<unknown> {
+  // A body past the transport bound keeps rawBody's own reason; only one that is not JSON is "invalid".
+  const raw = await rawBody(request);
   try {
-    return JSON.parse((await rawBody(request)).toString("utf8")) as unknown;
+    return JSON.parse(raw.toString("utf8")) as unknown;
   } catch {
     throw new AuthorityOperationError(
       "invalid_request",

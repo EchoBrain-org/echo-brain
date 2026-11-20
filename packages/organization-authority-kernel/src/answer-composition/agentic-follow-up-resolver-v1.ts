@@ -3,7 +3,6 @@ import {
   PERSON_ANSWER_CHOICES_MAX_V1,
   PERSON_ANSWER_CHOICES_MIN_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
-  PERSON_QUESTION_MAX_CODE_POINTS_V1,
   PersonQueryInputError,
   validatePersonAnswerResponseV8,
   validatePersonQuestionText,
@@ -50,8 +49,6 @@ import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from ".
 const RESOLVE_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_resolve" });
 /** One resolver call's time at most, so research keeps the rest. */
 const RESOLVE_TIMEOUT_MS = 15_000;
-/** The Ask question rule's bound (validatePersonQuestionText): a resolved or offered question is asked as it is. */
-const QUESTION_CHARS = PERSON_QUESTION_MAX_CODE_POINTS_V1;
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
 const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
@@ -99,11 +96,11 @@ export const FOLLOW_UP_RESOLVER_PROMPT = [
 export const followUpResolutionSchema: StructuredGenerationJsonSchema = Object.freeze({
   type: "object", additionalProperties: false, required: ["resolution"], properties: {
     resolution: { type: "string", enum: [...RESOLUTIONS] },
-    question: { type: "string", maxLength: QUESTION_CHARS },
+    question: { type: "string" },
     about: { type: "array", maxItems: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, items: { type: "integer" } },
     choices: { type: "array", maxItems: PERSON_ANSWER_CHOICES_MAX_V1, items: {
       type: "object", additionalProperties: false, required: ["label", "question"], properties: {
-        label: { type: "string", maxLength: PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 }, question: { type: "string", maxLength: QUESTION_CHARS },
+        label: { type: "string", maxLength: PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 }, question: { type: "string" },
       },
     } },
   },

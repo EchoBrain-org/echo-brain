@@ -931,14 +931,20 @@ describe("Person client", () => {
       const long = "😀".repeat(4_000);
       await client.askWithLiveSources(long, undefined, undefined, { purpose: "follow_up", question: long, asked_at: "2026-11-19T17:05:00.000Z", statements: [], citations: [] });
       expect(sent).toHaveLength(3);
+      // A question has no length of its own: 10,000 code points is sent.
+      await client.askWithLiveSources("😀".repeat(10_000));
+      expect(sent).toHaveLength(4);
+      // Past the 64 KiB request body, the transport bound, it is not sent and says why.
+      await expect(client.askWithLiveSources("x".repeat(64 * 1024))).rejects.toMatchObject({ code: "request_too_large", unsent: true });
+      expect(sent).toHaveLength(4);
     });
   });
 
   it("names the question rule an Authority refusal broke, by its code, and never shows the Authority's text", async () => {
     await withHome(async (home) => {
-      const client = await signedInClient(home, async () => json({ error: { code: "question_too_long", message: "private diagnostic" } }, 400));
-      await expect(client.askWithLiveSources("x".repeat(4_001))).rejects.toMatchObject({
-        code: "question_too_long", status: 400, message: "Shorten the question to at most 4,000 characters.",
+      const client = await signedInClient(home, async () => json({ error: { code: "question_controls", message: "private diagnostic" } }, 400));
+      await expect(client.askWithLiveSources("Who\u0007 owns it?")).rejects.toMatchObject({
+        code: "question_controls", status: 400, message: "Remove control characters from the question; line breaks and tabs are fine.",
       });
     });
   });

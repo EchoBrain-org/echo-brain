@@ -87,6 +87,10 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     const long = "é".repeat(33);
     expect(parseFollowUpResolutionV1({ resolution: "clarify", choices: [{ label: "A", question: long }, { label: "B", question }] }, 0))
       .toMatchObject({ choices: [{ question: long }, { question }] });
+    // No length of its own, in the parser or the schema the model is given.
+    const huge = `What ${"x".repeat(10_000)}?`;
+    expect(parseFollowUpResolutionV1({ ...RESOLVED, question: huge }, 2)).toEqual({ resolution: "resolved", question: huge, about: [0] });
+    expect(JSON.stringify(followUpResolutionSchema)).not.toMatch(/"question":\{"type":"string","maxLength"/u);
   });
 
   it("normalizes only what cannot change the meaning: a resolution's spelling, a source as a string, a repeated source, a long label", async () => {
@@ -105,7 +109,6 @@ describe("follow-up resolution: reading a reply (ADR-0047)", () => {
     ["same with choices", { resolution: "same", choices: [{ label: "A", question: "What is A?" }] }, /offers no choices/u],
     ["resolved with choices", { ...RESOLVED, choices: [{ label: "A", question: "What is A?" }, { label: "B", question: "What is B?" }] }, /offers no choices/u],
     ["resolved with no question", { resolution: "resolved", about: [1] }, /full question/u],
-    ["resolved with a question too long", { ...RESOLVED, question: `What ${"x".repeat(4_000)}?` }, /"question": Shorten the question to at most 4,000 characters/u],
     ["resolved about a source not shown", { ...RESOLVED, about: [3] }, /from 1 to 2/u],
     ["resolved about no list", { ...RESOLVED, about: 1 }, /list of source numbers/u],
     ["clarify with one choice", { resolution: "clarify", choices: [{ label: "A", question: "What is A?" }] }, /2 to 4/u],
