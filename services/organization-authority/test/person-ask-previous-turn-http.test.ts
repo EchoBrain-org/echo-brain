@@ -226,6 +226,16 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     expect(run.seen()).toContain(EARLIER);
   });
 
+  it('carries no sentence that rests on no citation, with a check or without one', async () => {
+    const f = await sentFixture();
+    const bare = { ...previousOf(f), statements: [{ text: 'Uncited: the roster is Mina and Rafael.', citation_indexes: [] }, { text: ROSTER, citation_indexes: [0] }] };
+    for (const check of [checkOf(f), undefined]) {
+      const kept = await readablePreviousV1(bare, { access_token: 'mina', check });
+      expect(kept.statements.map(statement => statement.text)).not.toContain('Uncited: the roster is Mina and Rafael.');
+    }
+    expect((await readablePreviousV1(bare, { access_token: 'mina', check: checkOf(f) })).statements.map(statement => statement.text)).toEqual([ROSTER]);
+  });
+
   it('answers an unknown project and one the asker is not a member of identically', async () => {
     const f = await sentFixture();
     const check = checkOf(f);

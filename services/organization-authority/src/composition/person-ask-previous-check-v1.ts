@@ -14,7 +14,7 @@ import type { PersonAskCheckHttpApplicationV1 } from '../presentation/person-ask
  * the send, and a retry can send a turn built long before, so the Authority decides.
  *
  * Each citation goes through the Ask source check (`ask.check`), with its per-kind readability rules, for the caller, at
- * once. A sentence stays only when every citation it rests on answered `same`: one `unreadable`, `unknown`, of a kind the
+ * once. A sentence stays only when it rests on at least one citation and every one answered `same`: one `unreadable`, `unknown`, of a kind the
  * check does not read (a person, a tool, a tool container), or with no answer at all, leaves the sentence out, and a
  * citation no sentence that stays rests on leaves with it (its label included). The kept citations are renumbered in the
  * order first cited. The question is the person's own words and stays, as do the purpose and when it was asked. Without a
@@ -35,7 +35,8 @@ export async function readablePreviousV1(previous: PersonAnswerPreviousV1, input
     checkable.forEach((at, place) => { const state = answered.items[place]?.state; if (state !== undefined) states.set(at, state); });
   }
   const readable = (at: number) => states.get(at) === 'same';
-  const kept = previous.statements.filter(statement => statement.citation_indexes.every(readable));
+  // A sentence that rests on no citation has nothing a check could vouch for, so it is never known readable.
+  const kept = previous.statements.filter(statement => statement.citation_indexes.length > 0 && statement.citation_indexes.every(readable));
   const order: number[] = [];
   const statements = kept.map(statement => Object.freeze({
     text: statement.text,
