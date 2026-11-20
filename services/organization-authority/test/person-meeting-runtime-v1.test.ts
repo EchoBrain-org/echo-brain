@@ -28,7 +28,7 @@ import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-gran
 import { GranolaWatchSourceV1, readGranolaCheckpointV1, writeGranolaCheckpointV1, GRANOLA_WATCH_CURSOR_POLICY_V1, GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 } from '@echo-brain/provider-granola/granola-watch-source-v1';
 import { SqliteExtractionAttemptStoreV1 } from '@echo-brain/organization-processing/adapters/persistence/sqlite-extraction-attempt-store-v1';
 import { AdapterError } from '@echo-brain/organization-processing/core/contracts/adapter';
-import { providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
+import { ExtractionInputTooLongError, providerStatusError } from '@echo-brain/organization-processing/llm/llm-provider';
 import { LlmDecisionProcessor } from '@echo-brain/organization-processing/llm/llm-decision-processor';
 import type { DecisionProcessorBundleV1 } from '@echo-brain/organization-processing/ports/decision-processor-bundle-v1';
 import { createLangSmithRuntimeV1 } from '../src/composition/observability/langsmith-runtime-v1.js';
@@ -929,6 +929,19 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(f.held()).toEqual(failsAgain ? [expect.objectContaining({ external_id: id, failure_stage: 'temporarily_unavailable' })] : []);
       expect(f.ledger.inspect(attempt!)).toMatchObject({ attempt: 2, outcome: failsAgain ? 'failed' : 'succeeded', retry_authorized: false });
     } finally { later.mockRestore(); }
+  });
+  it('holds a meeting refused as past the model\'s context window as input_too_long at once: unbilled, but never retried', async () => {
+    const f = await fixture(), runtime = f.create();
+    const poll = async () => { await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal); return (await f.call(runtime, { operation: 'home' })).sources[0]!; };
+    await f.call(runtime, { operation: 'import', meeting_id: id, project_id: null, retain: true });
+    f.failNextExtraction(new ExtractionInputTooLongError('OpenRouter'));
+    // The same meeting would be refused again: parked now, with no retry grant and no second model call.
+    expect((await poll()).pending_imports).toEqual([]);
+    const [attempt] = f.ledger.listLatest();
+    expect([f.held(), attempt]).toEqual([[expect.objectContaining({ external_id: id, failure_stage: 'input_too_long' })],
+      expect.objectContaining({ attempt: 1, outcome: 'failed', failure_code: 'permanently_rejected', retry_authorized: false })]);
+    const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+    try { await poll(); expect(f.extracted()).toBe(1); } finally { later.mockRestore(); }
   });
   it('consumes an import whose extraction failed and records its project choice, as for a staged one', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.join(project, 'reader-a');

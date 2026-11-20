@@ -55,10 +55,11 @@ export function classifyExtractionFailureStageV1(
 }
 
 /**
- * True only when a failed extraction provably cost nothing: the processor adapter declared the refusal
- * unbilled (AdapterError.unbilled) and no output arrived. A timeout, a transport failure, a cancel or any
- * received output may have been billed.
+ * True only when a failed extraction earns its one free retry: it provably cost nothing (the processor adapter
+ * declared the refusal unbilled, AdapterError.unbilled, and no output arrived) and the same request could succeed
+ * later (AdapterError.retryable). A timeout, a transport failure, a cancel or any received output may have been
+ * billed; a permanent refusal such as a meeting past the model's context window would be refused again.
  */
-export function unbilledExtractionFailureV1(error: unknown, context: ExtractionFailureContextV1): boolean {
-  return !context.aborted && !context.received_output && error instanceof AdapterError && error.unbilled;
+export function freeRetryExtractionFailureV1(error: unknown, context: ExtractionFailureContextV1): boolean {
+  return !context.aborted && !context.received_output && error instanceof AdapterError && error.unbilled && error.retryable;
 }
