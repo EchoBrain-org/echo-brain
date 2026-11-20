@@ -19,12 +19,7 @@ export interface PersonFollowUpCitationV1 {
  */
 export type PersonFollowUpRefV1 = `follow_up:itm_${string}`;
 
-/**
- * A follow-up's fields have no length of their own: the response that carries
- * them bounds them. `expected_chars` is read only by the kernel's writer
- * reply schema, which is changing to drop it; this export goes with it.
- */
-export const PERSON_FOLLOW_UP_EVIDENCE_LIMITS_V1 = Object.freeze({ expected_chars: 120 });
+/** A follow-up's fields have no length of their own: the response that carries them bounds them. */
 
 /** The follow-up's decision, only for an asker who reads that decision now. */
 export interface PersonFollowUpDecisionV1 {

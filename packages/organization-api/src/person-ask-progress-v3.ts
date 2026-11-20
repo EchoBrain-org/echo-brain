@@ -36,17 +36,9 @@ export const PERSON_ASK_PROGRESS_CONTENT_TYPE_V1 = 'text/event-stream';
 export const PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 = 10_000;
 export const PERSON_ASK_PROGRESS_HEARTBEAT_V1 = ': keep-alive\n\n';
 /**
- * Read only by the kernel's progress recorder, which still clamps and slices
- * with them; no validator here checks them, and they go once it stops. An
- * event's counts, sources, items, rows and elapsed time have no number of
- * their own: the event, line and stream byte bounds below are the bounds.
+ * An event's counts, sources, items, rows and elapsed time have no number of their own: the event, line and stream byte
+ * bounds below are the bounds.
  */
-export const PERSON_ASK_PROGRESS_NAMED_MAX_V1 = 100;
-export const PERSON_ASK_PROGRESS_READ_ITEMS_MAX_V1 = 25;
-export const PERSON_ASK_PROGRESS_SOURCES_MAX_V3 = 16;
-export const PERSON_ASK_PROGRESS_COUNT_MAX_V1 = 1000;
-export const PERSON_ASK_RECEIPT_ROWS_MAX_V1 = 64;
-export const PERSON_ASK_RECEIPT_ELAPSED_MAX_MS_V1 = 300_000;
 /** Transport: a receipt's share of its answer event's byte bound. */
 export const PERSON_ASK_RECEIPT_MAX_BYTES_V1 = 64 * 1024;
 /**
