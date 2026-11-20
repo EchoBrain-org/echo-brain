@@ -19,8 +19,9 @@ import {
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
 /**
- * How much of one unopened passage the research loop puts in its prompt before it needs an open. No desk, source or
- * response holds evidence text to it: a passage moves whole. Only the research loop reads it, as a prompt-sizing choice.
+ * Presentation: how much of one unopened passage the research loop shows whole in its prompt; a longer one shows a
+ * preview marked incomplete, which the step opens to read in full. No desk, source or response holds evidence text to it:
+ * a passage moves whole.
  */
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 16 * 1024;
 

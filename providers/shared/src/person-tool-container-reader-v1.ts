@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, validatePersonWorkspaceCitationV1, type PersonToolContainerCitationV1, type PersonToolContainerKindV1 } from '@echo-brain/organization-api';
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, validatePersonWorkspaceCitationV1, type PersonToolContainerCitationV1, type PersonToolContainerKindV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import type {
   PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1,
@@ -67,7 +67,6 @@ export function personToolContainerRowsV1(rows: readonly unknown[], parse: (row:
 
 /** A container's label is its name within the evidence label bound; its text, the evidence text bound. */
 const LABEL_BYTES = PERSON_EVIDENCE_LABEL_MAX_BYTES_V1;
-const TEXT_BYTES = PERSON_EVIDENCE_TEXT_MAX_BYTES_V1;
 
 interface Released { readonly container: PersonToolContainerV1; readonly value: Omit<PersonLiveEvidenceValueV1<Citation>, 'handle'> }
 
@@ -157,18 +156,12 @@ export async function createPersonToolContainerReaderV1(options: {
     return { containers: some.map(entry => entry.container), partial: some.length > 0 };
   }
   /**
-   * What the container is, then the mapped ECHO projects by whole name, as many as fit the evidence text bound, then how
-   * many more. A name is never cut: the container's own name gives way before the first ECHO project's does.
+   * What the container is, then every mapped ECHO project by whole name: no length of its own (the result's bound carries it).
    */
   function describe(container: PersonToolContainerV1, mapped: readonly string[]): string {
     const head = `${provider.noun} ${container.key}: ${container.name}`.normalize('NFC');
     const names = mapped.map(name => name.normalize('NFC'));
-    const projects = (shown: number) => names.length === 0 ? ''
-      : `\nECHO projects: ${[...names.slice(0, shown), ...(shown < names.length ? [`and ${names.length - shown} more`] : [])].join(', ')}`;
-    let shown = names.length;
-    while (shown > 1 && Buffer.byteLength(head + projects(shown), 'utf8') > TEXT_BYTES) shown -= 1;
-    const tail = projects(shown);
-    return `${bound(head, TEXT_BYTES - Buffer.byteLength(tail, 'utf8'))}${tail}`;
+    return names.length === 0 ? head : `${head}\nECHO projects: ${names.join(', ')}`;
   }
   function value(container: PersonToolContainerV1, echo: ReadonlyMap<string, readonly string[]>): Released['value'] {
     if (pinned !== undefined && !pinned.includes(container.id)) failure('unauthorized');

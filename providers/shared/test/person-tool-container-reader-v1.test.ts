@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import { type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -96,26 +96,17 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     expect(item!.text).toBe(`Fixture channel C1: Channel 1\nECHO projects: ${names.join(', ')}`);
   });
 
-  it('names mapped ECHO projects only whole, as many as fit its text, then how many more', async () => {
+  it('names every mapped ECHO project whole, and the container whole, with no length of its own', async () => {
     const f = await fixture();
     const names = Array.from({ length: 200 }, (_, index) => `Project ${String(index + 1).padStart(3, '0')} ${'x'.repeat(150)}`);
     f.state.echo.set('1', names);
     const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
     const [head, projects] = text.split('\nECHO projects: ');
     expect(head).toBe('Fixture channel C1: Channel 1');
-    const listed = projects!.split(', ');
-    const more = /^and (\d+) more$/.exec(listed.pop()!);
-    expect(listed).toEqual(names.slice(0, listed.length));
-    expect(listed.length + Number(more?.[1])).toBe(200);
-  });
-
-  it('keeps the first mapped ECHO project whole beside a very long container name, cutting that name instead', async () => {
-    const f = await fixture(); f.state.containers.set('1', { id: '1', key: 'C1', name: 'E'.repeat(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1) });
-    f.state.echo.set('1', ['Atlas', 'Launchscope']);
-    const text = (await f.source.list({ limit: 1 })).items[0]!.text!;
-    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
-    expect(text).toMatch(/^Fixture channel C1: E+\nECHO projects: Atlas, and 1 more$/);
+    expect(projects!.split(', ')).toEqual(names);
+    const long = await fixture(); long.state.containers.set('1', { id: '1', key: 'C1', name: 'E'.repeat(20_000) });
+    long.state.echo.set('1', ['Atlas', 'Launchscope']);
+    expect((await long.source.list({ limit: 1 })).items[0]!.text).toBe(`Fixture channel C1: ${'E'.repeat(20_000)}\nECHO projects: Atlas, Launchscope`);
   });
 
   it.each([
