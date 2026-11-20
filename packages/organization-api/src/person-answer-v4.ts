@@ -67,6 +67,8 @@ export function validatePersonAskTimeContextV1(now: unknown, timeZone: unknown):
 
 export const PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 = 64 * 1024;
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 3 * 1024;
+/** UTF-8 bytes of one fallback record's text: a fallback answer shows a few records read in full, each cut to this. */
+export const PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4 = 3_072;
 export const PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 = 64 * 1024;
 export const PERSON_EVIDENCE_LABEL_MAX_BYTES_V1 = 1024;
 

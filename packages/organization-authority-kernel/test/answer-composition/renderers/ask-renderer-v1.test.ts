@@ -1,5 +1,5 @@
 import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, validatePersonAnswerBlocksV2 } from "@echo-brain/organization-api";
+import { PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_ANSWER_STATEMENT_MAX_BYTES_V4, PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4, validatePersonAnswerBlocksV2 } from "@echo-brain/organization-api";
 import { describe, expect, it } from "vitest";
 import { agenticAskContextBudgetBytesV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
 import {
@@ -203,11 +203,11 @@ describe("Ask renderer", () => {
 
   it("cuts a long record in the fallback to the response's bound for a record's text", async () => {
     const long = record("long", `Approved: ${"the enclosure ships in October. ".repeat(200)}`);
-    expect(Buffer.byteLength(long.text!, "utf8")).toBeGreaterThan(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
+    expect(Buffer.byteLength(long.text!, "utf8")).toBeGreaterThan(PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
     const rendered = await alone({ bundle: bundle([{ item: long, full: true, touched: 1 }], ["E1"]), replies: [{ wrong: true }, { still: "wrong" }] }).render("What was decided?");
     const [shown] = rendered.result.response.parts[0]!.records!;
     expect(rendered.result.response.parts[0]!.status).toBe("records_only");
-    expect(Buffer.byteLength(shown!.text, "utf8")).toBeLessThanOrEqual(PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
+    expect(Buffer.byteLength(shown!.text, "utf8")).toBeLessThanOrEqual(PERSON_ANSWER_FALLBACK_RECORD_MAX_BYTES_V4);
     expect(shown!.text.endsWith("…")).toBe(true);
   });
 
