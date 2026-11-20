@@ -960,7 +960,7 @@ remains open for that full recovery path.
 
 ## Personal Claude staging research
 
-Staging can use one native Claude account with Sonnet 5.5 for all model work:
+Fresh hosted staging rehearsals require one native Claude account with Sonnet 5.5 for all model work:
 Ask and final writing, meeting extraction, impact analysis and optional
 evaluation. Each caller keeps their own identity and source permissions. The
 selected route does not read OpenRouter credentials or fall back to OpenRouter
@@ -973,9 +973,8 @@ reviewed release as the fresh accepted baseline; do not carry an older rollback
 baseline into this rehearsal. There is no data migration or old selection-file
 compatibility. See the [rehearsal replacement instructions](#replace-unreleased-rehearsal-state).
 
-After `prepare`, run `resume` once to bootstrap and start Authority. At its
-`complete_founder_browser_login` pause, before continuing founder onboarding,
-the human in Session Manager runs:
+After `prepare`, run `resume` once to bootstrap and start Authority. At the
+`enable_personal_claude` pause, the human in Session Manager runs:
 
 ```sh
 cd /srv/echo-authority-clean-v1
@@ -984,9 +983,9 @@ sudo ./onboard-clean-v1.sh personal-claude enable
 sudo ./onboard-clean-v1.sh personal-claude status
 ```
 
-Then complete founder sign-in and continue `resume`. Selecting Claude before
-finalization ensures the first source admission and runtime processing use the
-same processor. Rehearsal replacement clears the native home too, so sign in
+Then rerun `resume` to complete founder sign-in. Finalization also requires
+native Claude sign-in before it admits the first source, even if a prior
+OpenRouter credential was retained. Rehearsal replacement clears the native home too, so sign in
 again on the host even if the old rehearsal was signed in.
 
 The running image and matching profile must be installed through the reviewed
@@ -1013,17 +1012,11 @@ The wrapper checks the staging origin, exact running accepted/candidate image
 and profile, exclusive operation lock, ownership and private modes. A failed
 stop leaves selection unchanged; a failed write leaves Authority stopped.
 
-Before signing in again, run:
-
-```sh
-sudo ./onboard-clean-v1.sh personal-claude disable
-```
-
-This deletes the selection and restarts Authority with the configured OpenRouter
-route, without changing native sign-in files. Existing meeting sources refuse
-extraction with a different processor. To change providers after sources have
-been admitted, use a fresh rehearsal; there is no migration of existing data.
-Do not change stored processor commitments to force processing through.
+To renew native sign-in, run `personal-claude login` again. Sign-in leaves the
+selected route in place. The wrapper refuses a provider change after source
+admission. An existing OpenRouter rehearsal may serve and roll back while the
+operator prepares its replacement. Use a fresh rehearsal to move that slot to
+Claude. Do not change stored processor commitments.
 
 After setup, run a fresh canary, authenticated reads and cited Ask checks,
 including another member's permissions and background processing. Native login

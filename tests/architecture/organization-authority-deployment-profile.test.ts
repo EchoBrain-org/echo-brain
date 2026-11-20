@@ -510,7 +510,12 @@ describe("clean-v1 Organization Authority deployment profile", () => {
     mkdirSync(join(home, '.claude'), { mode: 0o700 });
     const credential = join(home, '.claude', 'synthetic-native-session');
     writeFileSync(credential, 'native-owned-never-print', { mode: 0o600 });
-    return { ...fixture, home, credential, selection: join(fixture.privateDir, 'personal-claude.json') };
+    const run: typeof fixture.run = (command, overrides = {}, args = []) =>
+      fixture.run(command, {
+        ECHO_FAKE_SETUP_STATUS: '{"next_step":"enable_personal_claude","source_admission_present":false}',
+        ...overrides,
+      }, args);
+    return { ...fixture, run, home, credential, selection: join(fixture.privateDir, 'personal-claude.json') };
   }
 
   it.each(['enable', 'disable'] as const)('preserves the Claude selection when Authority stop fails during %s', action => {
@@ -560,12 +565,23 @@ import json, os, pathlib, sys, tempfile`;
     expect(status.stdout).toContain('personal_claude_signed_in=true');
     expect(status.stdout).toContain('personal_claude_enabled=true');
     expect(status.stdout).toContain('personal_claude_model=claude-sonnet-5-5');
-    expect(fixture.run('personal-claude', {}, ['login']).stderr).toContain('disable personal Claude');
     const disabled = fixture.run('personal-claude', {}, ['disable']);
     expect(disabled.status, disabled.stderr).toBe(0);
     expect(existsSync(fixture.selection)).toBe(false);
     expect(readFileSync(fixture.credential, 'utf8')).toBe('native-owned-never-print');
     expect(readFileSync(fixture.durableSentinel, 'utf8')).toBe('durable-work-must-survive');
+  });
+
+  it.each(['enable', 'disable'] as const)('requires a fresh rehearsal to %s Claude after source admission', action => {
+    const fixture = personalClaudeFixture();
+    if (action === 'disable') writeFileSync(fixture.selection, JSON.stringify({ kind: 'echo-staging-claude-account-v1' }), { mode: 0o600 });
+    const result = fixture.run('personal-claude', {
+      ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete","source_admission_present":true}',
+    }, [action]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('after source admission requires a fresh rehearsal');
+    expect(existsSync(fixture.selection)).toBe(action === 'disable');
+    expect(readFileSync(fixture.calls, 'utf8')).not.toContain('stop -t 30 authority');
   });
 
   it('refuses unavailable native auth and invalid or unsafe selections before changing routing', () => {
@@ -631,17 +647,17 @@ import json, os, pathlib, sys, tempfile`;
     expect(calls).not.toContain('stop -t');
   });
 
-  it('can select Claude at the founder-login pause before source finalization', () => {
+  it('pauses for Claude before founder login and lets the operator reauthenticate without disabling it', () => {
     const fixture = personalClaudeFixture();
-    const invitation = join(fixture.deploy, 'clean-data/state/onboarding/founder-person-invitation.json');
-    mkdirSync(join(fixture.deploy, 'clean-data/state/onboarding'), { mode: 0o700 });
-    writeFileSync(invitation, '{}', { mode: 0o600 });
-    const paused = fixture.run('resume', { ECHO_FAKE_SETUP_STATUS: '{"next_step":"complete_founder_browser_login"}' });
+    const paused = fixture.run('resume');
     expect(paused.status, paused.stderr).toBe(0);
-    expect(paused.stdout).toContain('complete_founder_browser_login');
+    expect(paused.stdout).toContain('enable_personal_claude');
+    expect(paused.stdout).toContain('personal-claude login');
     expect(fixture.terminalLogin().status).toBe(0);
     const enabled = fixture.run('personal-claude', {}, ['enable']);
     expect(enabled.status, enabled.stderr).toBe(0);
+    expect(existsSync(fixture.selection)).toBe(true);
+    expect(fixture.terminalLogin().status).toBe(0);
     expect(existsSync(fixture.selection)).toBe(true);
     expect(readFileSync(fixture.calls, 'utf8')).not.toContain(' finalize ');
   });

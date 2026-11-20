@@ -979,6 +979,47 @@ describe("Organization Authority setup coordinator", () => {
     ).toContain("usage:");
   });
 
+  it("requires native Claude before hosted staging can admit its first source even with an OpenRouter credential", async () => {
+    const state = join(realpathSync(dirname(stateDirectory(STAGING_ORIGIN))), "state");
+    const { queue_staging_synthetic_meetings: _stub, ...base } = dependencies([]);
+    const real: OrganizationAuthoritySetupCliDependencies = {
+      ...base,
+      initialize_credentials: async (stateDirectory) => {
+        initializePersonSessionCredentials({ state_directory: stateDirectory });
+      },
+      issue_invitation: async (input) => { issueSetupOwnerInvitation(input); },
+    };
+    await cli(bootstrapArgs(state, STAGING_ORIGIN), real);
+    const manifest = readOrganizationAuthoritySetupManifest(state);
+    vi.stubEnv("ECHO_STAGING_CLAUDE_ACCOUNT_FILE", join(dirname(state), "personal-claude.json"));
+    mkdirSync(dirname(manifest.llm_credential_file), { recursive: true, mode: 0o700 });
+    writePrivate(manifest.llm_credential_file, "l".repeat(40));
+
+    const status = await cli(["status", "--state-dir", state], {
+      ...real,
+      read_setup_stage: () => CONNECTED_STAGE,
+    });
+    expect(status.json).toMatchObject({
+      next_step: "enable_personal_claude", llm_credential_valid: false, source_admission_present: false,
+    });
+
+    const refused = await cli(["finalize", "--state-dir", state], finalizeDeps(real), 1);
+    expect(refused.stderr).toContain("Enable the native Claude account");
+    const authority = new Database(join(state, "authority.sqlite"), { readonly: true });
+    try {
+      expect(authority.prepare("SELECT count(*) FROM authority_live_source_admission_v2").pluck().get()).toBe(0);
+    } finally {
+      authority.close();
+    }
+
+    selectNativeClaude(state);
+    vi.spyOn(nativeProcessor, "preflightClaudeAccountDecisionProcessorV1").mockResolvedValue();
+    expect((await cli(["status", "--state-dir", state], {
+      ...real,
+      read_setup_stage: () => CONNECTED_STAGE,
+    })).json).toMatchObject({ next_step: "complete_founder_browser_login", llm_credential_valid: true });
+  });
+
   it("admits the runtime's native processor on fresh staging without an OpenRouter credential", async () => {
     const state = stateDirectory(STAGING_ORIGIN);
     const { queue_staging_synthetic_meetings: _stub, ...real } = dependencies([]);
