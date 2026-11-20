@@ -1,5 +1,6 @@
 import {
-  createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3, type AgenticAskProgressSinkV3,
+  AGENTIC_READ_SILENCE_MS_V1, AgenticAskStalledErrorV1, createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3,
+  type AgenticAskProgressSinkV3,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -25,6 +26,23 @@ export interface CreatePersonLiveAnswerRouteOptionsV1 extends CreatePersonAnswer
    * cite them.
    */
   readonly workspace?: PersonWorkspaceSourcesV1;
+}
+
+/**
+ * One live source's binding watched for silence, as the kernel watches every desk read after it: a verification that
+ * answers nothing for AGENTIC_READ_SILENCE_MS_V1 is told to stop (`stop`), and the binding fails with the stall, even
+ * when the connection never looks at its signal. Nothing else bounds how long a binding that keeps answering takes.
+ */
+function watchedBinding<T>(stop: AbortController, operation: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const stall = new AgenticAskStalledErrorV1('read', AGENTIC_READ_SILENCE_MS_V1);
+      stop.abort(stall);
+      reject(stall);
+    }, AGENTIC_READ_SILENCE_MS_V1);
+    timer.unref?.();
+    operation().then(value => { clearTimeout(timer); resolve(value); }, (error: unknown) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 /**
@@ -54,17 +72,19 @@ export async function bindPersonLiveEvidenceDeskV1(
   // One release witness for the request's live sources: two sources on one connection (a tool's items and its containers)
   // share its sequence, so two empty releases in the same millisecond never write the same witness.
   const liveAudit = options.audit.forLiveRequest(context);
+  // A binding that stalls stops every binding of the request, with the caller's own cancel.
+  const stop = new AbortController();
+  const signal = input.signal === undefined ? stop.signal : AbortSignal.any([input.signal, stop.signal]);
   // Each binding verifies its own connection, so sources bind concurrently.
   // They register in catalog order, and the first failure in that order is
   // the request's failure, exactly as when they bound one after another.
   const settled = await Promise.allSettled(compatible.map(selected =>
     observePersonLiveEvidenceV1('evidence_connection', selected.descriptor.kind, async (): Promise<RegisteredPersonLiveEvidenceSourceV2 | undefined> => {
       if (!selected.scopes.includes(scope.kind)) { annotateCoreRuntimeV1({ result: 'out_of_scope' }); return undefined; }
-      const source = await selected.application.source({
+      const source = await watchedBinding(stop, () => selected.application.source({
         ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}),
-        access_token: input.access_token, audit: liveAudit,
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
-      });
+        access_token: input.access_token, audit: liveAudit, signal,
+      }));
       input.signal?.throwIfAborted();
       annotateCoreRuntimeV1({ result: source === undefined ? (scope.kind === 'project' ? 'unavailable' : 'unlinked') : 'verified' });
       return source === undefined ? undefined : { descriptor: selected.descriptor, source, scope };
