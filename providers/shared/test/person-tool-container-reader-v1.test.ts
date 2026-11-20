@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { type PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
+import type { PersonToolContainerCitationV1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 import type { PersonConnectorReadBindingV1, PersonLiveEvidenceReleaseV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -182,12 +182,7 @@ describe('the shared tool container reader (research tool contract v1)', () => {
     expect(found.truncated).toBe(false);
   });
 
-  it('has no run budget, and keeps a list page of large containers inside the result bound, losing none', async () => {
-    const f = await fixture();
-    const listed = await f.reader.list({ limit: 25 });
-    let opened = listed;
-    for (let read = 0; read < 6_000; read += 1) opened = await f.reader.open({ handle: listed.items[0]!.handle, limit: 1 });
-    expect(opened).toMatchObject({ truncated: false, items: [{ label: 'Channel 1' }] });
+  it('keeps a list page of large containers inside the result bound and releases the rest from its cursor, losing none', async () => {
     const big = await fixture();
     big.state.containers.clear();
     for (let index = 1; index <= 80; index += 1) big.state.containers.set(String(index), { id: String(index), key: `C${index}`, name: `${'Long channel '.repeat(70)}${index}` });

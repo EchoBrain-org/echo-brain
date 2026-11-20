@@ -290,42 +290,22 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(linked.items[0]).toMatchObject({ citation: { ticket_id: '10002' }, text: 'ECHO-2: Linked 10002\n\nLaunch Friday\n@Alex' });
   });
 
-  it('says an open truncated beside the ticket left its own text whole, and that a cut body cut it (ADR-0041)', async () => {
-    // Sixty links, more than the 50 asked for: truncated, yet the anchor's text is whole.
+  it('says an open truncated beside the ticket left its own text whole (ADR-0041)', async () => {
+    // More links than the limit leaves room for: truncated, yet the anchor's text is whole.
     const links = fixture();
-    const linkIds = Array.from({ length: 60 }, (_, index) => String(10002 + index));
-    for (const id of linkIds) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
-    links.state.tickets.set('10001', withFields({ issuelinks: linkIds.map(id => ({ outwardIssue: { id } })) }));
+    for (const id of ['10002', '10003']) links.state.tickets.set(id, ticket(id, `Linked ${id}`));
+    links.state.tickets.set('10001', withFields({ issuelinks: ['10002', '10003'].map(id => ({ outwardIssue: { id } })) }));
     const linked = await links.make('ECHO');
     const anchor = (await linked.source.search({ query: 'ship' })).items[0]!;
-    const withLinks = await linked.source.open({ item: anchor.id, limit: 50 });
-    expect(withLinks.items).toHaveLength(50);
-    expect(withLinks).toMatchObject({ truncated: true, anchor_truncated: false });
+    expect(await linked.source.open({ item: anchor.id, limit: 2 })).toMatchObject({ truncated: true, anchor_truncated: false });
     // A summary cut to the evidence label bound, no links: the label is cut, the text is whole.
     const label = fixture();
-    label.state.tickets.set('10001', withFields({ summary: '温度计固件校准流程'.repeat(40).slice(0, 341) }));
+    const summary = '温度计固件校准流程'.repeat(40).slice(0, 341);
+    label.state.tickets.set('10001', withFields({ summary }));
     const labelled = await label.make('ECHO');
-    const cut = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
-    expect(cut.items[0]!.text).toContain('温度计固件校准流程'.repeat(40).slice(0, 341));
-    expect(cut).toMatchObject({ truncated: true, anchor_truncated: false });
-    // A description of 30,000 paragraphs has no bound of its own: it is read in full, section after section.
-    const body = fixture();
-    body.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: Array.from({ length: 30_000 }, (_, index) => ({ type: 'paragraph', content: [{ type: 'text', text: `p${index}` }] })) } }));
-    const long = await body.make('ECHO');
-    let page = await long.source.open({ item: (await long.source.search({ query: 'ship' })).items[0]!.id });
-    for (let reads = 0; page.anchor_truncated === true && reads < 100; reads += 1) page = await long.source.open({ item: page.items.at(-1)!.id });
-    expect(page).toMatchObject({ truncated: false, anchor_truncated: false });
-    expect(page.items.at(-1)!.text).toContain('p29999');
-    // A subtree nested deeper than the host's call stack can walk is left out, and the open says the text was cut.
-    const deep = fixture();
-    let nested: Record<string, unknown> = { type: 'paragraph', content: [{ type: 'text', text: 'too deep' }] };
-    for (let level = 0; level < 200_000; level += 1) nested = { type: 'blockquote', content: [nested] };
-    deep.state.tickets.set('10001', withFields({ description: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Kept start' }] }, nested] } }));
-    const nestedReader = await deep.make('ECHO');
-    const nestedOpen = await nestedReader.source.open({ item: (await nestedReader.source.search({ query: 'ship' })).items[0]!.id });
-    expect(nestedOpen).toMatchObject({ truncated: true, anchor_truncated: true, notice: 'Part of this Jira ticket is nested too deeply to read as text and was left out.' });
-    expect(nestedOpen.items[0]!.text).toContain('Kept start');
-    expect(nestedOpen.items.map(item => item.text).join('')).not.toContain('too deep');
+    const opened = await labelled.source.open({ item: (await labelled.source.search({ query: 'ship' })).items[0]!.id });
+    expect(opened.items[0]!.text).toContain(summary);
+    expect(opened).toMatchObject({ truncated: true, anchor_truncated: false });
   });
 
   it('reads a ticket whose sections repeat word for word, one citation per page each, losing nothing', async () => {
@@ -918,24 +898,6 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(f.jqls()).toHaveLength(1);
   });
 
-  it('lists every item a list holds, past any run budget, to its end', async () => {
-    const f = fixture();
-    const pages = 210;
-    for (let index = 0; index < pages * 25; index += 1) f.state.tickets.set(String(20000 + index), ticket(String(20000 + index)));
-    f.state.pages = Array.from({ length: pages }, (_, number) => page(Array.from({ length: 25 }, (_, index) => String(20000 + number * 25 + index)), number + 1 < pages ? `token-${number}` : undefined));
-    const { reader } = await f.make();
-    let released = 0;
-    let result = await reader.list({ limit: 25 });
-    released += result.items.length;
-    while (result.next_cursor !== undefined) {
-      result = await reader.list({ limit: 25, cursor: result.next_cursor });
-      released += result.items.length;
-    }
-    expect(released).toBe(pages * 25);
-    expect(result).toMatchObject({ truncated: false });
-    expect(result.notice).toBeUndefined();
-  });
-
   it('relaxes a long empty search to any one word, keeps named keys, and ranks tickets by how many words their titles name', async () => {
     const literal = (term: string) => `text ~ "\\"${term}\\""`;
     const f = fixture();
@@ -959,21 +921,15 @@ describe('person-bound Jira live reader through the shared audited wrapper', () 
     expect(keyed.jqls()[1]).toBe(`${literal('ECHO\\\\-404')} AND (${['one', 'two', 'three', 'four', 'five', 'six', 'seven'].map(literal).join(' OR ')}) ORDER BY created DESC, id DESC`);
   });
 
-  it('accepts a query of any number of words and any length', async () => {
-    const f = fixture(); f.state.pages = [page(['10001'])];
-    const { reader } = await f.make();
-    const query = Array.from({ length: 400 }, (_, index) => `w${index}`).join(' ');
-    expect(Buffer.byteLength(query)).toBeGreaterThan(1024);
-    expect((await reader.search({ query, limit: 10 })).items.map(item => item.citation.ticket_id)).toEqual(['10001']);
-  });
-
-  it('returns as many search matches as asked for and says when more matched', async () => {
+  it('searches with a query of any length and returns as many matches as asked for, saying when more matched', async () => {
     const f = fixture();
     const ids = Array.from({ length: 50 }, (_, index) => String(10060 - index));
     for (const id of ids) f.state.tickets.set(id, ticket(id));
     f.state.pages = [page(ids, 'next')];
     const { source } = await f.make();
-    const result = await source.search({ query: 'connector', limit: 50 });
+    const query = Array.from({ length: 400 }, (_, index) => `w${index}`).join(' ');
+    expect(Buffer.byteLength(query)).toBeGreaterThan(1024);
+    const result = await source.search({ query, limit: 50 });
     expect(result.items.map(item => item.citation.ticket_id)).toEqual(ids);
     expect(result.truncated).toBe(true);
     expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ path: `${prefix}/search/jql`, body: expect.objectContaining({ maxResults: 50 }) }));

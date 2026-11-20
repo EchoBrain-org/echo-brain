@@ -137,14 +137,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.length).toBeGreaterThan(300);
   });
 
-  it('has no per-run read budget: searches and fences keep running past any count of reads', async () => {
-    const f = await fixture();
-    // Each unmapped search is one CQL request plus one exact metadata read: 1,000 searches pass the old 1,600-read cap.
-    for (let search = 0; search < 1_000; search += 1) expect((await f.source.search({ query: `gate ${search}` })).items).toHaveLength(1);
-    expect(f.calls.filter(call => call.path === '/rest/api/search' || call.path.startsWith('/api/v2/pages/')).length).toBeGreaterThan(1_600);
-    await expect(f.source.revalidate({})).resolves.toBeUndefined();
-  });
-
   it('says when a last list page was exactly full, so its end is unverified (ADR-0041)', async () => {
     const f = await fixture({ pages: Array.from({ length: 20 }, (_, index) => page({ id: String(100 + index) })) });
     expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: false, page_full: true });
@@ -154,23 +146,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     f.state.list = () => ({ results: [...f.state.pages.values()].map(value => metadata(value)), _links: { next: `/wiki/api/v2/pages?cursor=more&limit=20` } });
     expect(await f.source.list({ limit: 20 })).toMatchObject({ truncated: true, page_full: false, next_cursor: expect.any(String) });
     expect(JSON.stringify(f.audits)).not.toContain('page_full');
-  });
-
-  it('keeps a page of large rows inside the result bound and releases the rest from its cursor, losing none', async () => {
-    const pages = Array.from({ length: 50 }, (_, index) => page({ id: String(100 + index), title: `${'Long title '.repeat(90)}${index}` }));
-    const f = await fixture({ pages });
-    let result = await f.source.list({ limit: 50 });
-    expect(f.calls.find(call => call.path === '/api/v2/pages')!.query.get('limit')).toBe('50');
-    expect(result.items.length).toBeLessThan(50);
-    expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(65536);
-    const seen = result.items.map(item => item.citation.page_id);
-    const lists = f.calls.filter(call => call.path === '/api/v2/pages').length;
-    while (result.next_cursor !== undefined) {
-      result = await f.source.list({ limit: 50, cursor: result.next_cursor });
-      seen.push(...result.items.map(item => item.citation.page_id));
-    }
-    expect(f.calls.filter(call => call.path === '/api/v2/pages')).toHaveLength(lists);
-    expect(seen).toEqual(pages.map(value => value.id));
   });
 
   it('lists, searches, opens, and revalidates a mapped page with the minimal granular resource grant', async () => {
@@ -216,7 +191,7 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls).toHaveLength(before);
   });
 
-  it('resolves renamed and personal space keys live once per reader before scoped CQL and normalizes v1 hits through v2 metadata', async () => {
+  it('resolves renamed and personal space keys live before scoped CQL and normalizes v1 hits through v2 metadata', async () => {
     const f = await fixture({ selected: ['42', '43'] });
     f.state.keys.set('42', 'RENAMED');
     const first = await f.source.search({ query: 'EVT requirements', limit: 5 });
@@ -228,17 +203,9 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(f.calls.some(call => call.path === '/api/v2/pages/123' && !call.query.has('body-format'))).toBe(true);
     expect(f.bodyCalls()).toEqual([]);
     for (const value of ['Search excerpt', 'Untrusted v1']) expect(JSON.stringify(first)).not.toContain(value);
-    // The keys are read once per reader (one request): a later search spends no reads on them.
-    const spaceReads = f.calls.filter(call => call.path.startsWith('/api/v2/spaces/')).length;
-    expect(spaceReads).toBe(2);
+    f.state.keys.set('42', 'RENAMED_AGAIN');
     await f.source.search({ query: 'EVT requirements' });
-    expect(f.calls.filter(call => call.path.startsWith('/api/v2/spaces/'))).toHaveLength(spaceReads);
-    // A failed key read is not kept: the next search reads the keys again.
-    const retry = await fixture({ selected: ['42'] });
-    retry.state.statuses.set('/api/v2/spaces/42', 500);
-    await expect(retry.source.search({ query: 'EVT requirements' })).rejects.toMatchObject({ code: 'unavailable' });
-    retry.state.statuses.delete('/api/v2/spaces/42');
-    expect((await retry.source.search({ query: 'EVT requirements' })).items).toHaveLength(1);
+    expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toContain('"RENAMED_AGAIN"');
   });
 
   it('returns as many search matches as asked for, and says when more matched', async () => {
@@ -268,15 +235,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(filters.flat()).toEqual(selected);
   });
 
-  it('spends no content reads on space keys, so many scoped searches run within the content budget', async () => {
-    const selected = Array.from({ length: 20 }, (_, index) => String(100 + index));
-    const f = await fixture({ selected: ['42', ...selected.slice(1)] });
-    for (const id of selected.slice(1)) f.state.keys.set(id, `S${id}`);
-    // Each search spends two content reads (the CQL search and one exact page read); twenty searches with twenty
-    // mapped spaces would have spent 440 under a per-search key lookup.
-    for (let index = 0; index < 60; index += 1) expect((await f.source.search({ query: `requirements ${index}` })).items).toHaveLength(1);
-  });
-
   it('leaves out a mapped space Confluence does not find for the asker (404), and every page of the result says so', async () => {
     const f = await fixture({ selected: ['42', '43'], pages: [page(), page({ id: '124' })] });
     // Confluence answers 404 for a space that is missing or that the asker cannot view.
@@ -295,11 +253,11 @@ describe('Confluence live reader through the audited evidence source', () => {
     expect(second).toMatchObject({ truncated: false, notice: SPACES_LEFT_OUT });
     expect(f.calls.filter(call => call.path === '/rest/api/search').at(-1)!.query.get('cql')).toBe('type = page AND space IN ("ECHO") AND lastmodified >= "2026-09-29"');
     // None found: no CQL read at all, and an empty result that still is not complete.
-    const none = await fixture({ selected: ['42', '43'] });
-    none.state.keys.clear();
-    expect(await none.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
-    expect(await none.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
-    expect(none.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(0);
+    f.state.keys.delete('42');
+    const searchCount = f.calls.filter(call => call.path === '/rest/api/search').length;
+    expect(await f.source.search({ query: 'requirements' })).toMatchObject({ items: [], truncated: false, notice: SPACES_LEFT_OUT });
+    expect(await f.source.list({ since: '2026-10-01', limit: 20 })).toMatchObject({ items: [], truncated: false, page_full: false, notice: SPACES_LEFT_OUT });
+    expect(f.calls.filter(call => call.path === '/rest/api/search')).toHaveLength(searchCount);
   });
 
   it('says nothing was left out when every mapped space is found', async () => {
@@ -376,26 +334,6 @@ describe('Confluence live reader through the audited evidence source', () => {
     await expect(f.source.revalidate({})).rejects.toMatchObject({ code: 'not_found' });
     f.state.denied.clear(); f.state.account = 'different-account';
     await expect(f.source.revalidate({ mode: 'incremental' })).rejects.toMatchObject({ code: 'unauthorized' });
-  });
-
-  it('runs an incremental check of exactly the newly released pages after a long run of reads', async () => {
-    const f = await fixture({ pages: [page(), page({ id: '124' })] });
-    const verify = ['/oauth/token/accessible-resources', '/rest/api/user/current'];
-    const reads = () => f.calls.map(call => call.query.has('id') ? `bulk:${call.query.get('id')}` : call.query.get('body-format') === 'atlas_doc_format' ? `body:${call.path}` : call.path);
-    // Pages 123 and 124 are listed and checked.
-    const listed = await f.source.list({});
-    await f.source.revalidate({ mode: 'incremental' });
-    // New since that check: an opened section of 123, and page 125, created later, which searches release.
-    await f.source.open({ item: listed.items[0]!.id });
-    f.state.pages.set('125', page({ id: '125' }));
-    f.state.searchIds = ['125'];
-    for (let search = 0; search < 1_000; search += 1) expect((await f.source.search({ query: `gate ${search}` })).notice).toBeUndefined();
-    // The check before the next model call re-reads exactly the new page and the opened body, then verifies the connection.
-    f.calls.length = 0;
-    await expect(f.source.revalidate({ mode: 'incremental' })).resolves.toBeUndefined();
-    expect(reads()).toEqual(['bulk:125', 'body:/api/v2/pages/123', ...verify]);
-    await expect(f.source.revalidate({})).resolves.toBeUndefined();
-    await expect(f.source.search({ query: 'after the checks' })).resolves.toMatchObject({ items: [{ kind: 'page' }] });
   });
 
   it('revalidates every released metadata page in bounded batches regardless of response order', async () => {

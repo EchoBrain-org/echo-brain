@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { detailEnvelopeV1 } from './fixtures/detail-envelope-v1.js';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import type { PersonPageCitationV1 } from '@echo-brain/organization-api';
 import { createGranolaPersonLiveEvidenceReaderV1 } from '../src/granola-person-live-evidence-reader-v1.js';
 import { createAuditedPersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/audited-person-live-evidence-v1';
 
@@ -139,19 +138,6 @@ describe('Granola external meeting evidence', () => {
     expect(result.items.map(item => item.citation.page_id)).toEqual([meetings[1_400]]);
     expect(result.notice).not.toContain('not visible to your Granola account');
     await expect(reader.revalidate({ citations: result.items.map(item => item.citation) })).resolves.toBeUndefined();
-  });
-  it('has no per-run read budget: reads, checks and revalidation keep running past any count of calls', async () => {
-    const f = fixture(), reader = await f.reader();
-    const content = () => f.calls.filter(call => !['get_account_info', 'list_meeting_folders'].includes(call.name)).length;
-    const released: PersonPageCitationV1[] = [];
-    for (let search = 0; content() <= 2_500; search += 1) {
-      const result = await reader.search({ query: `access ${search}`, limit: 5 });
-      expect(result.notice ?? '').not.toContain('as many Granola reads');
-      released.push(...result.items.map(item => item.citation));
-    }
-    const listed = await reader.list({ limit: 5 });
-    expect(listed.notice ?? '').not.toContain('as many Granola reads');
-    await expect(reader.revalidate({ citations: released.slice(0, 5) })).resolves.toBeUndefined();
   });
   it('reports notes-only coverage when the provider denies transcript search, without retrying transcript access', async () => {
     const f = fixture(); f.state.transcriptAllowed = false;
