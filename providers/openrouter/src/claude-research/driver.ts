@@ -89,7 +89,7 @@ export function createClaudeResearchDriverV1(options: {
     } catch (error) {
       if (terminal !== undefined) throw terminal;
       // The engine failed, not access: the writer still answers from evidence already released.
-      if (error instanceof ClaudeResearchResultErrorV1 && fence.forwarded() > 0) throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
+      if (error instanceof ClaudeResearchResultErrorV1 && fence.forwarded() > 0) throw new AgenticAskGenerationFailureV1(`research model was unavailable (${error.subtype})`, 'fallback');
       throw error;
     }
     finally { fence.close(); }

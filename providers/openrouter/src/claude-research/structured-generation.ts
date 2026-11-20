@@ -80,9 +80,14 @@ export function createClaudeAccountStructuredGenerationV1(options: {
         const timedOut = timeout.aborted && signal.reason === timeout.reason;
         if (terminal !== undefined && !timedOut) throw terminal;
         if (providerFailure !== undefined && !timedOut) throw providerFailure;
-        if (timedOut || error instanceof ClaudeResearchResultErrorV1) {
-          throw Object.assign(new Error('Native writer unavailable'), { diagnostic: {
-            failure_class: timedOut ? 'adapter_timeout' : 'adapter_response', http_status: timedOut ? null : 200, finish_reason: null,
+        if (timedOut) throw Object.assign(new Error('Native writer unavailable'), { diagnostic: { failure_class: 'adapter_timeout', http_status: null, finish_reason: null } });
+        if (error instanceof ClaudeResearchResultErrorV1) {
+          // A reply stopped at its output allowance did not finish: the gate repairs it as it would OpenRouter's. The SDK's
+          // result subtype and stop reason are content-free and travel with the failure.
+          const unfinished = error.stop_reason === 'max_tokens';
+          throw Object.assign(new Error(`Native writer unavailable (${error.subtype})`), { diagnostic: {
+            failure_class: unfinished ? 'adapter_finish' : 'adapter_response', http_status: 200, finish_reason: unfinished ? 'length' : null,
+            sdk_subtype: error.subtype, sdk_stop_reason: error.stop_reason,
           } });
         }
         throw error;

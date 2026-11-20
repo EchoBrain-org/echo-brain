@@ -115,3 +115,16 @@ it('does not forward hidden token-count requests for extraction', async () => {
     .rejects.toThrow('single generation');
   expect(forward).not.toHaveBeenCalled();
 });
+
+it('turns a native writer stopped at its output allowance into an unfinished reply the gate repairs, naming the SDK result', async () => {
+  const port = createClaudeAccountStructuredGenerationV1({ account, model,
+    forward: async ({ res }) => { res.end('{}'); return { content: [], finish_reason: 'length' }; },
+    run: async request => {
+      await (await fetch(`${request.base_url}/v1/messages`, { method: 'POST', body })).text();
+      throw new ClaudeResearchResultErrorV1({ subtype: 'error_max_structured_output_retries', stop_reason: 'max_tokens' });
+    },
+  });
+  await expect(port.generate_with_admission!(input, async (_request, send) => (await send(new AbortController().signal)).value)).rejects.toMatchObject({
+    diagnostic: { failure_class: 'adapter_finish', finish_reason: 'length', http_status: 200, sdk_subtype: 'error_max_structured_output_retries', sdk_stop_reason: 'max_tokens' },
+  });
+});
