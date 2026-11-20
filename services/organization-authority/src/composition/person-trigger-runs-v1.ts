@@ -60,8 +60,6 @@ interface CreatePersonTriggerRunsV1Options {
  */
 const LEASE_MS = 600_000;
 const MAX_RUNNING = 4;
-/** A meeting action's own words on one line, never cut: an open item's line has no length of its own. */
-const actionLine = (text: unknown): string => impactCardLineV1(text, Number.POSITIVE_INFINITY);
 const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organization_id: value.organization_id, principal_id: value.principal_id, membership_id: value.membership_id });
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
 function unavailable(error: unknown): boolean {
@@ -111,7 +109,7 @@ function itemCandidates(record_sha256: Sha256Digest, siblings: readonly Sha256Di
     return [{ item_key, pointer, relation, expected: expected ?? null, ...(row.owner === undefined ? {} : { owner_name: row.owner }) }];
   });
   const decided = actions
-    .map(action => ({ action, expected: actionLine(action.text) }))
+    .map(action => ({ action, expected: impactCardLineV1(action.text) }))
     .filter(({ expected }) => expected !== '')
     .flatMap(({ action, expected }): ItemCandidateV1[] => {
       const pointer = Object.freeze({ kind: 'meeting_action', record_sha256, signal_id: action.signal_id });
@@ -185,7 +183,7 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
       // A timeout or an outage is tried again while the run has attempts left: a finished run is frozen, so falling back
       // on the first one would lose the impact check for good. Only the attempt that would fail the run falls back.
       const triedAgain = (unavailable(error) || error instanceof AgenticAskStalledErrorV1) && row.attempts + 1 < TRIGGER_RUN_ATTEMPTS_MAX_V1;
-      if (triedAgain || !actions.some(action => actionLine(action.text) !== '') ||
+      if (triedAgain || !actions.some(action => impactCardLineV1(action.text) !== '') ||
           error instanceof PersonRecordSearchIndexLagV1 ||
           (error instanceof AuthorityOperationError && !['unavailable', 'invalid_output', 'quota_exceeded'].includes(error.code))) throw error;
       // Research adds external impact. The approved action itself already has an authorized source. The run finishes as
