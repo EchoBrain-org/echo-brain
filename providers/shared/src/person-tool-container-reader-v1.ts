@@ -6,7 +6,7 @@ import type {
   PersonConnectorReadBindingV1, PersonLiveEvidenceListInputV1, PersonLiveEvidencePageV1, PersonLiveEvidenceReaderV1, PersonLiveEvidenceValueV1,
 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
 import type { EvidenceDateFilterV1 } from '@echo-brain/organization-authority-kernel/shared/temporal-query-v1';
-import { boundUtf8V1 as bound, guardedPersonProviderOperationV1, inBatchesOfFourV1, personLiveEvidencePageFitV1, type PersonProviderFailureCodeV1 } from './person-provider-v1.js';
+import { boundUtf8V1 as bound, createPersonLiveListV1, guardedPersonProviderOperationV1, inBatchesOfFourV1, personLiveEvidencePageFitV1, type PersonProviderFailureCodeV1 } from './person-provider-v1.js';
 
 type Citation = PersonToolContainerCitationV1;
 type Page = PersonLiveEvidencePageV1<Citation>;
@@ -65,9 +65,6 @@ export function personToolContainerRowsV1(rows: readonly unknown[], parse: (row:
   return Object.freeze({ containers: Object.freeze(containers), left_out: rows.length - containers.length });
 }
 
-/** A container's label is its name within the evidence label bound; its text, the evidence text bound. */
-const LABEL_BYTES = PERSON_EVIDENCE_LABEL_MAX_BYTES_V1;
-
 interface Released { readonly container: PersonToolContainerV1; readonly value: Omit<PersonLiveEvidenceValueV1<Citation>, 'handle'> }
 
 /**
@@ -97,8 +94,8 @@ export async function createPersonToolContainerReaderV1(options: {
    * with different names or ECHO projects share it, and each must still be what the asker sees when it is checked.
    */
   const issued = new Map<string, readonly Released[]>();
-  /** A list's continuation: the tool's next page token, if any, and containers read that did not fit the last result. */
-  const cursors = new Map<string, { readonly selection: string; readonly token?: string; readonly pending: readonly PersonToolContainerV1[]; readonly full: boolean }>();
+  /** A list's continuation; its state is the tool's next page token (or, for a project scope, this reader's offset). */
+  const lists = createPersonLiveListV1<PersonToolContainerV1, string | undefined>('tool_container_cursor_', failure);
 
   const safe = <T>(operation: () => Promise<T>, signal?: AbortSignal) => guardedPersonProviderOperationV1(failure, operation, signal);
   /** The connection checked, between two fences of the reader's own binding. */
@@ -171,24 +168,19 @@ export async function createPersonToolContainerReaderV1(options: {
         container: provider.container, container_id: container.id, permalink: provider.permalink(origin, container) }) as Citation;
     } catch { failure('invalid_output'); }
     const names = [...new Set(echo.get(container.id) ?? [])].sort();
-    return Object.freeze({ citation, label: bound(container.name, LABEL_BYTES), text: describe(container, names), visibility: 'only_me' as const,
+    return Object.freeze({ citation, label: bound(container.name, PERSON_EVIDENCE_LABEL_MAX_BYTES_V1), text: describe(container, names), visibility: 'only_me' as const,
       attributes: Object.freeze({ key: container.key, tool: provider.tool }) });
   }
-  /** How many of `containers`, from the first, fit one result (the evidence response bound) within `maximum`. */
-  function fitting(containers: readonly PersonToolContainerV1[], echo: ReadonlyMap<string, readonly string[]>, maximum: number): number {
-    return Math.min(maximum, personLiveEvidencePageFitV1(containers.map(container => value(container, echo))));
-  }
-  /** The containers as released items. */
-  function release(containers: readonly PersonToolContainerV1[], echo: ReadonlyMap<string, readonly string[]>): { readonly items: readonly PersonLiveEvidenceValueV1<Citation>[] } {
+  function release(containers: readonly PersonToolContainerV1[], echo: ReadonlyMap<string, readonly string[]>): readonly PersonLiveEvidenceValueV1<Citation>[] {
     const values = containers.map(container => ({ container, value: value(container, echo) }));
-    return { items: Object.freeze(values.map(released => {
+    return Object.freeze(values.map(released => {
       const handle = `tool_container_${randomUUID()}`;
       handles.set(handle, released);
       const key = canonicalSha256(released.value.citation);
       const digest = canonicalSha256(released.value);
       issued.set(key, Object.freeze([...(issued.get(key) ?? []).filter(previous => canonicalSha256(previous.value) !== digest), released]));
       return Object.freeze({ ...released.value, handle });
-    })) };
+    }));
   }
   /**
    * Containers by exact read. One the asker cannot see is left out, never released or counted; one the tool answered but
@@ -210,7 +202,8 @@ export async function createPersonToolContainerReaderV1(options: {
    * A result that left a row out says so, so it never reads as complete (ADR-0041). A notice, not `truncated`: a list's
    * later page replaces its `truncated`, while one page's notice keeps the whole list incomplete.
    */
-  const leftOut = (count: number) => count === 0 ? {} : { notice: `Some ${provider.noun}s could not be shown, so these results leave them out.` };
+  const leftOut = (count: number) => count === 0 ? undefined : `Some ${provider.noun}s could not be shown, so these results leave them out.`;
+  const notice = (...parts: readonly (string | undefined)[]) => { const text = parts.filter(part => part !== undefined).join(' '); return text === '' ? {} : { notice: text }; };
 
   return Object.freeze({
     binding,
@@ -243,12 +236,10 @@ export async function createPersonToolContainerReaderV1(options: {
         }
         const found = matching(candidates.containers, echo, terms);
         // As many as were asked for and one result carries; the rest are reported with `truncated`.
-        const selected = found.containers.slice(0, fitting(found.containers, echo, wanted));
+        const selected = found.containers.slice(0, personLiveEvidencePageFitV1(found.containers.map(container => value(container, echo)), wanted));
         await verify(input.signal);
-        const released = release(selected, echo);
-        const notices = [...(found.partial ? [`No ${provider.noun} matched every word of this search; these match some of them.`] : []),
-          ...(candidates.left_out === 0 ? [] : [leftOut(candidates.left_out).notice!])];
-        return Object.freeze({ items: released.items, truncated: more || found.containers.length > selected.length, ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
+        return Object.freeze({ items: release(selected, echo), truncated: more || found.containers.length > selected.length,
+          ...notice(found.partial ? `No ${provider.noun} matched every word of this search; these match some of them.` : undefined, leftOut(candidates.left_out)) });
       }, input.signal);
     },
     async list(input: PersonLiveEvidenceListInputV1): Promise<Page> {
@@ -257,53 +248,30 @@ export async function createPersonToolContainerReaderV1(options: {
       const wanted = limit(input.limit);
       const maximum = Math.min(wanted, provider.page_max);
       const selection = canonicalSha256({ maximum });
-      const previous = input.cursor === undefined ? undefined : cursors.get(input.cursor);
-      if (input.cursor !== undefined && (previous === undefined || previous.selection !== selection)) failure('invalid_request');
+      const previous = lists.resume(input.cursor, selection);
       return safe(async () => {
         await verify(input.signal);
         const echo = options.echo_projects();
-        let containers: readonly PersonToolContainerV1[];
-        let next: string | undefined;
-        let full: boolean;
-        let omitted: number;
-        if (previous !== undefined && previous.pending.length > 0) {
-          // Containers read for the last result that did not fit come first, with no new provider read.
-          containers = previous.pending;
-          next = previous.token;
-          full = previous.full;
-          omitted = 0;
-        } else if (pinned !== undefined) {
-          // A project scope maps a few containers, each read exactly: its pages hold only those the asker can see, and
-          // its end is known. The continuation is this reader's own offset.
-          const offset = previous?.token === undefined ? 0 : Number(previous.token);
-          const visible = await visibleAll(pinned, input.signal);
-          containers = visible.containers.slice(offset, offset + maximum);
-          next = offset + maximum < visible.containers.length ? String(offset + maximum) : undefined;
-          full = false;
-          omitted = visible.left_out;
-        } else {
-          const page = distinct(await provider.page({ ...(previous?.token === undefined ? {} : { cursor: previous.token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }));
-          const rows = page.containers.length + page.left_out;
-          if (rows > maximum || (page.next !== undefined && rows === 0)) failure('invalid_output');
-          containers = page.containers;
-          next = page.next;
+        let omitted = 0;
+        const page = await lists.page({ previous, selection, wanted, value: container => value(container, echo), async read(token) {
+          if (pinned !== undefined) {
+            // A project scope maps a few containers, each read exactly: its pages hold only those the asker can see, and
+            // its end is known. The continuation is this reader's own offset.
+            const offset = token === undefined ? 0 : Number(token);
+            const visible = await visibleAll(pinned, input.signal);
+            omitted = visible.left_out;
+            return { rows: visible.containers.slice(offset, offset + maximum), state: String(offset + maximum), more: offset + maximum < visible.containers.length, full: false };
+          }
+          const read = distinct(await provider.page({ ...(token === undefined ? {} : { cursor: token }), limit: maximum, ...(input.signal === undefined ? {} : { signal: input.signal }) }));
+          const rows = read.containers.length + read.left_out;
+          if (rows > maximum || (read.next !== undefined && rows === 0)) failure('invalid_output');
+          omitted = read.left_out;
           // A last page that held its full size, counting rows left out, cannot confirm the list's end (ADR-0041).
-          full = rows >= maximum;
-          omitted = page.left_out;
-        }
+          return { rows: read.containers, state: read.next, more: read.next !== undefined, full: rows >= maximum };
+        } });
         await verify(input.signal);
-        // As many as were asked for and one result carries; the rest wait in the cursor.
-        const shown = containers.slice(0, fitting(containers, echo, wanted));
-        const pending = Object.freeze(containers.slice(shown.length));
-        const released = release(shown, echo);
-        let next_cursor: string | undefined;
-        if (next !== undefined || pending.length > 0) {
-          next_cursor = `tool_container_cursor_${randomUUID()}`;
-          cursors.set(next_cursor, Object.freeze({ selection, ...(next === undefined ? {} : { token: next }), pending, full }));
-        }
-        const notices = omitted === 0 ? [] : [leftOut(omitted).notice!];
-        return Object.freeze({ items: released.items, truncated: next_cursor !== undefined, ...(next_cursor === undefined ? {} : { next_cursor }), page_full: next_cursor === undefined && full,
-          ...(notices.length === 0 ? {} : { notice: notices.join(' ') }) });
+        return Object.freeze({ items: release(page.rows, echo), truncated: page.truncated, ...(page.next_cursor === undefined ? {} : { next_cursor: page.next_cursor }),
+          page_full: page.page_full, ...notice(leftOut(omitted)) });
       }, input.signal);
     },
     async open(input): Promise<Page> {
@@ -315,7 +283,7 @@ export async function createPersonToolContainerReaderV1(options: {
         const current = asked(released.container.id, await provider.exact(released.container.id, input.signal));
         const echo = options.echo_projects();
         await verify(input.signal);
-        return Object.freeze({ items: release([current], echo).items, truncated: false });
+        return Object.freeze({ items: release([current], echo), truncated: false });
       }, input.signal);
     },
     async revalidate(input): Promise<void> {

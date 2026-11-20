@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -103,22 +104,71 @@ const RECEIPT_PLACEHOLDER = `sha256:${'0'.repeat(64)}`;
 const LIVE_PAGE_ENVELOPE_BYTES = canonicalJsonBytes({ items: [], truncated: true, receipt_digests: [RECEIPT_PLACEHOLDER],
   next_cursor: `live_cursor_${'0'.repeat(36)}_${Number.MAX_SAFE_INTEGER}`, notice: 'x'.repeat(1024), page_full: true, anchor_truncated: true }).byteLength;
 
+type LiveValueV1 = { readonly citation: { readonly kind: string } };
+
 /**
- * How many of `values`, from the first, fit one live evidence result: the transport bound on what one read may return
- * (`PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1`), less the audited source's envelope. Each item is measured as that source
- * sends it, with its release id and receipt. A reader releases these and pages or reports the rest; at least one item is
- * always offered, so an item too large for any page fails at the boundary that owns the bound rather than looping.
+ * How many of `values`, from the first and at most `maximum`, fit one live evidence result: the transport bound on what
+ * one read may return (`PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1`), less the audited source's envelope. Each item is
+ * measured as that source sends it, with its release id and receipt. At least one item is always offered, so an item too
+ * large for any page fails at the boundary that owns the bound rather than looping.
  */
-export function personLiveEvidencePageFitV1(values: readonly { readonly citation: { readonly kind: string } }[]): number {
+export function personLiveEvidencePageFitV1(values: readonly LiveValueV1[], maximum = Number.MAX_SAFE_INTEGER): number {
   let bytes = LIVE_PAGE_ENVELOPE_BYTES;
   let count = 0;
   for (const value of values) {
-    const { handle: _handle, ...shown } = value as { readonly handle?: unknown; readonly citation: { readonly kind: string } };
+    const { handle: _handle, ...shown } = value as LiveValueV1 & { readonly handle?: unknown };
     bytes += canonicalJsonBytes({ ...shown, id: `live_${'0'.repeat(64)}`, kind: value.citation.kind, receipt_sha256: RECEIPT_PLACEHOLDER }).byteLength + 1;
-    if (bytes > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 && count > 0) break;
+    if (count >= maximum || (bytes > PERSON_EVIDENCE_RESPONSE_MAX_BYTES_V1 && count > 0)) break;
     count += 1;
   }
   return count;
+}
+
+/** What one provider read gave a live list: its rows, the provider's position after them, and whether more follow. */
+export interface PersonLiveListReadV1<R, S> {
+  readonly rows: readonly R[];
+  readonly state: S;
+  readonly more: boolean;
+  /** The provider's last page was exactly full, so its end is not confirmed (ADR-0041). */
+  readonly full: boolean;
+}
+
+/**
+ * The continuation every live list shares, so a list can be read whole page by page. A page releases as many rows as
+ * were asked for and one result carries; the rest wait in its cursor, and the next page releases them first with no new
+ * provider read. Only then does it read on from the provider's position. A cursor continues only the selection that
+ * issued it.
+ */
+export function createPersonLiveListV1<R, S>(prefix: string, failure: (code: 'invalid_request') => never) {
+  const cursors = new Map<string, PersonLiveListReadV1<R, S> & { readonly selection: string }>();
+  return Object.freeze({
+    /** The continuation `cursor` names; undefined for a first page. Checked before any provider read. */
+    resume(cursor: string | undefined, selection: string): PersonLiveListReadV1<R, S> | undefined {
+      if (cursor === undefined) return undefined;
+      const previous = cursors.get(cursor);
+      if (previous === undefined || previous.selection !== selection) failure('invalid_request');
+      return previous;
+    },
+    async page(input: {
+      readonly previous: PersonLiveListReadV1<R, S> | undefined;
+      readonly selection: string;
+      readonly wanted: number;
+      readonly value: (row: R) => LiveValueV1;
+      /** The next provider page, from `state` (undefined for the first). */
+      readonly read: (state: S | undefined) => Promise<PersonLiveListReadV1<R, S>>;
+    }): Promise<{ readonly rows: readonly R[]; readonly state: S; readonly truncated: boolean; readonly page_full: boolean; readonly next_cursor?: string }> {
+      const current = input.previous !== undefined && input.previous.rows.length > 0 ? input.previous : await input.read(input.previous?.state);
+      const shown = current.rows.slice(0, personLiveEvidencePageFitV1(current.rows.map(input.value), input.wanted));
+      const pending = Object.freeze(current.rows.slice(shown.length));
+      let next_cursor: string | undefined;
+      if (current.more || pending.length > 0) {
+        next_cursor = `${prefix}${randomUUID()}`;
+        cursors.set(next_cursor, Object.freeze({ selection: input.selection, rows: pending, state: current.state, more: current.more, full: current.full }));
+      }
+      return Object.freeze({ rows: Object.freeze(shown), state: current.state, truncated: next_cursor !== undefined, page_full: next_cursor === undefined && current.full,
+        ...(next_cursor === undefined ? {} : { next_cursor }) });
+    },
+  });
 }
 
 /** `operation` over each value, four at a time, results in order: bounded provider fan-out. */

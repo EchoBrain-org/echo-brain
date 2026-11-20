@@ -82,7 +82,7 @@ describe('Confluence native ADF page text', () => {
     for (let level = 0; level < 200_000; level += 1) deep = { type: 'blockquote', content: [deep] };
     // A JSON body this deep cannot be parsed, so the walk is tested on an already-parsed document.
     const result = normalizeAtlassianDocumentTextV1({ ...value, content: [...value.content, deep] }, CONFLUENCE_PERSON_PROVIDER_V1, { unsupported: 'omit' });
-    expect(result).toMatchObject({ cut: true });
+    expect(result).toMatchObject({ incomplete: true });
     expect(result.text).toBe('Kept');
   });
 });
