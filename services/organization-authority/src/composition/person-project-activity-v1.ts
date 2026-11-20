@@ -2,7 +2,6 @@ import type Database from 'better-sqlite3';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   PERSON_PROJECT_ACTIVITY_KIND_V1,
-  PERSON_PROJECT_ACTIVITY_LIMITS_V1,
   validatePersonProjectActivityV1,
   type PersonProjectActivityV1,
   type ProjectIdV1,
@@ -53,7 +52,6 @@ export interface CreatePersonProjectActivityV1Options {
   readonly records: PersonProjectRecordActivityV1 & PersonReadableDecisionProjectsV1;
 }
 
-const PROJECTS_MAX = PERSON_PROJECT_ACTIVITY_LIMITS_V1.items;
 /** The follow-ups someone else moved, read a page at a time, newest move first. */
 const MOVES_PAGE = 50;
 
@@ -88,7 +86,7 @@ export function createPersonProjectActivityV1(options: CreatePersonProjectActivi
       const items = options.database.transaction(() => {
         const authorization = options.sessions.authenticateAccess({ access_token: input.access_token });
         const view = options.projects.personChangeView(authorization);
-        const active = view.projects.filter(project => project.status === 'active').slice(0, PROJECTS_MAX);
+        const active = view.projects.filter(project => project.status === 'active');
         const ids = active.map(project => project.project_id);
         const latest = new Map<string, string | null>(ids.map(id => [id, null]));
         const arrived = (projectId: string, at: string | null): void => {
