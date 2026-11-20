@@ -299,6 +299,8 @@ export type AskStep = { readonly type: 'stage'; readonly stage: AskStage; readon
  */
 export interface AskReceipt {
   readonly looked_through: number;
+  /** The count reached the progress contract's bound on a count (1,000): at least that many, said "1,000+". */
+  readonly at_least?: true;
 }
 
 /** A cited statement in the Agentic Ask response. Citation indexes address Answer.sources. */

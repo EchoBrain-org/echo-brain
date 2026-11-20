@@ -358,6 +358,11 @@ describe('an answer from an Authority newer than this desktop', () => {
     expect(markdown(unknown, BLOCK_NAMES)).toContain('Noor Haddad, Oct 23 review: “Start PVT once the soak passes.” [3]');
   });
 
+  it('says a count at the progress contract\'s bound is at least that many', () => {
+    expect(answerView(askLine(blocksAnswer(BLOCKS_QUESTION, GLOBAL), { looked_through: 1_000, elapsed_ms: 0, rows: [] }), GLOBAL).receipt).toEqual({ looked_through: 1_000, at_least: true });
+    expect(answerView(askLine(blocksAnswer(BLOCKS_QUESTION, GLOBAL), { looked_through: 999, elapsed_ms: 0, rows: [] }), GLOBAL).receipt).toEqual({ looked_through: 999 });
+  });
+
   it('still refuses an answer that is wrong in a way no newer kind explains', () => {
     expect(() => answerView(line(blocks => blocks.map(block => (block.kind === 'points' ? { kind: 'checklist', statements: [99] } : block))), GLOBAL)).toThrow();
   });
