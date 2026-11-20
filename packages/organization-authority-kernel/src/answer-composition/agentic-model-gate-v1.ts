@@ -204,7 +204,7 @@ export interface AgenticModelGateStatsV1 {
 
 export interface AgenticModelGateV1 {
   /** A harness transport calls this before forwarding each exact body, never once per SDK session. */
-  external<T>(request: AgenticExternalModelRequestV1, forward: (signal: AbortSignal, progress: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>): Promise<T>;
+  external<T>(request: AgenticExternalModelRequestV1, forward: (signal: AbortSignal, progress?: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>): Promise<T>;
   call(model_call: AgenticModelCallV1, system_prompt: string, user: unknown, schema: StructuredGenerationJsonSchema, recovery?: boolean): Promise<unknown>;
   withRepair<T>(model_call: AgenticModelCallV1, system: string, user: unknown, schema: StructuredGenerationJsonSchema, parse: (value: unknown) => T, on_rejection?: (reason: string) => void): Promise<T>;
   stats(): AgenticModelGateStatsV1;
@@ -411,7 +411,7 @@ export function createAgenticModelGateV1(options: CreateAgenticModelGateV1Option
   };
   // SDK retries and auxiliary requests cannot share an admission. Serialize them so access
   // failures have one order, even if the harness sends concurrently.
-  const admitExternal = <T>(request: StructuredGenerationRequestV1, forward: (signal: AbortSignal, progress: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>, { role, span }: AgenticModelCallV1, recovery = false): Promise<T> => {
+  const admitExternal = <T>(request: StructuredGenerationRequestV1, forward: (signal: AbortSignal, progress?: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>, { role, span }: AgenticModelCallV1, recovery = false): Promise<T> => {
     const requestSignal = request.signal === undefined ? activeSignal : AbortSignal.any([activeSignal, request.signal]);
     const assertRequestLive = () => { assertLive(); requestSignal.throwIfAborted(); };
     const run = externalQueue.then(async () => {

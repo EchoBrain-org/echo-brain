@@ -18,7 +18,7 @@ export interface StructuredGenerationRequestV1 {
  * is never treated as stalled.
  */
 export type StructuredGenerationAdmissionV1 = <T>(request: StructuredGenerationRequestV1,
-  forward: (signal: AbortSignal, progress: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>) => Promise<T>;
+  forward: (signal: AbortSignal, progress?: () => void) => Promise<{ readonly value: T; readonly usage?: StructuredGenerationUsageV1; readonly finish_reason?: string }>) => Promise<T>;
 
 export interface StructuredGenerationJsonSchema {
   readonly [key: string]: unknown;

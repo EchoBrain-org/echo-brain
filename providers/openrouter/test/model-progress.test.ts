@@ -66,7 +66,7 @@ it('passes Claude-account model output to the admitting gate per request and to 
     },
   });
   await port.generate_with_admission!({ ...input, on_progress: () => { callerProgress += 1; } },
-    async (_request, forward) => (await (forward as (signal: AbortSignal, progress: () => void) => Promise<{ value: unknown }>)(gateAbort.signal, () => { gateProgress += 1; })).value);
+    async (_request, forward) => (await forward(gateAbort.signal, () => { gateProgress += 1; })).value);
   expect([callerProgress, gateProgress]).toEqual([3, 3]);
   gateAbort.abort();
   expect(seenSignal?.aborted).toBe(true);

@@ -182,7 +182,7 @@ describe("agentic model gate", () => {
       const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('streaming'), operation: 'messages' }, (signal, progress) => new Promise<{ readonly value: string }>(resolve => {
         signal.addEventListener('abort', () => { aborted = true; }, { once: true });
         let pieces = 0;
-        const tick = setInterval(() => { progress(); if (++pieces === 90) { clearInterval(tick); resolve({ value: 'whole reply' }); } }, 1_000);
+        const tick = setInterval(() => { progress?.(); if (++pieces === 90) { clearInterval(tick); resolve({ value: 'whole reply' }); } }, 1_000);
       }));
       await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
       await expect(pending).resolves.toBe('whole reply');

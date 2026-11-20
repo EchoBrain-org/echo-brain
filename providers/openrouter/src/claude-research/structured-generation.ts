@@ -67,7 +67,7 @@ export function createClaudeAccountStructuredGenerationV1(options: {
               ...(operation === 'messages' ? { diagnostic_input: { model: input.model, system_prompt: JSON.stringify(payload.system ?? []),
                 user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0,
                 timeout_ms: input.timeout_ms } } : {}),
-            }, async (admittedSignal: AbortSignal, progress: () => void) => {
+            }, async (admittedSignal: AbortSignal, progress?: () => void) => {
               const result = await forward(admittedSignal, progress);
               providerFailure = undefined;
               return { ...result, value: result.content ?? null };

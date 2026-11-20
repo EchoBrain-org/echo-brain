@@ -1,5 +1,5 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,7 +21,6 @@ import { ASK_SILENCE_MS, PersonAuthorityClient } from '../../src/product/person-
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
-import { PERSON_ASK_PROGRESS_SHORTENED_V1, startPersonAskProgressStreamV1 } from '../../services/organization-authority/src/presentation/person-ask-progress-stream-v1.js';
 
 // Ask progress (ADR-0039) on the Person client: V3 on /v7 (research tool contract v1), the one Ask route, which always
 // streams, and `person ask --progress`.
@@ -253,21 +252,16 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
   });
 
   it('reads to the answer a stream the Authority shortened at the bound: progress stops, and the answer still comes', async () => {
-    const writes: string[] = [];
-    const response = { destroyed: false, writableEnded: false, writeHead: () => response, flushHeaders: () => undefined,
-      write: (chunk: string) => { writes.push(chunk); return true; }, end: (chunk?: string) => { if (chunk !== undefined) writes.push(chunk); response.writableEnded = true; return response; } };
-    const stream = startPersonAskProgressStreamV1(response as unknown as ServerResponse);
-    const read = heavyRead();
-    const sends = Math.ceil(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 / Buffer.byteLength(formatPersonAskProgressEventV3(read))) + 2;
-    for (let at = 0; at < sends; at += 1) stream.step(read);
-    stream.end(ANSWERED);
-    expect(writes).toContain(PERSON_ASK_PROGRESS_SHORTENED_V1);
+    // The stream as the Authority sends it once progress would crowd out the answer (its own test pins that it does):
+    // steps up to the bound, one comment saying progress was shortened, a heartbeat, then the answer.
+    const frame = formatPersonAskProgressEventV3(heavyRead());
+    const sends = Math.floor(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1 / Buffer.byteLength(frame)) - 2;
+    const writes = [...Array.from({ length: sends }, () => frame), ': progress shortened: the rest of the stream is kept for the answer\n\n', PERSON_ASK_PROGRESS_HEARTBEAT_V1, frames([ANSWERED])];
     const progress: PersonAskProgressStepEventV3[] = [];
     const result = await authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(sse(writes.join(''), 64 * 1024)))
       .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event));
     expect(result).toMatchObject({ result: answer(), receipt: receipt() });
-    expect(progress.length).toBeGreaterThan(0);
-    expect(progress.length).toBeLessThan(sends);
+    expect(progress).toHaveLength(sends);
   });
 
   it('refuses a streamed answer for another scope', async () => {
