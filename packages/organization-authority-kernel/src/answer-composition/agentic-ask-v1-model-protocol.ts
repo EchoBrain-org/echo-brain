@@ -43,8 +43,8 @@ export const AGENTIC_ASK_MAX_ACTIONS_PER_ASK_STEP_V1 = 20;
 export const AGENTIC_ASK_LIST_LIMIT_MAX_V1 = 50;
 /** Distinct items one need, or one writer entry, may cite: a statement's own citation bound (PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4). */
 export const AGENTIC_ASK_MAX_EVIDENCE_IDS_V1 = PERSON_ANSWER_STATEMENT_MAX_CITATIONS_V4;
-/** Hits one search returns: the stored-record desk's own maximum for a search (10), which refuses more. */
-export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 10;
+/** Hits one search returns: the desks' own maximum for one search (records, originals and live sources each return up to 25). */
+export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
 const QUESTION_CHARS = 400;
 const NEED_CHARS = 200;
 const NEED_ID_CHARS = 8;
