@@ -7,8 +7,8 @@ describe('the renderer\'s words for a failure', () => {
     expect(message({ code: 'toString', retryable: false })).toBe('Something went wrong. Try again.');
     expect(toolMessage('Jira', 'constructor', undefined)).toBe('Jira could not be connected. Try again.');
   });
-  it('name a meetings watch over its cap, and leave every other meetings failure in the common words', () => {
-    expect(meetingMessage({ code: 'quota_exceeded', retryable: false, mutation_outcome: 'not_submitted' })).toBe('More than 200 meetings in 7 days. Choose one folder.');
+  it('word a meetings failure in the common words: a watch has no meeting cap to name', () => {
+    expect(meetingMessage({ code: 'quota_exceeded', retryable: false, mutation_outcome: 'not_submitted' })).toBe(message({ code: 'quota_exceeded', retryable: false }));
     expect(meetingMessage({ code: 'quota_exceeded', retryable: false, mutation_outcome: 'unknown' })).toBe('This may not have been sent.');
     expect(meetingMessage({ code: 'unavailable', retryable: true })).toBe(message({ code: 'unavailable', retryable: true }));
     expect(message({ code: 'quota_exceeded', retryable: false })).toBe('Your organization reached its limit for this. Try again later, or ask your organization owner.');

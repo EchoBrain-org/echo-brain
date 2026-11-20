@@ -285,7 +285,7 @@ grouped by the signed-in person's connection: needs attention (revoked),
 connected, available, and not turned on. The list names no tool itself, so a
 tool the Authority adds appears without desktop changes.
 Granola's Manage sheet adds its meeting watch: Off, My meetings (the meetings
-the person recorded in the last 7 days) or One folder (a filter), with an
+the person recorded in the last 30 days) or One folder (a filter), with an
 optional suggested project that only pre-ticks a review's destinations
 ([ADR-0046](../decisions/ADR-0046-private-meetings-and-item-routing.md)).
 The staging synthetic provider stays internal and is not listed. Slack's provider-owned label identifies approval notifications;

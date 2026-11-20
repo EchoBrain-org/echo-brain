@@ -48,7 +48,7 @@ export interface PersonMeetingProviderV1 {
     browse(folder: string | null): Promise<PersonMeetingResultsV2['browse']>;
     /**
      * Optional: checks a watch at Save with the listing its worker uses, refusing a folder the person cannot read and a
-     * window over the watch cap (`quota_exceeded`). A provider without it has nothing to watch.
+     * window the provider cannot list completely. A window of any size is watched. A provider without it has nothing to watch.
      */
     watchable?(watch: PersonalMeetingWatchV1): Promise<void>;
     preview(meeting: string): Promise<PersonMeetingResultsV2['open']>;
@@ -101,8 +101,6 @@ export async function queuePersonMeetingsV1(input: {
 const MEETING_LANES = 3;
 /** Extraction stages that mean the provider is refusing or struggling; one trips the runtime-wide breaker. */
 const TRANSIENT_STAGES = new Set<string>(['rate_limited', 'temporarily_unavailable', 'timeout']);
-/** A watch whose window holds more meetings than it reads (spec §1.2): checking the connection would not help. */
-const WINDOW_FULL = 'More than 200 meetings in 7 days. Choose one folder.';
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -271,9 +269,8 @@ export function createPersonMeetingRuntimeV1(options: {
         && !retryReady(setting.source_key)) { observed.delete(setting.source_key); return; }
       // Fixed, content-free status; one broken grant cannot starve another person's work. A failed retry is already
       // deferred, so the source's intake goes next.
-      const full = error instanceof AuthorityOperationError && error.code === 'quota_exceeded';
       observed.set(setting.source_key, { checked_at: new Date().toISOString(),
-        error: full ? WINDOW_FULL : 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
+        error: 'Meeting intake needs attention. Check the connection and folder access.', next: Date.now() + (retry ? 0 : 60_000) });
       if (!(error instanceof AuthorityOperationError) && !(error instanceof Error)) throw error;
     }
   }

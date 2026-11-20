@@ -526,7 +526,7 @@ CREATE TABLE authority_live_source_admission_v2 (
     source_custodian_observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', source_custodian_observed_at)
   ),
   source_credential_reference_sha256 TEXT NOT NULL CHECK (source_credential_reference_sha256 LIKE 'sha256:%'),
-  initial_cursor TEXT NOT NULL CHECK (length(initial_cursor) BETWEEN 1 AND 65536),
+  initial_cursor TEXT NOT NULL CHECK (length(initial_cursor) >= 1),
   cutoff_at TEXT NOT NULL CHECK (unixepoch(cutoff_at) IS NOT NULL),
   processor_adapter_id TEXT NOT NULL CHECK (length(trim(processor_adapter_id)) BETWEEN 1 AND 128),
   processor_adapter_version TEXT NOT NULL CHECK (length(trim(processor_adapter_version)) BETWEEN 1 AND 128),
@@ -547,7 +547,8 @@ CREATE TABLE authority_live_source_progress_v2 (
   source_key TEXT PRIMARY KEY CHECK (length(source_key) BETWEEN 1 AND 128),
   admission_semantic_input_sha256 TEXT NOT NULL UNIQUE
     REFERENCES authority_live_source_admission_v2(semantic_input_sha256),
-  cursor TEXT NOT NULL CHECK (length(cursor) BETWEEN 1 AND 65536),
+  -- A source's checkpoint has no length of its own: a watch's seen-set holds one mark per meeting of its window.
+  cursor TEXT NOT NULL CHECK (length(cursor) >= 1),
   cursor_version INTEGER NOT NULL CHECK (cursor_version >= 0),
   updated_at TEXT NOT NULL CHECK (unixepoch(updated_at) IS NOT NULL),
   FOREIGN KEY (source_key, admission_semantic_input_sha256)
@@ -610,7 +611,7 @@ CREATE TABLE authority_live_source_candidates_v2 (
   review_policy_consequence_text TEXT NOT NULL CHECK (length(review_policy_consequence_text) BETWEEN 1 AND 8192),
   review_policy_consequence_sha256 TEXT NOT NULL CHECK (review_policy_consequence_sha256 LIKE 'sha256:%'),
   disposition TEXT NOT NULL CHECK (disposition IN ('actionable', 'coalesced', 'no_signals')),
-  source_cursor TEXT NOT NULL CHECK (length(source_cursor) BETWEEN 1 AND 65536),
+  source_cursor TEXT NOT NULL CHECK (length(source_cursor) >= 1),
   meeting_sha256 TEXT NOT NULL CHECK (meeting_sha256 LIKE 'sha256:%'),
   meeting_json TEXT NOT NULL UNIQUE CHECK (json_valid(meeting_json) AND json_type(meeting_json) = 'object'),
   decisions_sha256 TEXT NOT NULL CHECK (decisions_sha256 LIKE 'sha256:%'),

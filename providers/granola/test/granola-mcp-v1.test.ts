@@ -417,14 +417,12 @@ describe('Granola list contract, as observed live', () => {
       await expect(scripted().adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', ...filter } as never)).rejects.toMatchObject({ code: 'invalid_request' });
     }
   });
-  it('fails a window of more than 200 meetings closed, and a page that promises more without moving on', async () => {
-    const full = { code: 'quota_exceeded', message: 'Granola lists more than 200 meetings to watch' };
-    const counted = scripted(listPage([reviewRow], '<pagination has_more="true" total_count="201" remaining_count="200" next_cursor="next" />'));
-    await expect(counted.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject(full);
-    expect(counted.calls()).toHaveLength(1);
+  it('lists a window of any number of meetings, and fails a page that promises more without moving on', async () => {
+    // A watch window has no meeting count of its own: every page is followed, past 200 and past ten pages.
     const rows = (from: number) => Array.from({ length: 150 }, (_, index) => plainRow(numbered(from + index)));
-    const paged = scripted(listPage(rows(0), '<pagination has_more="true" next_cursor="second" />'), listPage(rows(150)));
-    await expect(paged.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).rejects.toMatchObject(full);
+    const pages = Array.from({ length: 12 }, (_, page) => listPage(rows(page * 150), page === 11 ? '' : `<pagination has_more="true" next_cursor="page-${page + 1}" />`));
+    const paged = scripted(...pages);
+    expect(await paged.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', folder_id: PUMP })).toHaveLength(1_800);
     const stuck = scripted(...Array.from({ length: 2 }, () => listPage([], '<pagination has_more="true" next_cursor="again" />')));
     await expect(stuck.adapter.meetings({ from_date: '2026-10-17', to_date: '2026-10-25', captured_by_me: true })).rejects.toMatchObject({ code: 'invalid_output' });
     const repeated = scripted(listPage([reviewRow], '<pagination has_more="true" next_cursor="again" />'), listPage([weeklyRow], '<pagination has_more="true" next_cursor="again" />'));

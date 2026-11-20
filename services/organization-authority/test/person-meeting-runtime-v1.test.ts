@@ -83,7 +83,7 @@ async function fixture(options: { readonly transcriptOnly?: boolean; readonly ow
       return { identity: { kind: 'meeting-source', adapter_id, instance_id: `${tool_id}-${canonicalSha256(actor).slice(7)}`, version: '1.0.0' },
         custodian: { actor }, email: 'fixture@example.test', workspace: 'Fixture', current() { guard(); current(); },
         async folders() { return [{ id: folder, title: 'ECHO', count: 0 }]; }, async browse(value) { browsed.push(value); return { meetings: [] }; },
-        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); },
+        async watchable(value) { watched.push(value); if (windowFull) throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); },
         async preview(value) { return { id: value, title: 'Test meeting', notes: 'Ship pilot.', summary: '', truncated: false }; },
       };
     },
@@ -1185,24 +1185,21 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.create().processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     expect(f.intake.suggestions(source!.source_key, id)).toEqual([projectB]);
   });
-  it('refuses at Save a watch whose window holds more than 200 meetings, and names the cap when the worker meets it later', async () => {
+  it('refuses at Save a watch whose window cannot be listed completely, and names no meeting cap when the worker fails later', async () => {
     const f = await fixture(), runtime = f.create();
     const home = await f.call(runtime, { operation: 'home' });
     const mine = { operation: 'watch' as const, watch: 'mine' as const, folder_id: null, project_id: null, retain: true as const, settings_sha256: home.settings_sha256 };
     f.fullWindow();
-    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'quota_exceeded' });
+    await expect(f.call(runtime, mine)).rejects.toMatchObject({ code: 'unavailable' });
     expect((await f.call(runtime, { operation: 'home' })).sources).toEqual([]);
     f.fullWindow(false);
     await expect(f.call(runtime, mine)).resolves.toEqual({ status: 'saved' });
     expect(f.watched).toEqual([{ watch: 'mine', folder_id: null }, { watch: 'mine', folder_id: null }]);
-    // The window grew past the cap after Save: the status says so, rather than blaming the connection.
-    f.duringPull(() => { throw new AuthorityOperationError('quota_exceeded', 'Granola lists more than 200 meetings to watch'); });
-    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
-    const [full] = (await f.call(runtime, { operation: 'home' })).sources;
-    expect(full).toMatchObject({ baseline: false, error: 'More than 200 meetings in 7 days. Choose one folder.' });
+    // A window has no meeting count of its own; a listing that fails later is a connection matter.
     f.duringPull(() => { throw new AuthorityOperationError('unavailable', 'Granola operation could not be completed'); });
-    await runtime.pollAndStageSource(full!.source_key, new AbortController().signal);
-    expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ error: 'Meeting intake needs attention. Check the connection and folder access.' });
+    await runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const [failing] = (await f.call(runtime, { operation: 'home' })).sources;
+    expect(failing).toMatchObject({ baseline: false, error: 'Meeting intake needs attention. Check the connection and folder access.' });
   });
   it('leaves no status behind when the person stops a failing watch', async () => {
     const f = await fixture(), runtime = f.create();

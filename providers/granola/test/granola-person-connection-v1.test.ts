@@ -180,7 +180,8 @@ describe('Granola verified account and meeting listings', () => {
       expect(await current.window(window)).toEqual([]);
       changed = true;
       await expect(current.window(window)).rejects.toThrow();
-      if (change === 'full') await expect(current.window(window)).rejects.toMatchObject({ code: 'quota_exceeded', message: 'Granola lists more than 200 meetings to watch' });
+      // A listing that counts more meetings than it gives is incomplete, never a window that is too large.
+      if (change === 'full') await expect(current.window(window)).rejects.toMatchObject({ code: 'unavailable' });
       if (change === 'account' || change === 'workspace') {
         expect(store.current(person)?.active).toBe(false);
         expect(() => current.current()).toThrow();
@@ -206,7 +207,7 @@ describe('Granola verified account and meeting listings', () => {
       await expect(session.window({ ...window, mode: 'mine' })).rejects.toMatchObject({ code: 'invalid_request' });
     } finally { db.close(); }
   });
-  it('checks a watch at Save with the listing its worker uses: a listed folder and a window of at most 200 meetings', async () => {
+  it('checks a watch at Save with the listing its worker uses: a listed folder and a complete window of any size', async () => {
     const db = new Database(':memory:');
     try {
       let full = false;
@@ -224,8 +225,9 @@ describe('Granola verified account and meeting listings', () => {
       ]);
       await expect(session.watchable({ watch: 'folder', folder_id: '00000000-0000-4000-8000-0000000000f2' })).rejects.toMatchObject({ code: 'not_found' });
       await expect(session.watchable({ watch: 'off', folder_id: null })).rejects.toMatchObject({ code: 'invalid_request' });
+      // A window's size never refuses a watch; a listing that counts meetings it does not give is incomplete.
       full = true;
-      await expect(session.watchable({ watch: 'mine', folder_id: null })).rejects.toMatchObject({ code: 'quota_exceeded' });
+      await expect(session.watchable({ watch: 'mine', folder_id: null })).rejects.toMatchObject({ code: 'unavailable' });
     } finally { db.close(); }
   });
 });

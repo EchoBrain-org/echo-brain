@@ -39,7 +39,7 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
     const identity = Object.freeze({ kind: 'meeting-source' as const, adapter_id: 'granola-person-mcp', version: '1.0.0',
       instance_id: `granola-${canonicalSha256({ person, account: account.email, workspace: account.workspace_id }).slice(7)}`,
     });
-    /** Every meeting of a watch's window: the ones the person captured, or one folder's. Past 200 it fails closed. */
+    /** Every meeting of a watch's window, however many: the ones the person captured, or one folder's. */
     async function windowed(input: { readonly mode: 'mine' | 'folder'; readonly folder: string | null; readonly from_date: string; readonly to_date: string }) {
       if ((input.mode === 'folder') !== (input.folder !== null)) fail('invalid_request');
       // Search includes upcoming calendar events for future ranges. Intake reads recorded notes only.
@@ -79,8 +79,8 @@ export function createGranolaPersonConnectionV1(options: Omit<Parameters<typeof 
         return meetings.slice(0, 50);
       },
       /**
-       * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window over
-       * 200 meetings, refuses it now rather than failing every later pull.
+       * A watch checked at Save with the listing its worker uses: a folder the person no longer lists, or a window
+       * Granola cannot list completely, refuses it now rather than failing every later pull.
        */
       async watchable(watch: GranolaWatchV1) {
         if (watch.watch === 'off') fail('invalid_request');

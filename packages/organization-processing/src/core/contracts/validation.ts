@@ -386,10 +386,8 @@ export function assertCanonicalMeetingBatch(
     assertCanonicalMeetingDocument(batch['meetings'][index]);
   }
   if (batch['next_cursor'] !== undefined) {
+    // A source's checkpoint has no length of its own; the adapter's codec checks its shape.
     nonEmptyString(batch['next_cursor'], 'meeting_batch.next_cursor');
-    if (batch['next_cursor'].length > 65_536) {
-      throw new Error('meeting_batch.next_cursor exceeds the safety limit');
-    }
   }
 }
 

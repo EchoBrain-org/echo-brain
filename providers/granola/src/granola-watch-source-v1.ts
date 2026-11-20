@@ -22,10 +22,14 @@ export interface GranolaCheckpointV1 {
   readonly retry_after?: Readonly<Record<string, string>>;
 }
 const prefix = 'granola-watch-v1:';
-/** The Authority's cursor column holds 65,536 characters; a full window and queue use far less. */
-const MAX_CURSOR_BYTES = 65_536;
-const MAX_SEEN = 200;
-const WINDOW_DAYS = 7;
+/**
+ * The days a watch lists on each pass. A window is needed: each pass lists the whole window, and its seen-set records
+ * one mark per meeting in it, so an unbounded window would list and store a person's whole history every pass. It holds
+ * any number of meetings; the cursor column has no length of its own.
+ */
+const WINDOW_DAYS = 30;
+/** A queued import is one id per person's request; the queue keeps 50 at a time. */
+const MAX_MANUAL = 50;
 /** A meeting changed this recently may still be recording; a later pull takes it. */
 const SETTLE_MS = 10 * 60_000;
 const DAY_MS = 86_400_000;
@@ -44,21 +48,21 @@ function instant(value: string | undefined): string | undefined {
 }
 export function readGranolaCheckpointV1(cursor: string): GranolaCheckpointV1 {
   const fail: () => never = () => GRANOLA_PERSON_PROVIDER_V1.failure('invalid_request');
-  if (!cursor.startsWith(prefix) || Buffer.byteLength(cursor) > MAX_CURSOR_BYTES) fail();
+  if (!cursor.startsWith(prefix)) fail();
   let value: unknown;
   try { value = JSON.parse(cursor.slice(prefix.length)); } catch { fail(); }
   const row = GRANOLA_PERSON_PROVIDER_V1.record(value);
   if (!['baseline,folder,manual,mode,seen,since', 'baseline,folder,manual,mode,retry_after,seen,since'].includes(Object.keys(row).sort().join(',')) || !['off', 'mine', 'folder'].includes(row.mode as string) || typeof row.baseline !== 'boolean'
     || (row.mode === 'folder' ? typeof row.folder !== 'string' || !GRANOLA_ID_V1.test(row.folder) : row.folder !== null) || (row.mode === 'off' && row.baseline)
     || (row.since !== null && !isInstant(row.since))) fail();
-  const manual = GRANOLA_PERSON_PROVIDER_V1.array(row.manual, 50);
+  const manual = GRANOLA_PERSON_PROVIDER_V1.array(row.manual, MAX_MANUAL);
   if (manual.some(id => typeof id !== 'string' || !GRANOLA_ID_V1.test(id)) || new Set(manual).size !== manual.length) fail();
   const seen = Object.entries(GRANOLA_PERSON_PROVIDER_V1.record(row.seen));
-  if (seen.length > MAX_SEEN || seen.some(([key, mark]) => !GRANOLA_ID_V1.test(key) || !(isInstant(mark) || (typeof mark === 'string' && MARK.test(mark))))
+  if (seen.some(([key, mark]) => !GRANOLA_ID_V1.test(key) || !(isInstant(mark) || (typeof mark === 'string' && MARK.test(mark))))
     || (!row.baseline && seen.length !== 0)) fail();
   if (row.retry_after !== undefined) {
     const retry = Object.entries(GRANOLA_PERSON_PROVIDER_V1.record(row.retry_after));
-    if (retry.length > MAX_SEEN + 50 || retry.some(([key, time]) => !GRANOLA_ID_V1.test(key) || !isInstant(time))) fail();
+    if (retry.some(([key, time]) => !GRANOLA_ID_V1.test(key) || !isInstant(time))) fail();
   }
   return row as unknown as GranolaCheckpointV1;
 }
@@ -86,7 +90,7 @@ export const GRANOLA_PERSONAL_CHECKPOINT_CODEC_V1 = Object.freeze({
   ready: (checkpoint: GranolaCheckpointV1): boolean => checkpoint.baseline,
 });
 const day = (time: number) => new Date(time).toISOString().slice(0, 10);
-/** The days a watch lists at `now`: the last 7, through tomorrow, so that today's meetings are in it in any time zone. */
+/** The days a watch lists at `now`: the last 30, through tomorrow, so that today's meetings are in it in any time zone. */
 export function granolaWatchWindowV1(now: number): { readonly from_date: string; readonly to_date: string } {
   return { from_date: day(now - WINDOW_DAYS * DAY_MS), to_date: day(now + DAY_MS) };
 }
