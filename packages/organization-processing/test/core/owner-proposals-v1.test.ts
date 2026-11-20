@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ActionSignal } from "../../src/core/contracts/decision.js";
 import type { DecisionBrief } from "../../src/core/contracts/delivery.js";
 import {
-  OWNER_PROPOSALS_MAX_V1,
   ownerProposalsV1,
   withoutProposedOwnersV1,
 } from "../../src/core/processing/owner-proposals-v1.js";
@@ -56,16 +55,13 @@ describe("owner proposals V1", () => {
     ]);
   });
 
-  it("offers the first 40 proposals, in brief order, of a brief with more", () => {
-    expect(OWNER_PROPOSALS_MAX_V1).toBe(40);
-    const forty = brief(Array.from({ length: 40 }, (_, index) => action(index, "Participant")));
-    expect(ownerProposalsV1(forty)).toHaveLength(40);
-    const many = brief(Array.from({ length: 45 }, (_, index) => action(index, index === 2 ? null : `Participant ${index}`)));
+  it("offers every proposal, in brief order, however many the brief has", () => {
+    const many = brief(Array.from({ length: 120 }, (_, index) => action(index, index === 2 ? null : `Participant ${index}`)));
     const offered = ownerProposalsV1(many);
     expect(offered.map((proposal) => proposal.action_index)).toEqual(
-      Array.from({ length: 41 }, (_, index) => index).filter((index) => index !== 2),
+      Array.from({ length: 120 }, (_, index) => index).filter((index) => index !== 2),
     );
-    expect(offered[39]).toEqual({ action_index: 40, action_text: "Send the launch plan 41", owner: "Participant 40" });
+    expect(offered.at(-1)).toEqual({ action_index: 119, action_text: "Send the launch plan 120", owner: "Participant 119" });
   });
 
   it("clears every proposed owner and leaves a brief without proposals byte-identical", () => {

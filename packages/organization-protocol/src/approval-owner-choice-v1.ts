@@ -5,11 +5,6 @@
 
 /** Longest confirmed owner, in UTF-16 code units (String.length). */
 export const APPROVAL_OWNER_MAX_CHARACTERS_V1 = 120;
-/**
- * At most this many confirmed owners in one decision: one per proposed action, and only the first 40 proposals are
- * offered (ownerProposalsV1). The Authority V18 CHECK on authority_approval_decisions_v1 holds stored decisions to it.
- */
-export const APPROVAL_OWNERS_MAX_V1 = 40;
 
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 const RECORD_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;

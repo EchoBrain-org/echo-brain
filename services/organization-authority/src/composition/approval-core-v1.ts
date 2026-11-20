@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { annotateCoreRuntimeV1, coreRuntimeIdentityV1, observeCoreRuntimeSyncV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { canonicalJson, canonicalSha256, type JsonValue, type Sha256Digest } from '@echo-brain/federation-protocol';
 import {
-  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, APPROVAL_OWNERS_MAX_V1, validateApprovedDecisionSnapshotV2,
+  APPROVAL_DECISION_SNAPSHOT_SURFACE_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1, validateApprovedDecisionSnapshotV2,
 } from '@echo-brain/organization-protocol';
 import { validateProjectIdV1 } from '@echo-brain/organization-api';
 import type { DecisionBrief, DecisionSet, MeetingDocument } from '@echo-brain/organization-processing/core';
@@ -143,7 +143,7 @@ export interface ApprovalCoreV1 {
   proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[];
   /** `proposals`' ids and statuses alone, in the same order and bound, with no proposal content read (the change check, ADR-0036). */
   proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
-  /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order (its first 40); [] for an unknown approval;
+  /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order, every one; [] for an unknown approval;
    *  proposals whose signal id fails isApprovalSignalIdV1 are left out. */
   ownerProposals(approvalId: string): readonly ApprovalOwnerProposalV1[];
 }
@@ -199,7 +199,8 @@ export function validateApprovalDecisionRequestV1(surface: ApprovalSurfaceV1, va
   });
   if (new Set(routed.map(route => route.signal_id)).size !== routed.length) invalid();
   if (new Set(routed.flatMap(route => route.project_ids ?? [])).size > APPROVAL_PROJECTS_MAX_V1) invalid();
-  if (!Array.isArray(owners) || owners.length > APPROVAL_OWNERS_MAX_V1) invalid();
+  // No count of its own: an owner is accepted only for an offered proposal, once each.
+  if (!Array.isArray(owners)) invalid();
   const chosen = owners.map((owner: unknown) => {
     if (!plain(owner) || !hasExactKeys(owner, ['owner', 'signal_id']) || !isApprovalSignalIdV1(owner.signal_id) || !isApprovalOwnerTextV1(owner.owner)) invalid();
     return Object.freeze({ signal_id: owner.signal_id, owner: owner.owner });

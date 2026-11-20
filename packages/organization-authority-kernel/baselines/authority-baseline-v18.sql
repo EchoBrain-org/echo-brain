@@ -672,7 +672,6 @@ CREATE TABLE authority_approval_decisions_v1 (
     AND json_type(body_json, '$.request.routes') IS 'array'
     AND json_array_length(body_json, '$.request.routes') <= 500
     AND json_type(body_json, '$.request.owners') IS 'array'
-    AND json_array_length(body_json, '$.request.owners') <= 40
     AND json_type(body_json, '$.actor.organization_id') IS 'text'
     AND json_type(body_json, '$.actor.principal_id') IS 'text'
     AND json_type(body_json, '$.actor.membership_id') IS 'text'

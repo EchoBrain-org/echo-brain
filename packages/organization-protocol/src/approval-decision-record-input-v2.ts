@@ -7,7 +7,7 @@ import {
   PROJECT_MEMBERS_READABLE_PERSON_POLICY_ID, RESTRICTED_REVIEWER_PERSON_POLICY_ID, projectMembersReadablePersonPolicyContractSha256,
   restrictedReviewerPersonPolicyContractSha256,
 } from './person-content-policy-v2.js';
-import { APPROVAL_OWNERS_MAX_V1, isApprovalOwnerTextV1, isApprovalSignalIdV1 } from './approval-owner-choice-v1.js';
+import { isApprovalOwnerTextV1, isApprovalSignalIdV1 } from './approval-owner-choice-v1.js';
 import type { RecordInputCodecV4, ValidatedRecordInputV4 } from './record-input-codec-v4.js';
 import type { OrganizationRecordSignalV1 } from './contracts.js';
 
@@ -252,7 +252,8 @@ export function validateApprovalDecisionRecordInputV2(value: unknown): Validated
   // Every action, named or not: proposed owners are cleared at the freeze, and only the reference names confirmed ones.
   if (actions.some(action => action.owner !== null)) fail('Approval decision snapshot must not carry an owner');
   const owners = ref.action_owners;
-  if (!Array.isArray(owners) || owners.length > APPROVAL_OWNERS_MAX_V1) fail('Approval decision owners are invalid');
+  // At most one per action, which the strictly increasing action order below enforces; no count of its own.
+  if (!Array.isArray(owners)) fail('Approval decision owners are invalid');
   let prior = -1;
   owners.forEach((item: unknown, index: number) => {
     const entry = exact(item, ['signal_id', 'owner'], `Approval decision owner ${index}`);

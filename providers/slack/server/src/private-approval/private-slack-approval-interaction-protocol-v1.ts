@@ -190,7 +190,8 @@ function state(payload: RecordValue, approval_id: string, action: "approve" | "r
     if (!isApprovalSignalIdV1(signal_id) || control.type !== "plain_text_input" || (control.value !== null && !isApprovalOwnerTextV1(control.value))) invalid();
     if (control.value !== null) owners.push({ signal_id, owner: control.value });
   }
-  if (owners.length > 40 || new Set(owners.map((owner) => owner.signal_id)).size !== owners.length) invalid();
+  // One owner per action; the card's own blocks bound how many a click can carry.
+  if (new Set(owners.map((owner) => owner.signal_id)).size !== owners.length) invalid();
   return Object.freeze({ owners: Object.freeze(action === "reject" ? [] : owners) });
 }
 function presentationChangeAction(actionId: string, type: unknown): boolean {

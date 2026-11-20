@@ -69,7 +69,6 @@ describe('person-owned review contract', () => {
     ['an approval with no routes', { routes: [] }],
     ['the retired audience', { project_ids: [projectA] }],
     ['the retired transcript choice', { share_transcript: false }],
-    ['more than forty owners', { owners: Array.from({ length: 41 }, (_, index) => ({ signal_id: `act-${index}`, owner: 'Rafael Moreno' })) }],
     ['duplicate owner signal ids', { owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }, { signal_id: 'act-1', owner: 'Ada Lovelace' }] }],
     ['empty owner signal id', { owners: [{ signal_id: '', owner: 'Rafael Moreno' }] }],
     ['too long owner signal id', { owners: [{ signal_id: 'a'.repeat(129), owner: 'Rafael Moreno' }] }],
@@ -99,6 +98,9 @@ describe('person-owned review contract', () => {
       .toMatchObject({ schema_version: 1, routes: mixed, owners: [{ signal_id: 'act-1', owner: 'Rafael Moreno' }] });
     expect(validatePersonReviewRequestV1(request({ action: 'reject', routes: [] }))).toMatchObject({ action: 'reject', routes: [] });
     expect(validatePersonReviewRequestV1(request({ routes: routes(null, []) }))).toMatchObject({ routes: routes(null, []) });
+    // Owners have no count of their own: one per action, as many as the meeting has.
+    const many = Array.from({ length: 100 }, (_, index) => ({ signal_id: `act-${index}`, owner: 'Rafael Moreno' }));
+    expect(validatePersonReviewRequestV1(request({ routes: mixed, owners: many })).owners).toHaveLength(100);
   });
 
   it('accepts a review_open of items, reasons, names and records, with any line breaks in the meeting\'s words', () => {

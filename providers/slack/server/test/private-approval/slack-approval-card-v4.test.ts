@@ -92,4 +92,16 @@ describe("Slack approval card V4", () => {
     expect(ids).toContain(slackApprovalOwnerActionIdV4("apr_test", "act_beta"));
     expect(JSON.stringify(built)).not.toContain("owner-input-0");
   });
+  it("shows the owners that fit Slack's 50 blocks and says how many more the desktop app has", () => {
+    const owners = Array.from({ length: 120 }, (_, index) => ({ signal_id: `act_${index}`, action: `Action ${index}`, proposed: "Ada" }));
+    const built = card(["THERM"], owners);
+    expect(built.blocks.length).toBe(50);
+    const inputs = controls(built).filter((control) => control.type === "plain_text_input");
+    const more = built.blocks.find((block) => (block as { block_id?: string }).block_id?.endsWith("-more-owners")) as { elements: { text: string }[] };
+    expect(more.elements[0]!.text).toBe(`${120 - inputs.length} more actions have a proposed owner. Set them in the ECHO desktop app.`);
+    expect(inputs.map((input) => input.action_id)).toEqual(owners.slice(0, inputs.length).map((owner) => slackApprovalOwnerActionIdV4("apr_test", owner.signal_id)));
+    expect(built.text).toContain(`${120 - inputs.length} more actions have a proposed owner.`);
+    // Every owner that fits is shown, and no note when all fit.
+    expect(JSON.stringify(card(["THERM"], owners.slice(0, 10)))).not.toContain("more actions have a proposed owner");
+  });
 });

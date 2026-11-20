@@ -9,12 +9,6 @@ import type { DecisionBrief } from "../contracts/delivery.js";
 
 /** Longest owner a proposal offers, in characters. */
 const OWNER_MAX_CHARACTERS_V1 = 120;
-/**
- * At most this many owner proposals are offered: the first ones in brief order.
- * A decision stores at most 40 confirmed owners (APPROVAL_OWNERS_MAX_V1, held
- * by the Authority V18 decision CHECK), and the Slack card has room for 40.
- */
-export const OWNER_PROPOSALS_MAX_V1 = 40;
 
 /** One action whose owner extraction proposed; `action_index` is its place in the brief's actions. */
 export interface OwnerProposalV1 {
@@ -62,12 +56,12 @@ export function withoutProposedOwnersV1(brief: DecisionBrief): DecisionBrief {
 /**
  * The actions of an uncleared brief whose owner extraction proposed, in brief
  * order. An action is offered only with displayable text and a canonical
- * owner; past the first `OWNER_PROPOSALS_MAX_V1` none are offered.
+ * owner. Every such action is offered; a surface with a real limit of its own
+ * (Slack's blocks) shows what fits and says how many more there are.
  */
 export function ownerProposalsV1(brief: DecisionBrief): readonly OwnerProposalV1[] {
   const proposals: OwnerProposalV1[] = [];
   for (const [action_index, action] of brief.actions.entries()) {
-    if (proposals.length === OWNER_PROPOSALS_MAX_V1) break;
     if (action.owner === null || !isExactDisplayText(action.text)) continue;
     const owner = canonicalProposedOwnerV1(action.owner);
     if (owner !== null) proposals.push(Object.freeze({ action_index, action_text: action.text, owner }));

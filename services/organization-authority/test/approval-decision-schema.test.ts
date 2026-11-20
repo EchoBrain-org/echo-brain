@@ -156,7 +156,6 @@ describe("Authority approval decision schema", () => {
       ["no routes", { request: { routes: undefined } }],
       ["more than 500 routes", { request: { routes: Array.from({ length: 501 }, (_, i) => ({ signal_id: `a${i}`, project_ids: [] })) } }],
       ["owners that are not an array", { request: { owners: {} } }],
-      ["more than 40 owners", { request: { owners: Array.from({ length: 41 }, (_, i) => ({ signal_id: `a${i}`, owner: "A" })) } }],
       ["no membership", { actor: { membership_id: undefined } }],
       ["a numeric principal", { actor: { principal_id: 1 } }],
       ["slack evidence on desktop", { evidence: { kind: "slack-click" } }],
