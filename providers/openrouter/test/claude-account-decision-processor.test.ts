@@ -111,14 +111,16 @@ it('retains only actual provider usage on success and on a later SDK failure', a
 });
 
 it.each([
-  [429, 'rate_limited', true], [529, 'temporarily_unavailable', true], [500, 'temporarily_unavailable', true],
-  [503, 'temporarily_unavailable', true], [400, 'permanently_rejected', false], [413, 'permanently_rejected', false],
-] as const)('maps a %i refusal to %s, unbilled only when the provider was overloaded or rate-limited', async (status, code, unbilled) => {
+  [429, 'rate_limited', true, true], [529, 'temporarily_unavailable', true, true], [503, 'temporarily_unavailable', true, true],
+  // A 5xx other than 503/529 can arrive after the model ran: its billing is unknown.
+  [500, 'temporarily_unavailable', false, true], [504, 'temporarily_unavailable', false, true],
+  [400, 'permanently_rejected', false, false], [413, 'permanently_rejected', false, false],
+] as const)('maps a %i refusal to %s, unbilled only when the provider was overloaded or rate-limited', async (status, code, unbilled, retryable) => {
   const client = createClaudeAccountLlmProviderClientV1({ account,
     forward: async ({ res }) => { res.writeHead(status); res.end('{}'); throw new ClaudeModelResponseErrorV1(status); },
     run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
   });
-  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable: unbilled });
+  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable });
 });
 
 it('holds a meeting the provider refused as past the model\'s context window as input_too_long, never retried', async () => {

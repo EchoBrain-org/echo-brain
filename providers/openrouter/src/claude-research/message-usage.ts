@@ -14,13 +14,14 @@ const PRODUCED_EVENTS = new Set(['content_block_start', 'content_block_delta', '
  */
 export function messageUsageObserverV1(capture = false, produced?: () => void) {
   const decoder = new StringDecoder('utf8');
-  let pending = '', input: number | undefined, output: number | undefined, cached = 0, created = 0, finish: string | undefined;
+  let pending = '', input: number | undefined, output: number | undefined, cached = 0, created = 0, finish: string | undefined, stopped = false;
   const blocks = new Map<number, { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown; json: string }>();
   const count = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
   const line = (value: string) => {
     if (!value.startsWith('data:')) return;
     let event; try { event = JSON.parse(value.slice(5).trim()); } catch { return; }
     if (typeof event?.type === 'string' && PRODUCED_EVENTS.has(event.type)) produced?.();
+    if (event?.type === 'message_stop') stopped = true;
     // The selected private trace receives visible text/tool output; reasoning blocks are not retained.
     if (capture && Number.isSafeInteger(event?.index)) {
       const block = event.content_block;
@@ -42,6 +43,8 @@ export function messageUsageObserverV1(capture = false, produced?: () => void) {
   const accept = (text: string) => { pending += text; let end; while ((end = pending.indexOf('\n')) !== -1) { line(pending.slice(0, end)); pending = pending.slice(end + 1); } };
   return {
     write: (chunk: Buffer) => accept(decoder.write(chunk)),
+    /** True once the message's terminal event (`message_stop`) arrived: the reply finished rather than being cut. */
+    finished: () => stopped,
     end(): ClaudeMessageMetadataV1 {
       accept(decoder.end()); if (pending) line(pending); pending = '';
       const totalInput = input === undefined ? undefined : input + cached + created;

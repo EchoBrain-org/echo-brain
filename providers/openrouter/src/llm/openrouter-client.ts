@@ -17,7 +17,8 @@ import {
   type StructuredGenerationResult,
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
+import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, OpenRouterStreamCutErrorV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -112,6 +113,8 @@ export class OpenRouterClient implements LlmProviderClient {
       } catch (error) {
         if (error instanceof OpenRouterReplyTooLargeErrorV1) throw invalidProviderResponse('OpenRouter', `reply passed its ${error.capacity_bytes}-byte transport capacity`);
         if (error instanceof SyntaxError) throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+        // Cut mid-event after the model may have run: retryable, never unbilled, so the meeting cycle parks it.
+        if (error instanceof OpenRouterStreamCutErrorV1) throw new AdapterError('temporarily_unavailable', error.message, true);
         return stalled(error);
       }
       // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
@@ -120,8 +123,9 @@ export class OpenRouterClient implements LlmProviderClient {
         try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
         if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
       }
-      // OpenRouter bills no non-2xx reply; a billing, rate-limit or 5xx refusal is the transient, unbilled kind.
-      if (!response.ok) throw providerStatusError('OpenRouter', response.status, response.status === 402 || response.status === 429 || response.status >= 500);
+      // Known unbilled only when the status says the request was refused before generation (rate-limited or overloaded);
+      // any other 5xx, a gateway 504 included, can arrive after the model ran.
+      if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
       return this.parsed(reply, response);
     } finally { clearTimeout(timer); }
   }

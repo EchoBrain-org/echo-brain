@@ -18,13 +18,15 @@ it.each(['ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT'])('marks an Open
   expect(await diagnostic(failed(code))).toMatchObject({ failure_class: 'adapter_transport', unbilled: true });
 });
 
-it.each([429, 503, 500])('marks an OpenRouter %i refusal, which generated nothing, unbilled', async value => {
+it.each([429, 503, 529])('marks an OpenRouter %i refusal, documented as refused before generation, unbilled', async value => {
   expect(await diagnostic(status(value))).toMatchObject({ http_status: value, unbilled: true });
 });
 
 it('leaves a failure whose billing is unknown unmarked: a connection lost after sending, a permanent refusal, a cut stream', async () => {
   expect(await diagnostic(failed('ECONNRESET'))).not.toHaveProperty('unbilled');
   expect(await diagnostic(status(400))).not.toHaveProperty('unbilled');
+  // A gateway 5xx can arrive after the upstream generated: not proof nothing was billed.
+  for (const value of [500, 502, 504, 402]) expect(await diagnostic(status(value))).not.toHaveProperty('unbilled');
   const cut = (async () => new Response('data: {"choices":[{"delta":{"content":"{}"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } })) as unknown as typeof fetch;
   expect(await diagnostic(cut)).not.toHaveProperty('unbilled');
 });

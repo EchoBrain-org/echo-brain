@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { messageUsageObserverV1, type ClaudeMessageMetadataV1 } from './message-usage.js';
 import { observeCoreModelMetadataV1, observeCoreRuntimeV1, annotateCoreRuntimeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { isContextWindowRefusal } from '@echo-brain/organization-processing/llm/llm-provider';
+import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
 
 interface ClaudeModelForwardV1 {
   readonly req: IncomingMessage; readonly res: ServerResponse; readonly body: Buffer; readonly path: string; readonly signal: AbortSignal;
@@ -27,13 +28,14 @@ export class ClaudeModelResponseErrorV1 extends Error {
     super('Research provider request failed');
     // A rate-limited or overloaded refusal generated nothing: marked unbilled where the model gate reads it.
     this.diagnostic = { failure_class: 'adapter_http' as const, http_status: status, ...(contextWindow ? { context_window: true as const } : {}),
-      ...(UNBILLED_REFUSAL_STATUSES.has(status) ? { unbilled: true as const } : {}) };
+      ...(UNBILLED_REFUSAL_STATUSES_V1.has(status) ? { unbilled: true as const } : {}) };
   }
 }
 
 /**
- * Content-free network failure. `unbilled`: it happened before the request body was fully sent, so the provider cannot
- * have accepted the request; any later failure leaves the generation's billing unknown.
+ * Content-free network failure. `unbilled`: no connection to the provider was ever established (refused, DNS, TLS), so
+ * no byte of the request reached it; any later failure, or a stream cut before its terminal event, leaves the
+ * generation's billing unknown.
  */
 export class ClaudeModelTransportErrorV1 extends Error {
   readonly diagnostic: { readonly failure_class: 'adapter_transport'; readonly http_status: null; readonly unbilled?: true };
@@ -44,8 +46,6 @@ export class ClaudeModelTransportErrorV1 extends Error {
   }
 }
 
-/** Statuses that say the provider refused the request without generating: rate-limited (429) or overloaded (503, 529). */
-const UNBILLED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([429, 503, 529]);
 
 /**
  * True only for a failed model request that provably cost nothing: refused before the upstream accepted it, or refused
@@ -53,7 +53,7 @@ const UNBILLED_REFUSAL_STATUSES: ReadonlySet<number> = new Set([429, 503, 529]);
  */
 export function claudeModelFailureUnbilledV1(error: unknown): boolean {
   if (error instanceof ClaudeModelTransportErrorV1) return error.unbilled;
-  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES.has(error.diagnostic.http_status);
+  return error instanceof ClaudeModelResponseErrorV1 && UNBILLED_REFUSAL_STATUSES_V1.has(error.diagnostic.http_status);
 }
 
 /** A model request refused because an earlier one in the same session failed with its billing unknown. */
@@ -92,9 +92,10 @@ function providerForwarderV1(options: {
     const call = async () => {
     observeCoreModelMetadataV1({ provider, model });
     const result = await new Promise<ClaudeMessageMetadataV1>((resolve, reject) => {
-      // Until the whole body is sent the provider cannot have accepted the request: a failure then is unbilled.
-      let sent = false;
-      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1(!sent));
+      // Never delivered only while no connection to the provider was established (refused, DNS, TLS before the request):
+      // once one is, any byte of the request may have reached it, whatever the local write reported.
+      let connected = false;
+      const transportFailed = () => reject(input.signal.aborted ? input.signal.reason : new ClaudeModelTransportErrorV1(!connected));
       const headers: Record<string, string> = { authorization: options.authorization(input.req), 'content-type': 'application/json',
         'content-length': String(input.body.length), 'accept-encoding': 'identity' };
       for (const key of ['anthropic-version', 'anthropic-beta', ...(provider === 'anthropic' ? ['user-agent', 'x-app'] : [])]) {
@@ -102,7 +103,7 @@ function providerForwarderV1(options: {
       }
       const upstream = request({ hostname: options.hostname, port: 443, method: 'POST', path: `${options.path_prefix}${input.path}`, headers, signal: input.signal }, reply => {
         // A reply means the upstream received the request.
-        sent = true;
+        connected = true;
         annotateCoreRuntimeV1({ counts: { http_status: reply.statusCode ?? 0 } });
         const streamed = String(reply.headers['content-type'] ?? '').includes('text/event-stream');
         const usage = messageUsageObserverV1(true, streamed ? input.alive : undefined);
@@ -110,21 +111,35 @@ function providerForwarderV1(options: {
         const refusal: Buffer[] = [];
         reply.on('data', chunk => { if (!streamed) input.alive?.(); usage.write(chunk); if ((reply.statusCode ?? 502) >= 400) refusal.push(Buffer.from(chunk)); });
         input.res.writeHead(reply.statusCode ?? 502, { 'content-type': reply.headers['content-type'] ?? 'application/json' });
-        reply.pipe(input.res);
+        // The SDK's response is ended here only once the reply is known finished: a cut stream must reach it as a broken
+        // connection, not a clean end it could read as complete.
+        reply.pipe(input.res, { end: false });
         reply.on('end', () => {
           const status = reply.statusCode ?? 502;
           if (status >= 400) {
             let body: unknown;
             try { body = JSON.parse(Buffer.concat(refusal).toString('utf8')) as unknown; } catch { body = undefined; }
+            input.res.end();
             reject(new ClaudeModelResponseErrorV1(status, isContextWindowRefusal(status, body)));
+            return;
           }
-          else resolve(usage.end());
+          const metadata = usage.end();
+          // A stream that ended cleanly before the message's terminal event was cut in transit after the model ran:
+          // a failed call whose billing is unknown, never a finished reply.
+          if (streamed && !usage.finished()) { reject(new ClaudeModelTransportErrorV1(false)); return; }
+          input.res.end();
+          resolve(metadata);
         });
         reply.on('error', transportFailed);
         reply.on('aborted', transportFailed);
       });
+      upstream.on('socket', socket => {
+        // A reused connection is already established; a new one is once its TLS handshake completes.
+        if (!socket.connecting) connected = true;
+        else socket.once('secureConnect', () => { connected = true; });
+      });
       upstream.on('error', transportFailed);
-      upstream.end(input.body, () => { sent = true; });
+      upstream.end(input.body);
     });
     observeCoreModelMetadataV1({ provider, model, ...(result.finish_reason === undefined ? {} : { finish_reason: result.finish_reason }) });
     if (result.usage !== undefined) annotateCoreRuntimeV1({ counts: { ...result.usage } });
