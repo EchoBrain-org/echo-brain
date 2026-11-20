@@ -545,7 +545,9 @@ export function writeStatusView(raw: unknown, kind: 'note' | 'document'): WriteS
   return value.state === 'saved' ? { state: 'saved', ...extraction(value) } : { state: 'unknown' };
 }
 
-const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy']);
+/** Failures that may pass on another try: the person sees a Try again button. Refusals of what was sent are not among them. */
+const RETRYABLE = new Set(['unavailable', 'transport_failed', 'rate_limited', 'timeout', 'outcome_unknown', 'invalid_output', 'busy',
+  'internal', 'failed', 'request_failed', 'invalid_response', 'timed_out', 'research_failed', 'document_completion_failed', 'source_admission_failed']);
 /** A write that failed this way may have reached the Authority, unless the client says otherwise. */
 const MAYBE_SENT = new Set(['outcome_unknown', 'timeout', 'unavailable', 'transport_failed']);
 
