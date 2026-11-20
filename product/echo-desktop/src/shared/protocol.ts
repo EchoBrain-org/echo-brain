@@ -815,16 +815,24 @@ export type MethodName = keyof Methods;
 export type HostMethodName = keyof HostMethods;
 
 /**
+ * How long the host lets an Ask print nothing before it is stalled: the client's own 40 s stall (four missed 10 s
+ * Authority heartbeats, PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1; a unit test pins the relation), plus up to two 15 s session
+ * refreshes before its request goes out and 20 s to start the client. A plain number, so the page's bundle leaves the API out.
+ */
+export const ASK_RUN_SILENCE_MS = 90_000;
+
+/**
  * Each host method's limit in the host; the client enforces its own shorter network timeouts. Its keys are main's allowlist
  * of host methods, so none can be left out. Plain numbers, so the page's bundle leaves the table out.
  */
 export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'app.status': 5_000, 'signin.begin': 660_000, 'signin.invitation': 660_000, 'projects.list': 45_000, 'changes.read': 15_000,
   'list.page': 45_000, 'open.ref': 45_000, 'notes.submit': 45_000, 'documents.upload': 720_000,
-  // An Ask waits out the client's 345 s (the Authority's 300 s deadline, its queue and release) and 10 s more; a cited
-  // passage waits out the client's 15 s read and its session's 15 s. A record read is also the reader's meeting open,
-  // which waited 45 s as `open.ref` does.
-  'ask.run': 355_000, 'ask.cancel': 5_000, 'ask.source': 45_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
+  // An Ask has no time limit: its 90 s is a silence, started again by every line the client prints (each step, and an
+  // alive line per Authority heartbeat, ASK_RUN_SILENCE_MS). A cited passage is one read that prints nothing until it
+  // answers, so its whole wait is its silence: the client's 15 s read and its session's 15 s, and 15 s to start the
+  // client. A record read is also the reader's meeting open, which waited 45 s as `open.ref` does.
+  'ask.run': ASK_RUN_SILENCE_MS, 'ask.cancel': 5_000, 'ask.source': 45_000, 'ask.record': 45_000, 'writes.status': 45_000, 'documents.retry': 720_000, 'documents.abandon': 15_000,
   'account.signOut': 45_000, 'account.tools': 45_000,
   'documents.save': 720_000, 'projects.read': 45_000, 'projects.members': 45_000,
   'people.directory': 45_000, 'projects.change': 45_000, 'projects.create': 45_000, 'employees.list': 45_000, 'employees.invite': 45_000,

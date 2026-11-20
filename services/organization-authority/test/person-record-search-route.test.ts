@@ -729,7 +729,6 @@ describe("Person Layer 2 route", () => {
   it.each([
     ["an empty query", ""],
     ["invalid query", " leading space"],
-    ["a query longer than 240 code points", "a ".repeat(120) + "a"],
     ["a query with an overlong term", "é".repeat(33)],
     ["a punctuation-only query", "!!!"],
   ])("rejects %s before retrieval or audit", (_name, query) => {

@@ -41,13 +41,13 @@ const MESSAGES: Record<string, string> = {
   question_normalization: 'That question has characters ECHO cannot read. Retype it and ask again.',
   question_whitespace: 'Remove the spaces or line breaks at the start or end of the question.',
   question_controls: 'That question has hidden control characters. Retype it and ask again.',
-  question_too_long: 'That question is over 4,000 characters. Shorten it and ask again.',
+  // A request past its transport bound (the Ask's 64 KiB request body): the only limit on a question's length.
+  request_too_large: 'That is more than ECHO can send in one request. Shorten it and try again.',
   // The keyword search rule (record search).
   query_empty: 'Type something to search for.',
   query_normalization: 'That search has characters ECHO cannot read. Retype it and try again.',
   query_whitespace: 'Remove the spaces at the start or end of the search.',
   query_controls: 'Keep the search to one line, without hidden characters.',
-  query_too_long: 'Searches are up to 240 characters. Shorten it and try again.',
   query_term_count: 'Search for at least one word or number.',
   query_term_too_long: 'One word in that search is too long. Shorten it and try again.',
   invalid_limit: 'That asked for too many results at once. Try again with fewer.',
@@ -61,6 +61,8 @@ const MESSAGES: Record<string, string> = {
   busy: 'ECHO is busy with another request. Try again in a moment.',
   quota_exceeded: 'Your organization reached its limit for this. Try again later, or ask your organization owner.',
   timed_out: 'That took too long. Try again.',
+  // An Ask that heard nothing from ECHO for a while (the client's or the host's silence): it has no time limit otherwise.
+  stalled: 'ECHO stopped responding while it worked on that. Try again.',
   research_failed: 'ECHO could not finish looking into that. Try again.',
   no_access: 'You do not have access to that.',
   forbidden: 'You do not have access to that.',

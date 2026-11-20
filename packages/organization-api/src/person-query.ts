@@ -9,12 +9,10 @@ export const PERSON_QUERY_INPUT_MESSAGES_V1: Readonly<Record<string, string>> = 
   question_normalization: 'Send the question as NFC-normalized Unicode text.',
   question_whitespace: 'Remove spaces and line breaks from the start and end of the question.',
   question_controls: 'Remove control characters from the question; line breaks and tabs are fine.',
-  question_too_long: 'Shorten the question to at most 4,000 characters.',
   query_empty: 'Enter a question or search query containing text.',
   query_normalization: 'Use NFC-normalized Unicode text for the question or search query.',
   query_whitespace: 'Remove leading and trailing whitespace from the question or search query.',
   query_controls: 'Use a single line without control characters for the question or search query.',
-  query_too_long: 'Shorten the question or search query to at most 240 Unicode code points.',
   query_term_count: 'Include at least one letter or number in the question or search query.',
   query_term_too_long: 'Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.',
 });
@@ -32,12 +30,6 @@ function refused(code: string): never {
   throw new PersonQueryInputError(code, PERSON_QUERY_INPUT_MESSAGES_V1[code]!);
 }
 
-/**
- * The longest Ask question, in Unicode code points. A question is natural language read by the research model, so it may
- * be a pasted paragraph or a short email; at 4 bytes a code point it stays well inside the 64 KiB Ask request body.
- */
-export const PERSON_QUESTION_MAX_CODE_POINTS_V1 = 4_000;
-
 /** Controls a question may not hold: every C0 and C1 control but tab, line feed and carriage return, and lone surrogates. */
 const QUESTION_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\uD800-\uDFFF]/u;
 
@@ -53,7 +45,8 @@ export function personQuestionToSend(value: string): string {
 
 /**
  * The Ask question rule, for the question a person asks, the earlier question a follow-up carries, and the questions
- * the follow-up resolver writes. Natural language: no term or per-term rule, and line breaks and tabs are allowed.
+ * the follow-up resolver writes. Natural language: no term or per-term rule, line breaks and tabs are allowed, and it has
+ * no length of its own: the request that carries it is bounded by its transport (PERSON_ANSWER_REQUEST_MAX_BYTES_V3).
  * Clients send personQuestionToSend's form, so text that is not NFC or not trimmed is refused here, never rewritten.
  */
 export function validatePersonQuestionText(value: unknown): string {
@@ -61,19 +54,26 @@ export function validatePersonQuestionText(value: unknown): string {
   if (value !== value.normalize('NFC')) refused('question_normalization');
   if (value.trim() !== value) refused('question_whitespace');
   if (QUESTION_CONTROLS.test(value)) refused('question_controls');
-  if ([...value].length > PERSON_QUESTION_MAX_CODE_POINTS_V1) refused('question_too_long');
   return value;
 }
 
-/** The keyword search rule (record search and the research model's desk search): one line of at most 240 code points. */
+/**
+ * The longest term the search index holds, in UTF-8 bytes: the index skips longer words in what it stores
+ * (organization-retrieval's MAXIMUM_TERM_UTF8_BYTES), so a longer query term could never match and is refused by name.
+ */
+const INDEX_TERM_MAX_BYTES = 64;
+
+/**
+ * The keyword search rule (record search and the research model's desk search): one line with at least one word. It has
+ * no length of its own; the request that carries it is bounded by its transport.
+ */
 export function validatePersonQueryText(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0) refused('query_empty');
   if (value !== value.normalize('NFC')) refused('query_normalization');
   if (value.trim() !== value) refused('query_whitespace');
   if (/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)) refused('query_controls');
-  if ([...value].length > 240) refused('query_too_long');
   const terms = new Set((value.match(/[\p{L}\p{N}]+/gu) ?? []).map(term => term.toLowerCase().normalize('NFC')));
   if (terms.size === 0) refused('query_term_count');
-  if ([...terms].some(term => utf8ByteLength(term) > 64)) refused('query_term_too_long');
+  if ([...terms].some(term => utf8ByteLength(term) > INDEX_TERM_MAX_BYTES)) refused('query_term_too_long');
   return value;
 }

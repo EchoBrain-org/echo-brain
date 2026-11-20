@@ -81,7 +81,8 @@ import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-appli
 import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
 import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
 
-const MAXIMUM_BODY_BYTES = 64 * 1024;
+/** One JSON request's body: the API's one request bound, so the server and every client agree. */
+const MAXIMUM_BODY_BYTES = MAX_ORGANIZATION_API_BODY_BYTES;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
 const MAXIMUM_PROVIDER_RESPONSE_BYTES = 64 * 1024;
 const OIDC_BEGIN_CLIENT_WINDOW_MS = 60 * 1000;
@@ -455,8 +456,10 @@ function singletonHeaders(
 }
 
 async function body(request: IncomingMessage): Promise<unknown> {
+  // A body past the transport bound keeps rawBody's own reason; only one that is not JSON is "invalid".
+  const raw = await rawBody(request);
   try {
-    return JSON.parse((await rawBody(request)).toString("utf8")) as unknown;
+    return JSON.parse(raw.toString("utf8")) as unknown;
   } catch {
     throw new AuthorityOperationError(
       "invalid_request",

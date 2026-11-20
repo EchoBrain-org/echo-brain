@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
+  PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1,
   PERSON_ASK_PROGRESS_HEARTBEAT_V1,
   PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1,
   formatPersonAskProgressEventV3,
@@ -16,7 +17,7 @@ import {
   type PersonAskProgressEventV3,
   type PersonAskProgressStepEventV3,
 } from '@echo-brain/organization-api';
-import { PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
+import { ASK_SILENCE_MS, PersonAuthorityClient } from '../../src/product/person-client/authority-client.js';
 import { PersonClient } from '../../src/product/person-client/client.js';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { PersonSessionStore } from '../../src/product/person-client/session-store.js';
@@ -338,21 +339,55 @@ describe('Ask progress stream on the Person client (ADR-0039)', () => {
     expect(progress).toEqual([]);
   });
 
-  it('bounds the whole stream by the ask timeout', async () => {
-    const timeout = new AbortController();
-    const spy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timeout.signal);
-    const stream = openStream();
-    const progress: PersonAskProgressStepEventV3[] = [];
-    const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
-      .askV7WithProgress('bearer', 'What did we decide?', undefined, new AbortController().signal, event => progress.push(event));
-    stream.write(frames(STEPS.slice(0, 1)));
-    await vi.waitFor(() => expect(progress).toHaveLength(1));
-    timeout.abort();
-    await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
-    expect(spy).toHaveBeenCalledTimes(1);
-    // The Authority's 300 s whole-Ask deadline and 45 s for its queue and release.
-    expect(spy).toHaveBeenCalledWith(345_000);
-    expect(stream.state.cancelled).toBe(true);
+  it('has no whole-Ask deadline: it waits as long as the heartbeat keeps arriving, and hands each heartbeat on', async () => {
+    expect(ASK_SILENCE_MS).toBe(4 * PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stream = openStream();
+      const progress: PersonAskProgressStepEventV3[] = [];
+      let heartbeats = 0;
+      const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event), undefined, () => { heartbeats += 1; });
+      // Twenty minutes of heartbeats, each just inside the silence, then the answer.
+      for (let minute = 0; minute < 20 * 60_000; minute += ASK_SILENCE_MS - 1_000) {
+        await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS - 1_000);
+        stream.write(PERSON_ASK_PROGRESS_HEARTBEAT_V1);
+      }
+      stream.write(frames([...STEPS, ANSWERED]));
+      stream.close();
+      await expect(pending).resolves.toMatchObject({ receipt: receipt() });
+      expect(progress).toEqual(STEPS);
+      expect(heartbeats).toBeGreaterThan(20);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fails as stalled, with its own reason, once the Authority sends nothing for the silence, and drops the stream', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stream = openStream();
+      const progress: PersonAskProgressStepEventV3[] = [];
+      const pending = authority(vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream.response))
+        .askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, event => progress.push(event));
+      const settled = pending.catch((error: unknown) => error);
+      stream.write(frames(STEPS.slice(0, 1)));
+      await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS - 1);
+      expect(progress).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await settled).toMatchObject({ code: 'stalled', message: 'Person Authority sent nothing for 40 seconds' });
+      expect(stream.state.cancelled).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fails as stalled when the stream never starts', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      }));
+      const settled = authority(fetch).askV7WithProgress('bearer', 'What did we decide?', undefined, undefined, () => undefined).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(ASK_SILENCE_MS);
+      expect(await settled).toMatchObject({ code: 'stalled' });
+    } finally { vi.useRealTimers(); }
   });
 
   it('a body read that fails mid-stream is a transport failure', async () => {
@@ -425,7 +460,11 @@ describe('person ask --progress', () => {
     const { output, run } = cli(sessionHome(), fetch);
     await expect(run(['ask', '--question', 'Where is Thermal recovery tracked?', '--progress'])).resolves.toBe(0);
     expect(output.stderr).toBe('');
-    const printed = lines(output.stdout);
+    const all = lines(output.stdout);
+    // The stream's one heartbeat, between its second and third step, prints one alive line there.
+    expect(all[2]).toEqual({ ok: true, alive: true });
+    const printed = all.filter(line => !(line as { alive?: unknown }).alive);
+    expect(printed).toHaveLength(all.length - 1);
     expect(printed.slice(0, -1).map(line => validatePersonAskProgressLineV3(line))).toEqual(STEPS_V3.map(progress => ({ ok: true, progress })));
     expect(validatePersonAskProgressResultLineV3(printed.at(-1))).toEqual({ ok: true, result: answerV8(), receipt: receiptV3() });
     expect(output.stdout.endsWith('\n')).toBe(true);
@@ -490,7 +529,8 @@ describe('person ask --progress', () => {
     fetch.mockResolvedValueOnce(sse(STREAM_V3));
     const pinned = cli(sessionHome(), fetch);
     await expect(pinned.run(['ask', '--question', 'What did we decide?', '--progress', ...pin(SESSION.membership_id)])).resolves.toBe(0);
-    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 1);
+    // Each step, the one heartbeat's alive line, and the answer.
+    expect(lines(pinned.output.stdout)).toHaveLength(STEPS_V3.length + 2);
 
     // Only a streamed Ask takes a pin: a plain Ask never checks it.
     const unpinned = cli(sessionHome(), vi.fn<typeof globalThis.fetch>());

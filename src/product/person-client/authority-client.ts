@@ -3,13 +3,13 @@ import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES, ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH, ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH, ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH, ORGANIZATION_API_PERSON_TOOLS_PATH_V4, PERSON_ANSWER_PATH_V7, PERSON_ASK_CHECK_LIMITS_V1, PERSON_ASK_CHECK_PATH_V1,
-  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
+  PERSON_ASK_CLIENT_NOW_HEADER_V1, PERSON_ASK_PROGRESS_CONTENT_TYPE_V1, PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1, PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1, PERSON_ASK_TIME_ZONE_HEADER_V1, PERSON_CHANGES_ROUTE_V1,
   PERSON_DIRECTORY_PATH_V1, PERSON_DOCUMENTS_PATH_V2, PERSON_DOCUMENT_JSON_MAX_BYTES, PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, PERSON_EMPLOYEES_PATH_V1,
   PERSON_LIST_PATH_V1, PERSON_LIST_RESPONSE_MAX_BYTES_V1, PERSON_OPEN_PATH_V1, PERSON_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_PROJECTS_PATH_V1,
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -39,18 +39,25 @@ import {
 } from "@echo-brain/organization-api";
 import type { DocumentSnapshot } from './document-file.js';
 
-export const DEFAULT_TIMEOUT_MS = 15_000;
-/** The Authority's whole-Ask deadline (the kernel's AGENTIC_ASK_DEADLINE_MS_V1). */
-export const ASK_SERVER_DEADLINE_MS = 300_000;
 /**
- * How long the client waits for an Ask: the Authority's whole deadline, plus room for the queue before research starts
- * and for the final check and release after it, so the client never gives up on an Ask the Authority is still finishing.
+ * How long one unstreamed request may say nothing before it is treated as stalled. Such a request sends nothing until it
+ * answers, so its whole wait is its silence.
  */
-export const ASK_TIMEOUT_MS = ASK_SERVER_DEADLINE_MS + 45_000;
-/** A cited passage is one synchronous read: the ordinary timeout. The desktop host waits longer than this and the session's. */
+export const DEFAULT_TIMEOUT_MS = 15_000;
+/**
+ * An Ask is stalled once this long passes with no byte from the Authority: four of its heartbeats in a row
+ * (PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1, written every 10 s while nothing else is sent) missed. The stream starts as soon
+ * as the Ask is authenticated, so this covers the wait for its headers too. An Ask that keeps sending is never stopped
+ * by a clock.
+ */
+export const ASK_SILENCE_MS = 4 * PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1;
+/** A cited passage is one synchronous read of what the Authority holds: the ordinary silence. The desktop host waits longer. */
 export const ASK_SOURCE_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
-/** The Ask source check answers within its own 15 seconds; the client waits twice that. */
-export const ASK_CHECK_TIMEOUT_MS = 30_000;
+/**
+ * The Ask source check, and a research evaluation's read, revalidate cited sources live at the tools before they answer,
+ * so either may stay silent longer than an ordinary read: twice the ordinary silence.
+ */
+export const ASK_CHECK_TIMEOUT_MS = 2 * DEFAULT_TIMEOUT_MS;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 export type { EmployeeRosterV1, PersonRecordListItemV1, PersonRecordListV1, PersonRecordSearchItemV1, PersonRecordSearchV2 } from '@echo-brain/organization-api';
@@ -233,6 +240,32 @@ function lostAskStream(): PersonAuthorityClientError {
   return new PersonAuthorityClientError("transport_failed", null, "Person Authority request failed");
 }
 
+/** An Ask that heard nothing from the Authority for ASK_SILENCE_MS: its own reason, so it reads as neither a refusal nor a lost connection. */
+function stalledAsk(): PersonAuthorityClientError {
+  return new PersonAuthorityClientError("stalled", null, `Person Authority sent nothing for ${ASK_SILENCE_MS / 1000} seconds`);
+}
+
+/**
+ * Liveness for one streamed request: `signal` aborts once `silenceMs` passes without `alive()` (or the caller's own
+ * signal aborts). There is no whole-run deadline: each sign of life starts the silence again.
+ */
+function silenceWatch(silenceMs: number, caller: AbortSignal | undefined) {
+  const controller = new AbortController();
+  let stalled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const alive = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { stalled = true; controller.abort(); }, silenceMs);
+  };
+  alive();
+  return {
+    signal: caller === undefined ? controller.signal : AbortSignal.any([controller.signal, caller]),
+    alive,
+    stalled: () => stalled && caller?.aborted !== true,
+    stop: () => clearTimeout(timer),
+  };
+}
+
 type JsonRecord = Record<string, unknown>;
 const isRecord = (value: unknown): value is JsonRecord => value !== null && typeof value === "object" && !Array.isArray(value);
 const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
@@ -255,9 +288,10 @@ function readableAnswer(response: unknown): unknown {
 /**
  * The text of a progress stream as this client reads it, frame by frame: a step event it cannot read is left out (a
  * progress step is only a view of the work, so the Ask goes on without it), and an answer's blocks become ones it can
- * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder.
+ * show (readableAnswer). Everything else, framing included, passes unchanged to the progress V3 decoder. Each comment
+ * line (the Authority's heartbeat) is reported to `onComment` as it is read.
  */
-function tolerantAskFrames(): (text: string, end?: boolean) => string {
+function tolerantAskFrames(onComment: () => void = () => undefined): (text: string, end?: boolean) => string {
   let partial = "";
   const data = (json: string): string | null => {
     let value: unknown;
@@ -270,6 +304,7 @@ function tolerantAskFrames(): (text: string, end?: boolean) => string {
     const lines = (partial + text).split("\n");
     partial = lines.pop()!;
     const read = lines.map(line => {
+      if (line.startsWith(":")) onComment();
       if (!line.startsWith("data: ")) return `${line}\n`;
       const kept = data(line.slice("data: ".length));
       return kept === null ? "" : `data: ${kept}\n`;
@@ -290,9 +325,11 @@ function tolerantAskFrames(): (text: string, end?: boolean) => string {
  * frame or answer, invalid UTF-8, or an end without exactly one terminal event
  * is `invalid_response`, and a stream past its byte bound is
  * `response_too_large`. Either failure cancels the body, so the Authority sees
- * the disconnect and stops the Ask.
+ * the disconnect and stops the Ask. Every chunk read is reported to `onBytes` (liveness), and every heartbeat to
+ * `onHeartbeat`.
  */
-async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3): Promise<PersonAskProgressTerminalEventV3> {
+async function readAskProgressStream(response: Response, signal: AbortSignal, onProgress: PersonAskProgressSinkV3,
+  onBytes: () => void = () => undefined, onHeartbeat: () => void = () => undefined): Promise<PersonAskProgressTerminalEventV3> {
   if (response.status !== 200 || response.body === null) {
     throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority returned a malformed progress stream");
   }
@@ -302,7 +339,7 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
   signal.addEventListener("abort", cancel, { once: true });
   const utf8 = new TextDecoder("utf-8", { fatal: true });
   const frames = createPersonAskProgressDecoderV3();
-  const tolerant = tolerantAskFrames();
+  const tolerant = tolerantAskFrames(onHeartbeat);
   const decode = (chunk: Uint8Array | undefined) => {
     try {
       if (chunk !== undefined) return frames.push(tolerant(utf8.decode(chunk, { stream: true })));
@@ -323,6 +360,7 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
       const next = await reader.read().catch(() => { throw lostAskStream(); });
       if (signal.aborted) throw lostAskStream();
       if (!next.done) {
+        onBytes();
         size += next.value.byteLength;
         if (size > PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1) {
           throw new PersonAuthorityClientError("response_too_large", response.status, "Person Authority response exceeded its bound");
@@ -437,6 +475,8 @@ interface ContextRoute<Q, R> {
   readonly get?: true;
   readonly status?: number;
   readonly mutation?: 'change' | 'upload';
+  /** The route's own request body bound at the Authority, when it is not MAX_ORGANIZATION_API_BODY_BYTES. */
+  readonly maximum_request_bytes?: number;
   readonly response: (value: unknown) => R;
   readonly matches: (response: R, request: Q) => boolean;
 }
@@ -478,7 +518,9 @@ export const CONTEXT_ROUTES = Object.freeze({
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'associate' && result.context_id === request.context_id && applied(result, request) }),
   dissociateProjectContext: route({ request: validateProjectContextDissociateV1, path: () => `${PERSON_PROJECTS_PATH_V1}/context/dissociate`, mutation: 'change',
     response: validateProjectMutationReceiptV1, matches: (result, request) => result.operation === 'dissociate' && result.context_id === request.context_id && applied(result, request) }),
+  // A note has no size of its own: its request is held only to the Authority's note request bound.
   submitUpdateV3: route({ request: validatePersonUpdateSubmitV3, path: () => PERSON_UPDATES_PATH_V3, status: 202, mutation: 'upload', response: validatePersonUpdateReceiptV3,
+    maximum_request_bytes: PERSON_UPDATE_REQUEST_MAX_BYTES_V1,
     matches: (result, request) => result.request_id === request.request_id &&
       canonicalJson(result.association_project_ids) === canonicalJson(request.association_project_ids) && canonicalJson(result.audience) === canonicalJson(request.audience) }),
   updateStatusV3: route({ request: validatePersonUpdateRequestId, path: requestId => `${PERSON_UPDATES_PATH_V3}/${requestId}`, get: true, response: validatePersonUpdateStatusResultV3,
@@ -498,10 +540,16 @@ interface JsonRequest {
   readonly maximum_request_bytes?: number;
 }
 
+/** A request past its transport bound: not sent. */
+function requestTooLarge(): PersonAuthorityClientError {
+  return new PersonAuthorityClientError("request_too_large", null, "Person Authority request exceeds its body bound", { unsent: true });
+}
+
 /** A bodied request's validated canonical JSON, within its bound. */
 function requestBody(input: Pick<JsonRequest, 'body' | 'validate_request' | 'maximum_request_bytes'>): string {
   const body = canonicalJson(input.validate_request(input.body));
-  if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) throw new Error("Person Authority request exceeds its body bound");
+  // The request's transport bound, the Authority's own: past it the request is never sent, and says why.
+  if (Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) throw requestTooLarge();
   return body;
 }
 
@@ -593,10 +641,14 @@ export class PersonAuthorityClient {
     matches?: (response: T) => boolean;
     request_id?: string;
     upload?: boolean;
+    maximum_request_bytes?: number;
   }): Promise<T> {
     const body = input.body === undefined ? undefined : canonicalJson(input.body);
-    if (body !== undefined && Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new PersonAuthorityClientError('invalid_request', null, 'Person Authority request exceeds its body bound');
+    // The route's transport bound, the Authority's own for that route: past it nothing is sent.
+    if (body !== undefined && Buffer.byteLength(body) > (input.maximum_request_bytes ?? MAX_ORGANIZATION_API_BODY_BYTES)) {
+      const tooLarge = requestTooLarge();
+      if (input.request_id !== undefined) throw new PersonContextMutationError(tooLarge.code, null, tooLarge.message, input.request_id, 'not_submitted');
+      throw tooLarge;
     }
     let status: number | null = null;
     try {
@@ -628,6 +680,7 @@ export class PersonAuthorityClient {
     const request = selected.request(value);
     return this.contextRequest(accessToken, { path: selected.path(request), ...(selected.get === true ? {} : { body: request }),
       ...(selected.status === undefined ? {} : { status: selected.status }),
+      ...(selected.maximum_request_bytes === undefined ? {} : { maximum_request_bytes: selected.maximum_request_bytes }),
       ...(selected.mutation === undefined ? {} : { request_id: (request as { readonly request_id: string }).request_id, upload: selected.mutation === 'upload' }),
       validate: selected.response, matches: result => selected.matches(result, request) });
   }
@@ -804,20 +857,31 @@ export class PersonAuthorityClient {
    * The request may carry the asker's previous turn (ADR-0047). Each step event reaches
    * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
    * Every Ask streams: a JSON reply is an error from before the stream started, and an error inside the stream is the
-   * error its JSON response would have had. The ask timeout and the caller's signal bound the whole stream.
+   * error its JSON response would have had. There is no whole-Ask deadline: the Ask waits as long as the Authority keeps
+   * sending (its heartbeat included), fails as `stalled` after ASK_SILENCE_MS with nothing, and stops on the caller's
+   * signal. Each heartbeat reaches `onHeartbeat`, so a caller can show the Ask is alive between steps.
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
-    const deadline = requestSignal(ASK_TIMEOUT_MS, signal);
-    // Sent as built, within the Ask's own body bound: the Authority validates the request once (askRequest).
-    const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: request => request,
-      maximum_request_bytes: PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
-      access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, deadline);
-    if (!isAskProgressStream(response)) {
-      await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
-      throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority answered the Ask without its stream");
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void): Promise<PersonLiveAnswerV3> {
+    const watch = silenceWatch(ASK_SILENCE_MS, signal);
+    let terminal: PersonAskProgressTerminalEventV3;
+    try {
+      // Sent as built, within the Ask's own body bound: the Authority validates the request once (askRequest).
+      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous), validate_request: request => request,
+        maximum_request_bytes: PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
+        access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, watch.signal);
+      watch.alive();
+      if (!isAskProgressStream(response)) {
+        await this.jsonValue(response, MAXIMUM_ORDINARY_RESPONSE_BYTES);
+        throw new PersonAuthorityClientError("invalid_response", response.status, "Person Authority answered the Ask without its stream");
+      }
+      terminal = await readAskProgressStream(response, watch.signal, onProgress, watch.alive, onHeartbeat);
+    } catch (error) {
+      if (watch.stalled()) throw stalledAsk();
+      throw error;
+    } finally {
+      watch.stop();
     }
-    const terminal = await readAskProgressStream(response, deadline, onProgress);
     if (terminal.type === 'error') {
       throw new PersonAuthorityClientError(terminal.error.code, terminal.status, refusalMessage(terminal.error.code));
     }
@@ -828,14 +892,14 @@ export class PersonAuthorityClient {
   async startResearchEval(accessToken: string, value: PersonResearchEvalStartRequestV1, signal?: AbortSignal): Promise<PersonResearchEvalStartReceiptV1> {
     return this.json({ path: PERSON_RESEARCH_EVAL_START_PATH_V1, body: value,
       validate_request: validatePersonResearchEvalStartRequestV1, validate_response: validatePersonResearchEvalStartReceiptV1,
-      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: ASK_TIMEOUT_MS, signal });
+      access_token: accessToken, maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES, timeout_ms: DEFAULT_TIMEOUT_MS, signal });
   }
 
   /** Reads a research run; a finished result is delivered once and may carry released text. */
   async readResearchEval(accessToken: string, runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
     return this.json({ path: PERSON_RESEARCH_EVAL_READ_PATH_V1, body: { schema_version: 1, run_id: runId },
       validate_request: validatePersonResearchEvalReadRequestV1, validate_response: validatePersonResearchEvalReadResponseV1,
-      access_token: accessToken, maximum_response_bytes: PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_TIMEOUT_MS, signal });
+      access_token: accessToken, maximum_response_bytes: PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, timeout_ms: ASK_CHECK_TIMEOUT_MS, signal });
   }
 
   async runs<K extends PersonRunsRequestV1['operation']>(accessToken: string, value: Extract<PersonRunsRequestV1, { readonly operation: K }>, signal?: AbortSignal): Promise<PersonRunsResultsV1[K]> {

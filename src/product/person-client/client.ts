@@ -13,7 +13,7 @@ import { prepareDocumentSnapshot, resumeDocumentSnapshot, listDocumentSnapshots,
 import {
   CONTEXT_ROUTES,
   PersonAuthorityClient,
-  DEFAULT_TIMEOUT_MS, ASK_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS, ASK_SOURCE_TIMEOUT_MS,
+  DEFAULT_TIMEOUT_MS, ASK_CHECK_TIMEOUT_MS, ASK_SOURCE_TIMEOUT_MS,
   PersonAuthorityClientError,
   PersonContextMutationError,
   unknownContextMutation,
@@ -41,6 +41,13 @@ import {
   writePersonOnboardingInvitation,
 } from "./onboarding-invitation.js";
 import { PersonSessionOperations } from './session-operations.js';
+
+/**
+ * A research run (an Ask, or a staging evaluation run) refreshes the session first when its access credential would
+ * expire within this time, since the Authority checks the credential again for reads during the run. A refresh policy,
+ * not a limit: a run that outlives its credential is judged by the Authority's own access check.
+ */
+const ASK_SESSION_HEADROOM_MS = 10 * 60_000;
 
 interface PersonOidcLoopbackHandoff {
   readonly url: string;
@@ -497,7 +504,7 @@ export class PersonClient {
    * refused before the Ask is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -511,19 +518,19 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat);
       this.assertCurrentSession(stored);
       return answer;
-    }, signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    }, signal, ASK_SESSION_HEADROOM_MS);
   }
 
   /** Staging-only research evaluation (research loop evaluation v1); no CLI command exposes it. */
   async startResearchEval(value: PersonResearchEvalStartRequestV1, signal?: AbortSignal): Promise<PersonResearchEvalStartReceiptV1> {
-    return this.withReadSession((authority, token) => authority.startResearchEval(token, value, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return this.withReadSession((authority, token) => authority.startResearchEval(token, value, signal), signal, ASK_SESSION_HEADROOM_MS);
   }
 
   async readResearchEval(runId: string, signal?: AbortSignal): Promise<PersonResearchEvalReadResponseV1> {
-    return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal), signal, ASK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
+    return this.withReadSession((authority, token) => authority.readResearchEval(token, runId, signal), signal, ASK_CHECK_TIMEOUT_MS + DEFAULT_TIMEOUT_MS);
   }
 
   /** What moved in this person's own view, one fingerprint per area (ADR-0036). */

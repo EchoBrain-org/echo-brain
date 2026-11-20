@@ -373,7 +373,7 @@ describe('text the API accepts', () => {
     for (const code of ['internal', 'failed', 'request_failed', 'invalid_response', 'timed_out', 'research_failed', 'unavailable', 'transport_failed']) {
       expect(failureView({ code }, 'failed', false).retryable, code).toBe(true);
     }
-    for (const code of ['question_too_long', 'invalid_request', 'not_found', 'unauthorized']) expect(failureView({ code }, 'failed', false).retryable, code).toBe(false);
+    for (const code of ['question_controls', 'request_too_large', 'invalid_request', 'not_found', 'unauthorized']) expect(failureView({ code }, 'failed', false).retryable, code).toBe(false);
   });
 });
 

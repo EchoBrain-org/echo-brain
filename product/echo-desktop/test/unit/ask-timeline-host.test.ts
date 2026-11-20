@@ -23,7 +23,8 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
-import { HOST_TIMEOUT_MS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
 import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import { deleteOtherTimelines, deleteTimeline, pruneTurns, putTimeline, readTimeline, timelinePath, timelineTurn } from '../../src/host/timeline.js';
@@ -325,8 +326,9 @@ describe('what the page sends with an Ask and a check', () => {
     expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress']);
   });
 
-  it('waits out the client: an Ask past its 345 s, a cited passage past its 15 s read and 15 s session', () => {
-    expect(HOST_TIMEOUT_MS['ask.run']).toBe(355_000);
+  it('waits on liveness: an Ask\'s silence outlasts the client\'s own 40 s stall and two session refreshes; a cited passage its 15 s read and 15 s session', () => {
+    expect(HOST_TIMEOUT_MS['ask.run']).toBe(ASK_RUN_SILENCE_MS);
+    expect(ASK_RUN_SILENCE_MS).toBeGreaterThan(4 * PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 + 2 * 15_000);
     expect(HOST_TIMEOUT_MS['ask.source']).toBeGreaterThan(30_000);
   });
 

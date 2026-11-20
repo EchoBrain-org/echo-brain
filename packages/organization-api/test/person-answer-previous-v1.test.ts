@@ -60,13 +60,15 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
   it('refuses anything else: another purpose, key or shape, a bad question or time, an index out of range, a repeated citation', () => {
     for (const value of [
       previous({ purpose: 'clarify' }), { ...previous(), extra: true }, (({ asked_at: _asked, ...rest }) => rest)(previous()),
-      previous({ question: ' padded ' }), previous({ question: 'x'.repeat(4_001) }), previous({ question: '' }), previous({ question: 'a\u0000b' }),
+      previous({ question: ' padded ' }), previous({ question: 'a\u0007b' }), previous({ question: '' }), previous({ question: 'a\u0000b' }),
       previous({ asked_at: '2026-10-24T17:05:00Z' }), previous({ asked_at: '2026-02-30T00:00:00.000Z' }),
       previous({ statements: [{ text: 'Out of range.', citation_indexes: [2] }] }), previous({ statements: [{ text: 'Twice.', citation_indexes: [0, 0] }] }),
       previous({ statements: [{ text: ' Untrimmed.', citation_indexes: [0] }] }), previous({ statements: [{ text: 'Extra.', citation_indexes: [0], private: false }] }),
       previous({ citations: [ticket, ticket] }), previous({ citations: [{ ...ticket, kind: 'page' }] }),
       null, [], 'previous',
     ]) expect(() => validatePersonAnswerRequestV3(ask(value))).toThrow();
+    // The earlier question has no length of its own: only the request's body bound limits it.
+    expect(validatePersonAnswerRequestV3(ask(previous({ question: 'x'.repeat(10_000) }))).previous!.question).toHaveLength(10_000);
   });
 
   it('takes an Ask again only of the earlier question itself, and a follow-up of any question', () => {
@@ -80,13 +82,14 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
 
   it('carries a long earlier question, and keeps the whole request within the Authority\'s 64 KiB body bound, not 16 KiB', () => {
     expect(PERSON_ANSWER_REQUEST_MAX_BYTES_V3).toBe(64 * 1024);
+    expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
     const long = `${'Who owns the thermal retest, '.repeat(130)}and when?\nAnd what is blocked?`;
     expect(validatePersonAnswerRequestV3(ask(previous({ question: long }))).previous!.question).toBe(long);
     const label = 'L'.repeat(1_000);
     const citations = Array.from({ length: 12 }, (_, index) => ({ ...ticket, citation: { ...ticket.citation, ticket_id: String(20_000 + index) }, label: `${index}${label}` }));
     const statements = Array.from({ length: 8 }, (_, index) => ({ text: `${index}${'s'.repeat(399)}`, citation_indexes: [index] }));
     const big = { ...ask(previous({ citations, statements, question: long })), question: '😀'.repeat(4_000) };
-    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(MAX_ORGANIZATION_API_BODY_BYTES);
+    expect(canonicalJsonBytes(big).byteLength).toBeGreaterThan(16 * 1024);
     expect(validatePersonAnswerRequestV3(big).question).toBe(big.question);
   });
 });
@@ -138,7 +141,7 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
       (({ question: _question, ...rest }) => rest)(answered({ since: { statements: [] } })),
       { ...answered({ since: { statements: [] } }), outcome: 'not_found', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Not found.' }] },
       { ...answered({ since: { statements: [] } }), outcome: 'partial', citations: [], parts: [{ question: 'Q', status: 'not_found', statements: [], gap: 'Research stopped early.' }] },
-      answered({ question: 'x'.repeat(4_001) }), answered({ question: ' padded' }),
+      answered({ question: 'a\u0007b' }), answered({ question: ' padded' }),
     ]) expect(() => validatePersonAnswerResponseV8(value)).toThrow();
   });
 
@@ -153,7 +156,7 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
       clarified({ choices: four.slice(0, 1) }), clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] }),
       clarified({ choices: [four[0], { ...four[1], question: four[0]!.question }] }), clarified({ choices: [four[0], { ...four[1], label: four[0]!.label }] }),
       clarified({ choices: [four[0], { ...four[1], label: 'L'.repeat(PERSON_ANSWER_CHOICE_LABEL_MAX_CHARS_V1 + 1) }] }),
-      clarified({ choices: [four[0], { ...four[1], question: 'q'.repeat(4_001) }] }), clarified({ choices: [four[0], { ...four[1], extra: 1 }] }),
+      clarified({ choices: [four[0], { ...four[1], question: 'q\u0007' }] }), clarified({ choices: [four[0], { ...four[1], extra: 1 }] }),
       (({ choices: _choices, ...rest }) => rest)(clarified()), (({ question: _question, ...rest }) => rest)(clarified()),
       clarified({ citations: [ticket] }), clarified({ parts: answered().parts }), clarified({ notice: 'Research stopped early.' }), clarified({ since: { statements: [] } }),
       answered({ choices: clarified().choices }),

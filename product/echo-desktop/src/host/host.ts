@@ -16,7 +16,7 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
@@ -404,8 +404,8 @@ function changeArgs(change: ProjectChange | undefined, requestId: string): strin
 
 type Params<M extends HostMethodName> = HostMethods[M]['params'];
 
-/** Every call but ask.cancel, which the port answers at once. */
-async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unknown, abortSignal?: AbortSignal): Promise<Result<unknown>> {
+/** Every call but ask.cancel, which the port answers at once. `alive` restarts the call's silence (an Ask's every printed line). */
+async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unknown, abortSignal?: AbortSignal, alive: () => void = () => undefined): Promise<Result<unknown>> {
   switch (method) {
     case 'app.status': {
       const current = await status();
@@ -614,11 +614,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (text === '') return code('invalid_request');
       if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
       const previous = checked ?? undefined;
-      // An Ask's steps reach the page as they are printed (ask.ts).
-      const progress = abortSignal !== undefined
+      // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
+      const steps = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
+      const progress = (line: string) => { alive(); steps?.(line); };
       return forAccount(method, expect, askArgv(text, scope, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
@@ -770,11 +771,13 @@ port.on('message', ({ data }) => {
   const write = isWriteCall(method, request.params);
   const abort = method === 'ask.run' && typeof cancelId === 'string' && ASK_CANCEL_ID.test(cancelId) ? new AbortController() : undefined;
   if (abort && typeof cancelId === 'string') activeAsks.set(cancelId, abort);
-  // A call still queued behind a refresh when its time runs out never starts.
+  // A call still queued behind a refresh when its time runs out never starts. The time is a silence: a call that shows
+  // it is alive (an Ask's printed lines) starts it again, and an Ask that falls silent is `stalled`, not timed out.
   let expired = false;
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<Result<unknown>>(resolve => {
-    timer = setTimeout(() => { expired = true; abort?.abort(); resolve(code('timeout', write, requestId)); }, HOST_TIMEOUT_MS[method]);
+  let expire!: (result: Result<unknown>) => void;
+  const timeout = new Promise<Result<unknown>>(resolve => { expire = resolve; });
+  const quiet = silence(HOST_TIMEOUT_MS[method], () => {
+    expired = true; abort?.abort(); expire(code(method === 'ask.run' ? 'stalled' : 'timeout', write, requestId));
   });
   // Sign-in still runs after a refresh with no answer: it replaces the
   // session, and sign-out ends it either way. Any other call was not made,
@@ -785,7 +788,7 @@ port.on('message', ({ data }) => {
       return fail(write ? { ...failure, mutation_outcome: 'not_submitted' as const } : failure);
     };
   // Status goes through the gate too: mid-refresh the client reports signed out.
-  const work = gated(() => expired ? timeout : handle(method, request.params, abort?.signal), method, refreshFailed)
+  const work = gated(() => expired ? timeout : handle(method, request.params, abort?.signal, quiet.alive), method, refreshFailed)
     // A write that threw after reaching the client may have landed.
     .catch((error: unknown) => {
       if (__ECHO_TEST_HOOK__) console.error(`[client] ${method} threw:`, error);
@@ -793,5 +796,5 @@ port.on('message', ({ data }) => {
       ...(requestId === undefined ? {} : { request_id: requestId }) }) : code('failed');
     });
   void Promise.race([work, timeout])
-    .then(result => { clearTimeout(timer); if (typeof cancelId === 'string') activeAsks.delete(cancelId); port.postMessage({ id: request.id, result }); });
+    .then(result => { quiet.stop(); if (typeof cancelId === 'string') activeAsks.delete(cancelId); port.postMessage({ id: request.id, result }); });
 });

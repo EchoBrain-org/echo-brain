@@ -247,7 +247,7 @@ describe('staging research evaluation runs', () => {
       { schema_version: 1 as const, trigger: 'approved_record', input: { record: { ...record, kind: 'ticket' } } },
       // Sweeps are retired (SVC-2): a well-formed sweep is an unknown trigger now.
       { schema_version: 1 as const, trigger: 'sweep', input: { findings: [{ finding: 'Two decimals shipped', expected: 'Record updated', citations: [record] }] } },
-      { schema_version: 1 as const, trigger: 'ask', input: { question: 'x'.repeat(4_001) } },
+      { schema_version: 1 as const, trigger: 'ask', input: { question: 'Who\u0007 owns it?' } },
       approved({ project_id: PROJECT }),
       { schema_version: 1 as const, trigger: 'ask_with_start', input: { question: 'Why?' } },
     ]) await expect(h.application.start({ access_token: 'token-a', request }), JSON.stringify(request)).rejects.toMatchObject({ code: 'invalid_request' });
