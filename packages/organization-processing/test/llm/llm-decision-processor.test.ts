@@ -482,7 +482,7 @@ describe('llm decision processor extraction', () => {
       action('Send the quote', 'Priya', ['N2']),
       action('Send the draft', 'Zhe', ['N2']),
       action('Send the memo', 7, ['N2']),
-      action('Send the deck', 'x'.repeat(121), ['N2']),
+      action('Send the deck', 'x'.repeat(10_000), ['N2']),
       action('Send the notes', null, ['N2']),
       modelSignal({ owner: 'Zhen', evidence_units: ['N2'] }),
     ]);
@@ -490,7 +490,7 @@ describe('llm decision processor extraction', () => {
 
     // Ada only asks (T1) and Priya and Zhe are named nowhere: the approver confirms or clears each proposal (ADR-0021).
     expect(result.signals.map((signal) => signal.kind === 'action' ? signal.owner : 'no-owner-field')).toEqual([
-      'Zhen', 'Zhen', 'Ada', 'Priya', 'Zhe', null, null, null, 'no-owner-field',
+      'Zhen', 'Zhen', 'Ada', 'Priya', 'Zhe', null, 'x'.repeat(10_000), null, 'no-owner-field',
     ]);
     expect(result.signals[8]).not.toHaveProperty('owner');
     // A malformed proposal is no owner; code corrects nothing else about owners.
