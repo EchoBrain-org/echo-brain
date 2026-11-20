@@ -1048,7 +1048,8 @@ describe("agentic Ask: research loop", () => {
 });
 
 describe("agentic Ask: failures never lose found evidence", () => {
-  const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout" } });
+  // A silence before the request was sent: unbilled, so it earns the one retry.
+  const unavailable = () => Object.assign(new Error("OpenRouter request failed"), { diagnostic: { failure_class: "adapter_timeout", unbilled: true } });
 
   it("does not dump unopened search passages when the writer fails or call that completed absence", async () => {
     // Past the bound research reads whole from a search: research saw only its preview.
@@ -1103,11 +1104,10 @@ describe("agentic Ask: failures never lose found evidence", () => {
   });
 
   it.each([
-    ["adapter_timeout", null], ["adapter_transport", null],
-    ["adapter_http", 408], ["adapter_http", 429], ["adapter_http", 503],
-    ["adapter_provider_error", 500], ["adapter_provider_error", 200],
-  ])("retries temporary %s/%s once without changing the prompt", async (failure_class, http_status) => {
-    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
+    ["adapter_timeout", null, true], ["adapter_transport", null, true],
+    ["adapter_http", 429, false], ["adapter_http", 503, false], ["adapter_provider_error", 529, false],
+  ])("retries unbilled %s/%s once without changing the prompt", async (failure_class, http_status, unbilled) => {
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status, ...(unbilled ? { unbilled: true } : {}) } });
     const script = scripted([
       () => { throw failure; },
       step([{}], [search("launch")]),
@@ -1121,6 +1121,28 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(script.inputs[1]!.system_prompt).toBe(script.inputs[0]!.system_prompt);
     expect(script.inputs[1]!.user_prompt).toBe(script.inputs[0]!.user_prompt);
     expect(evidence.revalidate).toHaveBeenCalledTimes(6);
+  });
+
+  it.each([
+    ["adapter_timeout", null], ["adapter_transport", null],
+    ["adapter_http", 408], ["adapter_http", 500], ["adapter_http", 502],
+    ["adapter_provider_error", 500], ["adapter_provider_error", 200],
+  ])("never repeats %s/%s, which may have been billed, and still answers from what was found", async (failure_class, http_status) => {
+    const failure = Object.assign(new Error("provider detail must stay private"), { diagnostic: { failure_class, http_status } });
+    const script = scripted([
+      step([{}], [search("launch")]),
+      () => { throw failure; },
+      answer([{ text: "Tuesday.", evidence: ["E1"] }]),
+    ]);
+    const evidence = desk({ search: () => [item("a")] });
+    const audit: AgenticAskAuditEntryV1[] = [];
+    const result = await ask({ desk: evidence, model: script.model, audit }).answer({ question: "When is launch?" });
+    // The failed step is not sent again; the writer, a different call, still answers from the search it read.
+    expect(script.inputs).toHaveLength(3);
+    expect(script.inputs[2]!.system_prompt).not.toBe(script.inputs[1]!.system_prompt);
+    expect(result).toMatchObject({ outcome: "partial", parts: [{ statements: [{ text: "Tuesday." }] }] });
+    expect(JSON.stringify(result)).not.toContain(failure.message);
+    expect(audit[0]).toMatchObject({ model_calls: 3, repairs: 0 });
   });
 
   it.each([
@@ -1303,7 +1325,7 @@ describe("agentic Ask: failures never lose found evidence", () => {
     expect(audit).toEqual([]);
   });
 
-  it("stops a model that sends nothing: the step call is retried once, then research stops as stalled", async () => {
+  it("stops a model that sends nothing: the silent step is never sent again, and research stops as stalled with nothing for a writer", async () => {
     vi.useFakeTimers();
     try {
       const audit: AgenticAskAuditEntryV1[] = [];
@@ -1312,7 +1334,8 @@ describe("agentic Ask: failures never lose found evidence", () => {
       await vi.advanceTimersByTimeAsync(2 * generation.timeout_ms);
       const result = await pending;
       expect(result.outcome).toBe("partial");
-      expect(audit).toEqual([expect.objectContaining({ outcome: "partial", model_calls: 2, repairs: 1 })]);
+      expect(audit).toEqual([expect.objectContaining({ outcome: "partial", model_calls: 1, repairs: 0 })]);
+      expect(model.generate).toHaveBeenCalledTimes(1);
     } finally { vi.useRealTimers(); }
   });
 

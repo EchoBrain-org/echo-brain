@@ -34,15 +34,16 @@ describe('native research harness shares the real ECHO tool state', () => {
       await session.call('search', { query: 'calibrate' });
       await admit(session, 'read');
       if (failure === 'provider retries') throw new AgenticAskGenerationFailureV1('research model was unavailable', 'fallback');
-      const timer = new AbortController();
-      const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+      // A request that sends nothing for its silence period.
+      vi.useFakeTimers();
       try {
-        await session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages' },
-          signal => new Promise((_resolve, reject) => {
-            signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-            queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
-          }));
-      } finally { timeout.mockRestore(); }
+        const pending = session.model_request({ model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages' },
+          signal => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); }));
+        const settled = pending.then(() => undefined, (error: unknown) => error);
+        await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+        const error = await settled;
+        if (error !== undefined) throw error;
+      } finally { vi.useRealTimers(); }
     });
     let fallbackCorrections = 0;
     const output = await observeCoreRuntimeV1('research_run', h.ask, { observer: event => {

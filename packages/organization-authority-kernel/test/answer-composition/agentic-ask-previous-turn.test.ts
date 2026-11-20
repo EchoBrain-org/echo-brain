@@ -16,7 +16,7 @@ import type { StructuredGenerationInput } from "../../src/answer-composition/str
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, record, result, writerReply } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, record, recorded, result, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * The previous turn on a V8 Ask (ADR-0047): a follow-up resolved before research and answered from where it points, or
@@ -56,7 +56,7 @@ function scripted(script: { readonly resolver?: readonly unknown[]; readonly ste
   return {
     inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
     model: { generate: async (input: StructuredGenerationInput) => {
-      inputs.push(input);
+      inputs.push(recorded(input));
       const reply = queue[roleOf(input)].shift();
       if (reply === undefined) throw new Error(`unscripted ${roleOf(input)} call`);
       return reply;

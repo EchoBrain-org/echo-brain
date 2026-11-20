@@ -1,7 +1,7 @@
 import { EvidenceDeskSnapshotChangedV1 } from "../../src/shared/evidence-desk-v1.js";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskStalledErrorV1, AgenticModelStalledErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
+import { AGENTIC_REVALIDATION_RETRY_DELAY_MS_V1, AgenticAskStalledErrorV1, AgenticModelStalledErrorV1, AgenticModelUnsettledErrorV1, createAgenticModelGateV1, raceAbort } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, withCoreRuntimeDiagnosticsV1, type CoreRuntimeDiagnosticObservationV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import { AgenticAskOutputErrorV1, cleanLine, repairInput, repairInstruction } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
@@ -152,42 +152,60 @@ describe("agentic model gate", () => {
   });
 
   it('names an external request that sent nothing for its silence period a stall, and keeps the writer available', async () => {
-    const timer = new AbortController(), caller = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+    vi.useFakeTimers();
+    const caller = new AbortController();
     const { gate } = harness({ signal: caller.signal, replies: [{ answer: true }] });
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
     try {
       const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => gate.external({
         model: 'claude-fixture', body_sha256: canonicalSha256('timeout'), operation: 'messages',
         diagnostic_input: { model: 'claude-fixture', system_prompt: '', user_prompt: '', schema: {}, max_output_tokens: 100, timeout_ms: 4_000 },
-      }, signal => new Promise((_resolve, reject) => {
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-        queueMicrotask(() => timer.abort(new DOMException('local timer', 'TimeoutError')));
-      })));
-      await expect(pending).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
-      await expect(pending).rejects.toMatchObject({ message: 'the model sent nothing for 30 s', recovery: 'fallback' });
-      await expect(pending).rejects.not.toHaveProperty('diagnostic');
+      }, signal => new Promise((_resolve, reject) => { signal.addEventListener('abort', () => reject(signal.reason), { once: true }); })));
+      const settled = pending.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      const error = await settled;
+      expect(error).toBeInstanceOf(AgenticModelStalledErrorV1);
+      expect(error).toMatchObject({ message: 'the model sent nothing for 30 s', recovery: 'fallback' });
+      expect(error).not.toHaveProperty('diagnostic');
       expect(caller.signal.aborted).toBe(false);
       expect(gate.stats()).toMatchObject({ calls: 1, stopped: false, generations: [{ role: 'step', finish_reason: null }] });
       expect(events.filter(event => event.kind === 'model_error')).toEqual([expect.objectContaining({ error_kind: 'adapter_timeout' })]);
       await expect(gate.call(ANSWER, 'answer', {}, schema)).resolves.toEqual({ answer: true });
-    } finally { timeout.mockRestore(); }
+    } finally { vi.useRealTimers(); }
   });
 
-  it.each(['caller', 'stall'] as const)('keeps an overall %s abort terminal when the external timer also fires', async reason => {
-    const timer = new AbortController(), caller = new AbortController();
-    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(timer.signal);
+  it('lets an external request that keeps reporting progress run past its silence period, never stopping it', async () => {
+    vi.useFakeTimers();
+    const { gate } = harness();
+    try {
+      let aborted = false;
+      const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('streaming'), operation: 'messages' }, (signal, progress) => new Promise<{ readonly value: string }>(resolve => {
+        signal.addEventListener('abort', () => { aborted = true; }, { once: true });
+        let pieces = 0;
+        const tick = setInterval(() => { progress(); if (++pieces === 90) { clearInterval(tick); resolve({ value: 'whole reply' }); } }, 1_000);
+      }));
+      await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
+      await expect(pending).resolves.toBe('whole reply');
+      expect(aborted).toBe(false);
+      expect(gate.stats()).toMatchObject({ calls: 1, stopped: false });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['caller', 'stall'] as const)('keeps an overall %s abort terminal when the external silence also passes', async reason => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
     const { gate } = harness({ signal: caller.signal });
     const failure = reason === 'caller' ? new DOMException('cancelled', 'AbortError') : new AgenticAskStalledErrorV1('read', 120_000);
     try {
       const pending = gate.external({ model: 'claude-fixture', body_sha256: canonicalSha256('abort'), operation: 'messages' },
         signal => new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-          queueMicrotask(() => { caller.abort(failure); timer.abort(new DOMException('local timer', 'TimeoutError')); });
-        }));
-      await expect(pending).rejects.toMatchObject({ name: failure.name });
+          // The request stops at the moment its silence passes.
+          signal.addEventListener('abort', () => { caller.abort(failure); reject(signal.reason); }, { once: true });
+        })).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
+      expect(await pending).toMatchObject({ name: failure.name });
       expect(gate.stats().generations).toHaveLength(1);
-    } finally { timeout.mockRestore(); }
+    } finally { vi.useRealTimers(); }
   });
 
   it("revalidates the desk once before every model call and reports the check time", async () => {
@@ -262,18 +280,51 @@ describe("agentic model gate", () => {
     expect(gate.stats()).toMatchObject({ calls: 100, stopped: false });
   });
 
-  it("retries a call that sent nothing for its silence period once, then names the stall", async () => {
+  it.each(["honours", "ignores"] as const)("never sends again a call that went silent, whose billing is unknown, when the port %s its abort", async port => {
     vi.useFakeTimers();
     try {
-      const { gate, trace } = harness({ model: { generate: () => new Promise<never>(() => undefined) } });
-      const pending = gate.withRepair(STEP, "system", {}, schema, value => value);
-      const stalled = expect(pending).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
+      const signals: AbortSignal[] = [];
+      const { gate, trace } = harness({ model: { generate: input => new Promise<never>((_resolve, reject) => {
+        signals.push(input.signal!);
+        if (port === "honours") input.signal!.addEventListener("abort", () => reject(input.signal!.reason), { once: true });
+      }) } });
+      const pending = gate.withRepair(STEP, "system", {}, schema, value => value).catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(generation.timeout_ms);
-      expect(trace).toEqual(["revalidate", "revalidate"]);
-      await vi.advanceTimersByTimeAsync(generation.timeout_ms);
-      await stalled;
-      await expect(pending).rejects.toMatchObject({ message: "the model sent nothing for 30 s" });
-      expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
+      const error = await pending;
+      expect(error).toBeInstanceOf(AgenticModelStalledErrorV1);
+      expect(error).toMatchObject({ message: "the model sent nothing for 30 s", recovery: "fallback" });
+      // The gate's abort reached the operation, and nothing was sent again; the writer stays available.
+      expect(signals.map(signal => signal.aborted)).toEqual([true]);
+      expect(trace).toEqual(["revalidate"]);
+      expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0, stopped: false });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("retries once a silence the adapter reports was never sent, then names the stall", async () => {
+    const unsent = () => Object.assign(new Error("silent before sending"), { diagnostic: { failure_class: "adapter_timeout", http_status: null, finish_reason: null, unbilled: true } });
+    const { gate, trace } = harness({ replies: [unsent(), unsent()] });
+    await expect(gate.withRepair(STEP, "system", {}, schema, value => value)).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
+    expect(trace).toEqual(["revalidate", "generate:0", "revalidate", "generate:1"]);
+    expect(gate.stats()).toMatchObject({ calls: 2, repairs: 1, stopped: false });
+  });
+
+  it("never stops or repeats a call that keeps reporting progress past its silence period", async () => {
+    vi.useFakeTimers();
+    try {
+      // A streaming writer sends a piece every second for three silence periods, then finishes.
+      let aborted = false;
+      const { gate, trace } = harness({ model: { generate: input => new Promise(resolve => {
+        trace.push("generate");
+        input.signal!.addEventListener("abort", () => { aborted = true; }, { once: true });
+        let pieces = 0;
+        const tick = setInterval(() => { input.on_progress!(); if (++pieces === 90) { clearInterval(tick); resolve({ ok: true }); } }, 1_000);
+      }) } });
+      const pending = gate.withRepair(ANSWER, "system", {}, schema, value => value);
+      await vi.advanceTimersByTimeAsync(3 * generation.timeout_ms);
+      await expect(pending).resolves.toEqual({ ok: true });
+      expect(aborted).toBe(false);
+      expect(trace).toEqual(["revalidate", "generate"]);
+      expect(gate.stats()).toMatchObject({ calls: 1, repairs: 0 });
     } finally { vi.useRealTimers(); }
   });
 
@@ -346,7 +397,7 @@ describe("agentic model gate", () => {
     });
     await withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, async () => {
       await gate.call(STEP, 'system', {}, schema);
-      await expect(gate.call(STEP, 'system', {}, schema)).rejects.toMatchObject({ recovery: 'retry' });
+      await expect(gate.call(STEP, 'system', {}, schema)).rejects.toBeInstanceOf(AgenticModelStalledErrorV1);
     });
     expect(events.filter(event => event.kind === 'model_response' || event.kind === 'model_error')).toEqual([
       expect.objectContaining({ kind: 'model_response', call_id: 1, ...served }),
@@ -410,7 +461,8 @@ describe("agentic model gate", () => {
       ["a reply that is not JSON", [failure("adapter_json"), { good: true }], { model_repair_json: 1 }],
       ["a reply with no usable content", [failure("adapter_response", { http_status: 200 }), { good: true }], { model_repair_empty: 1 }],
       ["a reply cut off at its length", [failure("adapter_finish", { finish_reason: "length" }), { good: true }], { model_repair_unfinished: 1 }],
-      ["a provider timeout", [failure("adapter_timeout"), { good: true }], { model_retry: 1 }],
+      ["a provider timeout before the request was sent", [failure("adapter_timeout", { unbilled: true }), { good: true }], { model_retry: 1 }],
+      ["a provider timeout after the request may have been accepted, which is never repeated", [failure("adapter_timeout"), { good: true }], {}],
       ["a temporary provider error", [failure("adapter_http", { http_status: 503 }), { good: true }], { model_retry: 1 }],
       ["a repair whose reply is rejected again", [{ bad: true }, { bad: true }], { model_repair_rejected: 1 }],
       ["a permanent provider error, which is never repaired", [failure("adapter_http", { http_status: 401 })], {}],
@@ -418,6 +470,24 @@ describe("agentic model gate", () => {
       ["a usable reply", [{ good: true }], {}],
     ])("for %s", async (_name, replies, expected) => {
       expect(await corrected({ replies })).toEqual(expected);
+    });
+
+    // A paid attempt is never repeated automatically: only a failure known to be unbilled earns the one retry.
+    it.each([
+      ["a refusal before the request was fully sent", failure("adapter_transport", { unbilled: true }), true],
+      ...[429, 503, 529].map(status => [`an explicit ${status} refusal`, failure("adapter_http", { http_status: status }), true] as const),
+      ["a transport failure after the request may have been accepted (a stream with no finish reason)", failure("adapter_transport"), false],
+      ...[500, 502, 504].map(status => [`a ${status} failure`, failure("adapter_http", { http_status: status }), false] as const),
+      ["a provider error inside a 200 reply", failure("adapter_provider_error", { http_status: 200 }), false],
+      ["a provider error with no status", failure("adapter_provider_error"), false],
+      ["a finish reason of error", failure("adapter_finish", { finish_reason: "error" }), false],
+    ] as const)("sends %s again only when it is unbilled", async (_name, error, retried) => {
+      const { gate, trace } = harness({ replies: [error, { good: true }] });
+      const outcome = await gate.withRepair(STEP, "system", {}, schema, value => value).catch((thrown: unknown) => thrown);
+      expect(trace.filter(entry => entry.startsWith("generate"))).toHaveLength(retried ? 2 : 1);
+      if (retried) expect(outcome).toEqual({ good: true });
+      // A failure whose billing is unknown names its own reason and stops only its own call: the writer stays available.
+      else expect([outcome instanceof AgenticModelUnsettledErrorV1, (outcome as Error).message === "private provider text", gate.stats().stopped]).toEqual([true, false, false]);
     });
 
     it("counts a reply an observing adapter reports cut off", async () => {

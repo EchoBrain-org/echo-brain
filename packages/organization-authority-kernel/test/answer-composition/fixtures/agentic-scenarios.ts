@@ -141,6 +141,12 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
   },
 };
 
+/** A model call's input as tests compare it: the gate's per-call progress callback is left out. */
+export function recorded(input: StructuredGenerationInput): StructuredGenerationInput {
+  const { on_progress: _progress, ...rest } = input;
+  return rest;
+}
+
 /** Replays one scenario through Ask, the V8 core: scripted replies in order, and a clock that stands still. */
 export async function replay(name: string, scenario: Scenario, hooks: { readonly signal?: AbortSignal; readonly on_append?: (entry: AgenticAskAuditEntryV1) => void } = {}) {
   const inputs: StructuredGenerationInput[] = [];
@@ -148,7 +154,7 @@ export async function replay(name: string, scenario: Scenario, hooks: { readonly
   let offset = 0;
   const model = {
     generate: async (input: StructuredGenerationInput) => {
-      inputs.push(input);
+      inputs.push(recorded(input));
       const reply = scenario.replies[offset++];
       if (reply === undefined) throw new Error(`${name}: unscripted model call ${offset}`);
       return reply;
@@ -174,7 +180,7 @@ export function researchHarness(replies: readonly unknown[] | ((input: Structure
   const inputs: StructuredGenerationInput[] = [];
   const audit: AgenticAskAuditEntryV1[] = [];
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    inputs.push(input);
+    inputs.push(recorded(input));
     const index = inputs.length - 1;
     const reply = typeof replies === "function" ? replies(input, index) : replies[index];
     if (reply === undefined) throw new Error(`unscripted call ${index + 1}`);
@@ -207,7 +213,7 @@ export function scriptedGate(replies: readonly unknown[], trace: string[]) {
     generation,
     model: {
       generate: async (input: StructuredGenerationInput) => {
-        trace.push("generate"); inputs.push(input);
+        trace.push("generate"); inputs.push(recorded(input));
         const reply = replies[inputs.length - 1];
         if (reply === undefined) throw new Error(`unscripted call ${inputs.length}`);
         if (reply instanceof Error) throw reply;

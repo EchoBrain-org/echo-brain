@@ -1448,7 +1448,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       catch (error) {
         // The request's signal is aborted exactly when the caller cancelled or the request stalled.
         if (isAbort(error, activeSignal) || !(error instanceof AgenticAskOutputErrorV1)) throw error;
-        // A step call that sent nothing twice is a stall, not an unusable reply: research keeps what it released.
+        // A step call that went silent is a stall, not an unusable reply: research keeps what it released.
         if (error instanceof AgenticModelStalledErrorV1) {
           researchStop = 'stalled';
           stepRejections.push(cleanLine(error.message, 600)); recordRound(roundStartedAt, []);

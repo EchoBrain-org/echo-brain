@@ -6,7 +6,7 @@ import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/age
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import type { EvidenceDeskItemV2, EvidenceDeskListInputV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, result } from "./fixtures/agentic-scenarios.js";
+import { checked, generation, recorded, result } from "./fixtures/agentic-scenarios.js";
 
 /**
  * Impact card replay (research trigger contract v1, section 5). Scripted desk
@@ -126,7 +126,7 @@ async function run(name: string, scenario: Scenario) {
   let time = 0;
   const model = {
     generate: async (input: StructuredGenerationInput) => {
-      inputs.push(input);
+      inputs.push(recorded(input));
       const elapsed = scenario.model_call_ms;
       time += typeof elapsed === "number" ? elapsed : elapsed?.[offset] ?? 0;
       const reply = scenario.replies[offset++];
