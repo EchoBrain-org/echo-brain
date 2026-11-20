@@ -109,15 +109,23 @@ it('retains only actual provider usage on success and on a later SDK failure', a
   }
 });
 
-it.each([['http', 'rate_limited'], ['transport', 'unknown_outcome']] as const)('maps %s failures without authorizing a free retry', async (kind, code) => {
+it.each([
+  [429, 'rate_limited', true], [529, 'temporarily_unavailable', true], [500, 'temporarily_unavailable', true],
+  [503, 'temporarily_unavailable', true], [400, 'permanently_rejected', false], [413, 'permanently_rejected', false],
+] as const)('maps a %i refusal to %s, unbilled only when the provider was overloaded or rate-limited', async (status, code, unbilled) => {
   const client = createClaudeAccountLlmProviderClientV1({ account,
-    forward: async ({ res }) => {
-      if (kind === 'http') { res.writeHead(429); res.end('{}'); throw new ClaudeModelResponseErrorV1(429); }
-      throw new ClaudeModelTransportErrorV1();
-    },
+    forward: async ({ res }) => { res.writeHead(status); res.end('{}'); throw new ClaudeModelResponseErrorV1(status); },
     run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
   });
-  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled: false });
+  await expect(client.generateStructured(request)).rejects.toMatchObject({ code, unbilled, retryable: unbilled });
+});
+
+it('maps a transport failure without authorizing a free retry', async () => {
+  const client = createClaudeAccountLlmProviderClientV1({ account,
+    forward: async () => { throw new ClaudeModelTransportErrorV1(); },
+    run: async input => { await send(input); throw new ClaudeResearchResultErrorV1(); },
+  });
+  await expect(client.generateStructured(request)).rejects.toMatchObject({ code: 'unknown_outcome', unbilled: false });
 });
 
 it('refuses SDK retry after a provider rejection without a second upstream generation', async () => {

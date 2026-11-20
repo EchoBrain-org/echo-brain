@@ -35,8 +35,10 @@ function extractionFailure(error: unknown): AdapterError {
   if (isRecord(error) && isRecord(error['diagnostic'])) {
     const diagnostic = error['diagnostic'];
     if (diagnostic['failure_class'] === 'adapter_http' && typeof diagnostic['http_status'] === 'number') {
-      // No provider billing guarantee: native refusals never authorize a free automatic retry.
-      return providerStatusError('Claude account', diagnostic['http_status']);
+      // A rate-limit (429) or overload/server refusal (5xx, including 529) arrives before any generation, so it is the
+      // transient, unbilled kind that earns one automatic retry. Any other refusal waits for an operator.
+      const status = diagnostic['http_status'];
+      return providerStatusError('Claude account', status, status === 429 || status >= 500);
     }
     if (diagnostic['failure_class'] === 'adapter_timeout') return new AdapterError('timeout', 'Claude account extraction timed out', true);
     if (diagnostic['failure_class'] === 'adapter_response') return new AdapterError('permanently_rejected', 'Claude account extraction returned no structured result', false);
