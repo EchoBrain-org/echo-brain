@@ -242,6 +242,8 @@ describe("adversarial original-context retrieval", () => {
     const f = fixture();
     f.upload("Interface", "CAN bus connects the controller.");
     expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query: "What is CAN?" })).join(" ")).toContain("CAN bus");
+    const query = [...Array.from({ length: 32 }, (_, index) => `t${index}`), "CAN"].join(" ");
+    expect(texts(f.retrieval.deskSearch({ access_token: "member", scope: { kind: "global" }, query })).join(" ")).toContain("CAN bus");
   });
 
   it("retrieves the battery requirement from a natural question ahead of newer incidental matches", () => {

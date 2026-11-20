@@ -650,15 +650,17 @@ describe("Person Layer 2 route", () => {
         },
         search_generation: search,
       });
+      const query = [...Array.from({ length: 32 }, (_, index) => `t${index}`), "original"].join(" ");
       const batch = route.searchBatch({
         access_token: "bearer-only",
-        query: "original",
+        query,
       });
 
       expect(authenticateCount).toBe(2);
       expect(search).toHaveBeenCalledTimes(1);
       for (const call of search.mock.calls) {
         expect(call[0]).toMatchObject({
+          query,
           reader: {
             principal_id: "principal_reader",
             membership_id: "membership_reader",
@@ -727,10 +729,9 @@ describe("Person Layer 2 route", () => {
   it.each([
     ["an empty query", ""],
     ["invalid query", " leading space"],
-    [
-      "query with 33 unique terms",
-      Array.from({ length: 33 }, (_, index) => `term${index}`).join(" "),
-    ],
+    ["a query longer than 240 code points", "a ".repeat(120) + "a"],
+    ["a query with an overlong term", "é".repeat(33)],
+    ["a punctuation-only query", "!!!"],
   ])("rejects %s before retrieval or audit", (_name, query) => {
     const value = setup();
     const search = vi.fn();

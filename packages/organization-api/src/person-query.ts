@@ -25,8 +25,8 @@ export function validatePersonQueryText(value: unknown): string {
     throw new PersonQueryInputError('query_too_long', 'Shorten the question or search query to at most 240 Unicode code points.');
   }
   const terms = new Set((value.match(/[\p{L}\p{N}]+/gu) ?? []).map(term => term.toLowerCase().normalize('NFC')));
-  if (terms.size < 1 || terms.size > 32) {
-    throw new PersonQueryInputError('query_term_count', 'Use 1 to 32 distinct normalized letter/number terms in the question or search query.');
+  if (terms.size === 0) {
+    throw new PersonQueryInputError('query_term_count', 'Include at least one letter or number in the question or search query.');
   }
   if ([...terms].some(term => utf8ByteLength(term) > 64)) {
     throw new PersonQueryInputError('query_term_too_long', 'Shorten each normalized term to at most 64 UTF-8 bytes; non-ASCII letters can use multiple bytes.');

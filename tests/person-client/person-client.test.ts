@@ -826,21 +826,19 @@ describe("Person client", () => {
     });
   });
 
-  it("accepts 32 unique question terms and rejects 33 before the request", async () => {
+  it("sends the full staging question with more than 32 distinct terms to Ask", async () => {
     await withHome(async (home) => {
-      let asks = 0;
-      const client = await signedInClient(home, async () => {
-        asks += 1;
+      const question = "Based on the Data handling review, what controls did we agree to before sharing test data? Cite the meeting and draft a follow-up for me to turn those controls into a one-page checklist by November 25. Leave the card unsent.";
+      const fetch = vi.fn<typeof globalThis.fetch>(async (_input, init) => {
+        expect(JSON.parse(String(init?.body))).toMatchObject({ question });
         return askStream(v8Answer({ text: "Bounded answer.", citations: [RECORD_CITATION] }));
       });
-      const question = (count: number) =>
-        Array.from({ length: count }, (_, index) => `term${index}`).join(" ");
+      const client = await signedInClient(home, fetch);
 
-      await expect(client.askWithLiveSources(question(32))).resolves.toMatchObject({
+      await expect(client.askWithLiveSources(question)).resolves.toMatchObject({
         parts: [{ statements: [{ text: "Bounded answer." }] }],
       });
-      await expect(client.askWithLiveSources(question(33))).rejects.toMatchObject({ code: "query_term_count" });
-      expect(asks).toBe(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -919,7 +917,7 @@ describe("Person client", () => {
     for (const [text, code] of [
       ["", "query_empty"], [" x", "query_whitespace"], ["e\u0301", "query_normalization"],
       ["x\ny", "query_controls"], ["x ".repeat(121).trim(), "query_too_long"],
-      ["!!!", "query_term_count"], [Array.from({ length: 33 }, (_, i) => `t${i}`).join(" "), "query_term_count"],
+      ["!!!", "query_term_count"],
       ["é".repeat(33), "query_term_too_long"],
     ]) {
       for (const argv of [["ask", "--question", text], ["records", "--query", text]]) {

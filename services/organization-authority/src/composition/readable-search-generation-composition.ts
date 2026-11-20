@@ -60,10 +60,10 @@ import {
 const READABLE_SEARCH_SOURCE_REVISION_V1 =
   "organization-authority-clean-readable-search-v2" as const;
 
-const READABLE_SEARCH_ANALYZER_RELEASE_V4 = Object.freeze({
-  schema_version: 4,
-  kind: "echo-clean-readable-search-analyzer-release-v4",
-  analyzer_id: "echo-unicode-alnum-decision-category-bm25-v4",
+const READABLE_SEARCH_ANALYZER_RELEASE_V5 = Object.freeze({
+  schema_version: 5,
+  kind: "echo-clean-readable-search-analyzer-release-v5",
+  analyzer_id: "echo-unicode-alnum-decision-category-bm25-v5",
   input_normalization: "NFC",
   tokenization: "maximal-ecmascript-unicode-letter-or-number-runs",
   case_mapping: "locale-independent-string-lowercase",
@@ -74,8 +74,6 @@ const READABLE_SEARCH_ANALYZER_RELEASE_V4 = Object.freeze({
     kind: "closed-exact-term-family-v1",
     family: ["decision", "decisions", "decide", "decided", "deciding"],
     trigger: "any-exact-family-term",
-    caller_term_limit: 32,
-    generated_family_terms_count_outside_caller_limit: true,
   },
   decision_item_category_index: {
     source: "admitted-item-kind",
@@ -130,7 +128,7 @@ export function readableSearchGenerationContractV1(): ReadableSearchGenerationCo
     restrictedReviewerPersonPolicyContractSha256();
   const projectMembersPolicy = projectMembersReadablePersonPolicyContractSha256();
   const analyzerSource = sha256Digest(
-    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V4),
+    canonicalJson(READABLE_SEARCH_ANALYZER_RELEASE_V5),
   );
   const analyzer = Object.freeze({
     analyzer_contract_sha256: canonicalSha256({

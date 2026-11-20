@@ -527,7 +527,9 @@ describe("agentic Ask: research loop", () => {
     const transcript = item("transcript", `Transcript: Calibration\n${"Anika: We reviewed the pilot numbers. ".repeat(100)}Jules: I will publish the dashboard by September 11.\n\nZhen: Thanks.`, { kind: "note", label: "Transcript: Calibration" });
     const unmatched = item("unmatched", `${"Nothing relevant here at all. ".repeat(120)}The end.`);
     const script = scripted([
-      step([{ needs: [{ need: "what Jules took on" }] }], [search("Jules dashboard")]),
+      step([{ needs: [{ need: "what Jules took on" }] }], [
+        search([...Array.from({ length: 32 }, (_, index) => `tag${index}`), "Jules", "dashboard"].join(" ")),
+      ]),
       finish([missing()]),
       finish([missing()]),
       answer([{ text: "Jules said they would publish the dashboard by September 11.", evidence: ["E1"] }]),
@@ -647,7 +649,7 @@ describe("agentic Ask: research loop", () => {
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(1).last_results).toEqual([
-      expect.objectContaining({ tool: "search", error: expect.stringContaining("keywords") }),
+      expect.objectContaining({ tool: "search", error: expect.stringContaining("at most 240 Unicode code points") }),
     ]);
     expect(evidence.open).not.toHaveBeenCalled();
   });

@@ -3,6 +3,7 @@ import {
   PERSON_ANSWER_CHOICES_MAX_V1,
   PERSON_ANSWER_CHOICES_MIN_V1,
   PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1,
+  PersonQueryInputError,
   validatePersonAnswerResponseV8,
   validatePersonQueryText,
   type PersonAnswerChoiceV1,
@@ -113,7 +114,10 @@ function fullQuestion(value: unknown, label: string): string {
   if (text.length === 0) throw new AgenticAskOutputErrorV1(`${label} must be the full question`);
   if ([...text].length > QUESTION_CHARS) throw new AgenticAskOutputErrorV1(`${label} must be at most ${QUESTION_CHARS} characters`);
   try { return validatePersonQueryText(text); }
-  catch { throw new AgenticAskOutputErrorV1(`${label} must be one question of 1 to 32 different words`); }
+  catch (error) {
+    if (!(error instanceof PersonQueryInputError)) throw error;
+    throw new AgenticAskOutputErrorV1(`${label}: ${error.message}`);
+  }
 }
 
 /** Source numbers as the resolver was shown them (1 to `sources`), each once, as indexes into the previous citations. */

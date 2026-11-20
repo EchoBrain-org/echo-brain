@@ -211,7 +211,8 @@ describe("immutable readable-search generation v1", () => {
     warmReadableSearchActiveGenerationV1({ state_directory: directory, active_generation: active });
     const alphaReader = { principal_id: "prn_alpha", membership_id: "mem_alpha", project_ids: ["prj_alpha"] };
     expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, query: "roadmap" }).items.map((item) => item.text)).toEqual(["alpha roadmap", "beta roadmap"]);
-    expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", query: "roadmap" }).items.map((item) => item.text)).toEqual(["alpha roadmap"]);
+    const query = [...Array.from({ length: 32 }, (_, index) => `t${index}`), "roadmap"].join(" ");
+    expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_alpha", query }).items.map((item) => item.text)).toEqual(["alpha roadmap"]);
     expect(() => searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: alphaReader, project_id: "prj_beta", query: "roadmap" })).toThrow("project scope");
     expect(searchReadableSearchGenerationV1({ state_directory: directory, active_generation: active, reader: { ...alphaReader, project_ids: [] }, query: "roadmap" }).items).toEqual([]);
   });

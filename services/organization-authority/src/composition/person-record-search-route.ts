@@ -21,6 +21,7 @@ import {
 import { validateOrganizationRecordEnvelopeV4, type OrganizationRecordDecisionBriefV1, type RecordInputCodecRegistryV4 } from "@echo-brain/organization-protocol";
 import {
   PERSON_LIST_TEXT_MAX_BYTES_V1,
+  validatePersonQueryText,
   validateProjectIdV1,
   type PersonAnswerCitationV3,
   type PersonRecordSearchV2,
@@ -517,21 +518,12 @@ function releaseAuthorization(
 }
 
 function validBatchQuery(query: string): boolean {
-  const terms = new Set(
-    (query.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
-      term.toLowerCase().normalize("NFC"),
-    ),
-  );
-  return (
-    query.length > 0 &&
-    query === query.normalize("NFC") &&
-    query.trim() === query &&
-    !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(query) &&
-    [...query].length <= 240 &&
-    terms.size >= 1 &&
-    terms.size <= 32 &&
-    [...terms].every((term) => Buffer.byteLength(term, "utf8") <= 64)
-  );
+  try {
+    validatePersonQueryText(query);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** The engine's form of a desk exclusion: sorted unique digests, and the restricted-reviewer policy for approver-only records. */
