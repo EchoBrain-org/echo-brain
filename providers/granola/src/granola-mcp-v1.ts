@@ -37,10 +37,18 @@ const MAX_LISTED = 200;
 const MAX_LISTED_PARTICIPANTS = 50;
 /** Folders a listing reads: ten of Granola's 100-folder pages, so a folder check stays a few calls. */
 const MAX_FOLDERS = 1_000;
+/** Notes, a summary or a description kept per meeting; longer ones keep their start and say where they were cut. */
 const MAX_TEXT = 256 * 1024;
-/** Granola sends at most 80,000 transcript characters a call; eight pages more than cover the 256 KiB kept. */
+/**
+ * Transcript kept per meeting: a full working day of talk. A longer one keeps its start and ends with TRANSCRIPT_CUT, so
+ * extraction and the approver can see it was cut; the capture also records it.
+ */
+const MAX_TRANSCRIPT = 2 * 1024 * 1024;
+/** Granola sends at most 80,000 transcript characters a call; 27 pages cover the 2 MiB kept. */
 const TRANSCRIPT_PAGE_CHARS = 80_000;
-const MAX_TRANSCRIPT_PAGES = 8;
+const MAX_TRANSCRIPT_PAGES = Math.ceil(MAX_TRANSCRIPT / TRANSCRIPT_PAGE_CHARS) + 1;
+const TRANSCRIPT_CUT = '[ECHO cut this transcript here: the meeting ran longer than the 2 MiB of transcript ECHO keeps, and the rest was not captured.]';
+const noteCut = (what: string) => `[ECHO cut the ${what} here: past the 256 KiB ECHO keeps, the rest was not captured.]`;
 const TRANSCRIPT_PENDING = 'Granola is still processing this transcript';
 const MAX_TITLE = 1024;
 const MAX_PARTICIPANTS = 16 * 1024;
@@ -98,13 +106,28 @@ function participantLines(value: unknown): string {
   }
   return bodyText(kept, MAX_PARTICIPANTS).trim();
 }
-/** A transcript's first whole turns (blank-line separated) within 256 KiB: a long meeting keeps its start rather than failing. */
-function transcriptText(value: unknown): string {
+/** `whole`'s first whole paragraphs (or lines) within `maximum` bytes including `marker`, which then ends it. */
+function cutText(whole: string, maximum: number, marker: string): string {
+  const head = boundUtf8V1(whole, maximum - Buffer.byteLength(`\n\n${marker}`, 'utf8')), turn = head.lastIndexOf('\n\n'), line = head.lastIndexOf('\n');
+  return `${(turn > 0 ? head.slice(0, turn) : line > 0 ? head.slice(0, line) : head).trimEnd()}\n\n${marker}`;
+}
+/**
+ * A transcript's first whole turns (blank-line separated) within 2 MiB: a long meeting keeps its start rather than
+ * failing, and ends with TRANSCRIPT_CUT.
+ */
+function transcriptText(value: unknown, cut: boolean): string {
   if (typeof value !== 'string') failure('invalid_output');
   const whole = value.normalize('NFC');
-  if (Buffer.byteLength(whole, 'utf8') <= MAX_TEXT) return text(whole);
-  const head = boundUtf8V1(whole, MAX_TEXT), turn = head.lastIndexOf('\n\n'), line = head.lastIndexOf('\n');
-  return text((turn > 0 ? head.slice(0, turn) : line > 0 ? head.slice(0, line) : head).trimEnd());
+  if (!cut && Buffer.byteLength(whole, 'utf8') <= MAX_TRANSCRIPT) return text(whole, MAX_TRANSCRIPT);
+  return text(cutText(whole, MAX_TRANSCRIPT, TRANSCRIPT_CUT), MAX_TRANSCRIPT);
+}
+/**
+ * Notes or a summary as text. Past 256 KiB they keep their start and end with a marker, so a meeting with very long notes
+ * is still read rather than treated as unreadable and retried forever.
+ */
+function noteText(value: unknown, what: string): string {
+  const whole = bodyText(nodeText(value), Number.MAX_SAFE_INTEGER);
+  return Buffer.byteLength(whole, 'utf8') <= MAX_TEXT ? whole : cutText(whole, MAX_TEXT, noteCut(what));
 }
 /** A transcript Granola is still processing or syncing: a watch tries that meeting again on a later pull. */
 export function granolaTranscriptPendingV1(error: unknown): boolean {
@@ -212,7 +235,7 @@ export function parseGranolaMeetingPageV1(value: string, detail: boolean): Grano
       ...(meeting_at === undefined ? {} : { meeting_at }), ...(created_at === undefined ? {} : { created_at }), ...(updated_at === undefined ? {} : { updated_at }),
       ...(captured_by_me === undefined ? {} : { captured_by_me }),
       known_participants: participantLines(meeting.known_participants),
-      ...(detail ? { private_notes: bodyText(nodeText(meeting.private_notes)), summary: bodyText(nodeText(meeting.summary)) } : {}),
+      ...(detail ? { private_notes: noteText(meeting.private_notes, 'notes'), summary: noteText(meeting.summary, 'summary') } : {}),
     });
   });
   if (String(items.length) !== envelope['@_count'] || new Set(items.map(item => item.id)).size !== items.length) failure('invalid_output');
@@ -377,7 +400,7 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
       return (await this.details([meetingId], signal))[0]!;
     },
     /**
-     * The transcript's first whole turns within 256 KiB, read page by page, or null when the meeting has none: Granola's
+     * The transcript's first whole turns within 2 MiB, read page by page, or null when the meeting has none: Granola's
      * `no_transcript` and `transcript_deleted` are final. A transcript still processing fails as pending, for a later try.
      */
     async transcript(meetingId: string, signal?: AbortSignal): Promise<Readonly<{ text: string; created_at: string; truncated?: true }> | null> {
@@ -410,14 +433,14 @@ export function createGranolaMcpV1(authenticated: PersonProviderAuthenticatedFet
         // Pages end between turns, unless one turn runs past a page and the next page continues it.
         whole += whole === '' || value.starts_mid_utterance === true ? value.transcript : `\n\n${value.transcript}`;
         const bytes = Buffer.byteLength(whole, 'utf8');
-        truncated = bytes > MAX_TEXT || value.truncated === true;
+        truncated = bytes > MAX_TRANSCRIPT || value.truncated === true;
         if (value.truncated !== true) break;
         const next = count(value.next_offset, Number.MAX_SAFE_INTEGER);
         if (next <= offset || value.transcript.length === 0) failure('invalid_output');
-        if (bytes >= MAX_TEXT) break;
+        if (bytes >= MAX_TRANSCRIPT) break;
         offset = next;
       }
-      return Object.freeze({ text: transcriptText(whole), created_at: created, ...(truncated ? { truncated: true as const } : {}) });
+      return Object.freeze({ text: transcriptText(whole, truncated), created_at: created, ...(truncated ? { truncated: true as const } : {}) });
     },
   });
 }
