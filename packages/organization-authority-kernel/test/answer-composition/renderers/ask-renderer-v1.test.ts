@@ -819,6 +819,14 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(rendered.result.response).not.toHaveProperty("since");
       expect(rendered.result.response.parts[0]!.statements.map(value => value.text)).toEqual([REVIEW.text]);
     });
+    it("leaves out only the since sentence whose list id would cite more than 40 items, keeping the others", async () => {
+      const CLOSED = { text: "The review closed.", evidence: ["E47"] };
+      const rendered = await alone({
+        bundle: pastOne(), replies: [{ lists: [], not_found: [], blocks: [{ block: "answer", sentences: [{ ...REVIEW, evidence: ["E46"] }] }], since: [WAITS_ON, CLOSED] }],
+        earlier: { asked_on: "2026-10-05", statements: [{ text: "The review had not met.", sources: ["Approved record 1"] }] }, answers: "What did the review approve?",
+      }).render("What did the review approve?");
+      expect(rendered.result.response.since?.statements.map(value => value.text)).toEqual([CLOSED.text]);
+    });
   });
 
   describe("Ask renderer: a list the writer places (ADR-0054)", () => {

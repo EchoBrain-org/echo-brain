@@ -765,10 +765,10 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         }
         const kept = new Set(fitted);
         // ---- an Ask again's since (ADR-0047): what is different now, read here so the lists it uses are known ----
-        // Each sentence stands on text the writer read (W1), as the writer's own sentences do, and repeats are dropped. A list
-        // the writer gave whose every sentence was left out says nothing, never that nothing changed; one that cannot fit the
-        // citation bound whole, or has a sentence citing more than one statement may, is left out whole, since cut short it
-        // would say less changed than did.
+        // Each sentence stands on text the writer read (W1), as the writer's own sentences do, and repeats are dropped. A
+        // sentence citing more than one statement may (its lists' rows included) is left out alone, as a writer's sentence
+        // is; the rest stand. A list the writer gave whose every sentence was left out says nothing, never that nothing
+        // changed.
         const sinceDrafts = (given: NonNullable<Answer["since"]>) => {
           const keys = new Set<string>();
           const drafts = given.flatMap(sentence => {
@@ -776,11 +776,11 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
             if (kept === undefined) return [];
             const key = JSON.stringify([sentence.text, [...new Set(kept.shorts.map(keyOf))].sort()]);
             if (keys.has(key)) { correct("writer_repeat_dropped"); return []; }
+            if (overCited(kept.shorts)) { correct("model_entry_dropped"); return []; }
             keys.add(key);
             return [kept];
           });
           if (given.length > 0 && drafts.length === 0) return undefined;
-          if (drafts.some(value => overCited(value.shorts))) return undefined;
           return drafts;
         };
         // Only beside an answer with evidence: one with none cannot say what changed. With no statement, the fallback shows

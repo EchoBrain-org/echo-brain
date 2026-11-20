@@ -824,10 +824,9 @@ function followUpsOf(body: Record<string, unknown>): readonly AnswerFollowUp[] {
 }
 
 /**
- * An Ask again's `since` (ADR-0047): its sentences, each read as a writer's sentence is, its list ids kept beside
- * its item ids. A list with an entry that is not a sentence with text, or that cites more items than a sentence may, is a
- * comparison the reply cannot stand behind: it reads as none, never as the empty list that says nothing changed, and
- * never as a list saying less changed than did.
+ * An Ask again's `since` (ADR-0047): its sentences, each read as a writer's sentence is; one that is not a sentence with
+ * text, or cites more items than a sentence may, is left out alone. A list all of whose entries were left out reads as
+ * none, never as the empty list that says nothing changed. Its list ids are kept beside its item ids.
  */
 function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text" | "evidence">[] | undefined {
   const since: Pick<AnswerSentence, "text" | "evidence">[] = [];
@@ -835,12 +834,10 @@ function sinceOf(given: readonly unknown[]): readonly Pick<AnswerSentence, "text
     const entry = object(raw);
     const text = entry === null ? "" : writtenSentence(entry.text);
     const evidence = text.length === 0 ? null : writerIds(entry!.evidence);
-    if (evidence === null) {
-      observeCoreModelCorrectionV1("model_entry_dropped");
-      return undefined;
-    }
+    if (evidence === null) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     since.push(Object.freeze({ text, evidence }));
   }
+  if (given.length > 0 && since.length === 0) return undefined;
   return Object.freeze(since);
 }
 

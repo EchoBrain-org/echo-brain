@@ -199,9 +199,9 @@ describe("agentic Ask model protocol parity", () => {
     expect(parsed!.sentences.map(sentence => [sentence.text, sentence.evidence.length])).toEqual([
       ["Within.", 42], ["Point.", 1], ["Item: Fix; Owner: Ana.", 1], ["2026-10-21: Event.", 1], ["Ticket: THERM-48; Status: Open.", 1],
     ]);
-    // A since sentence over its bound is dropped whole, and a since list missing one of its sentences says nothing changed of none.
+    // A since sentence over its bound is dropped whole, and alone: the since list keeps its other sentences.
     const since = (evidence: readonly string[]) => parseBlocksAnswer({ ...writerReply([{ text: "x", evidence: ["E1"] }]), since: [{ text: "Changed.", evidence }, { text: "Also.", evidence: ["E1"] }] }, { since: true }).since;
-    expect([since(over), since(items(1, 12))?.length]).toEqual([undefined, 2]);
+    expect([since(over), since(items(1, 12))?.length]).toEqual([[{ text: "Also.", evidence: ["E1"] }], 2]);
   });
 
   it("preserves every requested member of a which_items need beyond the old evidence and read caps", () => {
@@ -279,10 +279,14 @@ describe("agentic Ask model protocol parity", () => {
       { text: "The owner changed.", evidence: ["E2", "L1"] }, ...Array.from({ length: 7 }, (_, index) => ({ text: `Change ${index}.`, evidence: ["E1"] })),
     ]);
     expect(parseBlocksAnswer({ ...reply, since: [] }, { since: true }).since).toEqual([]);
-    // An entry with no text, or no entry at all, is a comparison the reply cannot stand behind: none, never "nothing changed".
-    for (const broken of [[{ text: "", evidence: ["E1"] }], [{ text: "   ", evidence: [] }], ["The owner changed."], [since[0], { text: "", evidence: ["E1"] }]]) {
+    // A list whose every entry has no text, or is no entry at all, is a comparison the reply cannot stand behind: none, never
+    // "nothing changed".
+    for (const broken of [[{ text: "", evidence: ["E1"] }], [{ text: "   ", evidence: [] }], ["The owner changed."]]) {
       expect(parseBlocksAnswer({ ...reply, since: broken }, { since: true })).not.toHaveProperty("since");
     }
+    // One bad entry is left out alone; the others stand.
+    expect(parseBlocksAnswer({ ...reply, since: [since[0], { text: "", evidence: ["E1"] }, since[1]] }, { since: true }).since)
+      .toEqual([{ text: "The owner changed.", evidence: ["E2", "L1"] }, { text: "Change 0.", evidence: ["E1"] }]);
     // A reply with no list of it has none; it is not sent back for that.
     expect(parseBlocksAnswer({ ...reply, since: "nothing" }, { since: true })).not.toHaveProperty("since");
     expect(answerBlocksSinceSchema).toMatchObject({ required: ["blocks", "not_found", "since"] });
