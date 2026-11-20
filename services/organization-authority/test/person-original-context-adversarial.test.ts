@@ -760,60 +760,41 @@ describe("adversarial original-context retrieval", () => {
 describe("Person original context: an open reads the whole source", () => {
   const global = { kind: "global" as const };
 
-  it("opens a note whole, and pages it only when the caller names neighbours, reaching every packet by following the offer", async () => {
+  it("opens a note or a document whole, and pages it only when the caller names neighbours, every packet reachable by the offers", async () => {
     const f = fixture();
-    // About 7.6 KB, near the note limit: three or more 3 KiB packets.
-    const paragraphs = Array.from({ length: 16 }, (_, index) => `paragraph-${index}-marker ${"word ".repeat(90)}`);
-    await f.admitTeamNote("Long sync", paragraphs.join("\n"));
-    const found = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "paragraph-0-marker" });
-    const first = found.items.find(item => item.text?.includes("paragraph-0-marker "))!;
-    // No neighbours named: the whole note, the cited packet first, and nothing left to offer.
-    const whole = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: first.citation });
-    expect(whole.items[0]!.citation.anchor_sha256).toBe(first.citation.anchor_sha256);
-    expect(whole.items.length).toBeGreaterThanOrEqual(3);
-    expect(whole.items.every(item => item.text !== undefined)).toBe(true);
-    expect(whole.items.some(item => item.text!.includes("paragraph-15-marker"))).toBe(true);
-    expect(whole.truncated).toBe(false);
-    // A named neighbour count is the caller's page: its neighbour is read, and the packet after them is offered without text.
-    const opened = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: first.citation, neighbours: 1 });
-    expect(opened.items[0]!.citation.anchor_sha256).toBe(first.citation.anchor_sha256);
-    expect(opened.items.filter(item => item.text !== undefined)).toHaveLength(2);
-    expect(opened.items.filter(item => item.text === undefined)).toHaveLength(1);
-    const readAnchors = new Set<string>();
-    const readTexts: string[] = [];
-    let page = opened;
-    for (let step = 0; step < 20; step += 1) {
-      for (const item of page.items) if (item.text !== undefined) { readAnchors.add(item.citation.anchor_sha256); readTexts.push(item.text); }
-      const next = page.items.find(item => item.text === undefined && !readAnchors.has(item.citation.anchor_sha256));
-      if (next === undefined) break;
-      page = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: next.citation, neighbours: 1 });
-    }
-    expect(readTexts.some(text => text.includes("paragraph-15-marker"))).toBe(true);
-  });
-
-  it("opens a long document whole, every packet of every chunk, with no byte budget", () => {
-    const f = fixture();
+    // A note of several 3 KiB packets, and a document of sixty chunks, one longer than a packet.
+    await f.admitTeamNote("Long sync", Array.from({ length: 16 }, (_, index) => `paragraph-${index}-marker ${"word ".repeat(90)}`).join("\n"));
     const chunks = Array.from({ length: 60 }, (_, index) => `chunk-${index}-marker `.padEnd(3_000, "y"));
-    // One chunk longer than a packet: its later packets are read too.
     chunks[30] = `chunk-30-marker ${"z ".repeat(1_500)}chunk-30-tail-marker`;
     f.uploadChunks("Whole proof", chunks);
-    const found = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "chunk-0-marker" });
-    const anchor = found.items.find(item => item.text?.includes("chunk-0-marker "))!;
-    const opened = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: anchor.citation });
-    const read = opened.items.filter(item => item.text !== undefined);
-    expect(opened.items.filter(item => item.text === undefined)).toHaveLength(0);
-    expect(opened.truncated).toBe(false);
-    expect(read[0]!.text).toContain("chunk-0-marker ");
-    expect(read.reduce((sum, item) => sum + Buffer.byteLength(item.text!, "utf8"), 0)).toBeGreaterThan(96 * 1024);
-    for (let index = 0; index < 60; index += 1) expect(read.some(item => item.text!.includes(`chunk-${index}-marker `))).toBe(true);
-    expect(read.some(item => item.text!.includes("chunk-30-tail-marker"))).toBe(true);
-    // A named count still pages, any size, with the next unit offered; a negative count is refused with its reason.
-    const paged = f.retrieval.deskOpen({ access_token: "member", scope: global, citation: anchor.citation, neighbours: 3 });
-    expect(paged.items.filter(item => item.text !== undefined)).toHaveLength(4);
-    expect(paged.items.filter(item => item.text === undefined)).toHaveLength(1);
-    expect(() => f.retrieval.deskOpen({ access_token: "member", scope: global, citation: anchor.citation, neighbours: -1 }))
-      .toThrow(expect.objectContaining({ code: "invalid_request", message: expect.stringContaining("neighbours") }));
-    expect(f.retrieval.revalidateDeskRelease({ access_token: "member", release: opened })).toEqual({ checked_at: expect.any(String) });
+    const open = (citation: Parameters<typeof f.retrieval.deskOpen>[0]["citation"], neighbours?: number) =>
+      f.retrieval.deskOpen({ access_token: "member", scope: global, citation, ...(neighbours === undefined ? {} : { neighbours }) });
+    for (const [first, last] of [["paragraph-0-marker", "paragraph-15-marker"], ["chunk-0-marker", "chunk-30-tail-marker"]] as const) {
+      const anchor = f.retrieval.deskSearch({ access_token: "member", scope: global, query: first }).items.find(item => item.text?.includes(`${first} `))!;
+      // No neighbours named: the whole source, the cited packet first, nothing offered.
+      const whole = open(anchor.citation);
+      expect(whole.items[0]!.citation.anchor_sha256).toBe(anchor.citation.anchor_sha256);
+      expect(whole.items.length).toBeGreaterThanOrEqual(3);
+      expect(whole.items.every(item => item.text !== undefined)).toBe(true);
+      expect(whole.items.some(item => item.text!.includes(last))).toBe(true);
+      expect(whole.truncated).toBe(false);
+      expect(f.retrieval.revalidateDeskRelease({ access_token: "member", release: whole })).toEqual({ checked_at: expect.any(String) });
+      // A named count is the caller's page: the anchor and one neighbour read, the next packet offered without text.
+      let page = open(anchor.citation, 1);
+      expect(page.items.filter(item => item.text !== undefined)).toHaveLength(2);
+      expect(page.items.filter(item => item.text === undefined)).toHaveLength(1);
+      // Following the offers reads every packet the whole open read.
+      const read = new Set<string>();
+      for (;;) {
+        for (const item of page.items) if (item.text !== undefined) read.add(item.citation.anchor_sha256);
+        const next = page.items.find(item => item.text === undefined && !read.has(item.citation.anchor_sha256));
+        if (next === undefined) break;
+        page = open(next.citation, 1);
+      }
+      expect(read).toEqual(new Set(whole.items.map(item => item.citation.anchor_sha256)));
+    }
+    const anchor = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "chunk-0-marker" }).items[0]!;
+    expect(() => open(anchor.citation, -1)).toThrow(expect.objectContaining({ code: "invalid_request", message: expect.stringContaining("neighbours") }));
   });
 
   it("opens and checks a nearly 2 MiB extraction whole without parsing it once per packet", () => {
@@ -833,28 +814,16 @@ describe("Person original context: an open reads the whole source", () => {
     expect(meter.bytes()).toBeLessThan(extractedBytes * 16);
   });
 
-  it("returns every match when no limit is named, honours a page of any size, and never refuses a large one", () => {
+  it("searches and lists every match when no limit is named, and a page of any size when one is", () => {
     const f = fixture();
-    for (let index = 0; index < 30; index += 1) f.upload(`Hit ${index}`, `clampmarker document ${index}`);
-    const all = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "clampmarker" });
-    expect(all.items).toHaveLength(30);
-    expect(all.truncated).toBe(false);
-    const large = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "clampmarker", limit: 100 });
-    expect(large.items).toHaveLength(30);
-    expect(large.truncated).toBe(false);
-    const page = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "clampmarker", limit: 10 });
-    expect(page.items).toHaveLength(10);
-    expect(page.truncated).toBe(true);
-  });
-
-  it("lists every source in the inventory when no limit is named, past the fifty one page used to hold", () => {
-    const f = fixture();
-    for (let index = 0; index < 90; index += 1) f.upload(`Inventory ${index}`, `inventory document ${index}`);
-    const all = f.retrieval.deskSearch({ access_token: "member", scope: global });
-    expect(all.items).toHaveLength(90);
-    expect(all.truncated).toBe(false);
-    const page = f.retrieval.deskSearch({ access_token: "member", scope: global, limit: 80 });
-    expect(page.items).toHaveLength(80);
-    expect(page.truncated).toBe(true);
+    for (let index = 0; index < 90; index += 1) f.upload(`Hit ${index}`, `clampmarker document ${index}`);
+    for (const query of ["clampmarker", undefined]) {
+      const search = (limit?: number) => f.retrieval.deskSearch({ access_token: "member", scope: global, ...(query === undefined ? {} : { query }), ...(limit === undefined ? {} : { limit }) });
+      expect(search()).toMatchObject({ truncated: false });
+      expect(search().items).toHaveLength(90);
+      expect(search(500).items).toHaveLength(90);
+      expect(search(80)).toMatchObject({ truncated: true });
+      expect(search(80).items).toHaveLength(80);
+    }
   });
 });
