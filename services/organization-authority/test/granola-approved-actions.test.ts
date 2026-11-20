@@ -44,32 +44,21 @@ it('tries an outage again before it settles for an unassessed card', async () =>
   expect(fixture.items.forRun(fixture.runId)).toHaveLength(1);
 });
 
-it('writes an invalid impact card once more before it settles for an unassessed one', async () => {
+it.each([[1, 'assessed'], [2, 'not_assessed']] as const)('writes an invalid impact card once more, never twice (%i invalid)', async (invalid, status) => {
   const fixture = await openItemsFixture({ meetingActions: [{ signal_id: 'act-0', text: 'Prepare the document', owner: 'Mina Patel' }] });
   const valid = fixture.research.getMockImplementation()!;
   let renders = 0;
   fixture.research.mockImplementation(((...args: Parameters<typeof valid>) => ({ renderWithResearch: async (...input: unknown[]) => {
     renders += 1;
-    if (renders === 1) throw new AuthorityOperationError('invalid_output', 'The impact card is not valid');
+    if (renders <= invalid) throw new AuthorityOperationError('invalid_output', 'The impact card is not valid');
     return (valid(...args).renderWithResearch as (...value: unknown[]) => unknown)(...input);
   } })) as typeof valid);
   await fixture.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: fixture.runId } });
   await vi.waitFor(() => expect(fixture.runs.read(fixture.person, fixture.runId)!.state).toBe('done'), { interval: 1 });
-  // The second card stands: the run is assessed, without spending another of the run's attempts.
+  // One repair, without spending another of the run's attempts; a second invalid card settles for the meeting's own action.
   expect(renders).toBe(2);
   expect(fixture.runs.read(fixture.person, fixture.runId)).toMatchObject({ attempts: 0 });
-  expect(JSON.parse(fixture.runs.read(fixture.person, fixture.runId)!.result_json!).status).toBe('assessed');
-});
-
-it('settles for an unassessed card when the card written again is invalid too', async () => {
-  const fixture = await openItemsFixture({ meetingActions: [{ signal_id: 'act-0', text: 'Prepare the document', owner: 'Mina Patel' }] });
-  let renders = 0;
-  fixture.research.mockImplementation(() => ({ renderWithResearch: async () => { renders += 1; throw new AuthorityOperationError('invalid_output', 'The impact card is not valid'); } }));
-  await fixture.app.start({ access_token: 'ari', request: { schema_version: 1, operation: 'start', run_id: fixture.runId } });
-  await vi.waitFor(() => expect(fixture.runs.read(fixture.person, fixture.runId)!.state).toBe('done'), { interval: 1 });
-  expect(renders).toBe(2);
-  expect(JSON.parse(fixture.runs.read(fixture.person, fixture.runId)!.result_json!).status).toBe('not_assessed');
-  expect(fixture.items.forRun(fixture.runId)).toHaveLength(1);
+  expect(JSON.parse(fixture.runs.read(fixture.person, fixture.runId)!.result_json!).status).toBe(status);
 });
 
 it("keeps a meeting action's whole line and gives its card the action's day, and none to an action without one", async () => {

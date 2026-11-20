@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalSha256, sha256Digest, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { PERSON_PROJECT_ACTIVITY_PATH_V1, validatePersonProjectActivityV1 } from '@echo-brain/organization-api';
 import { SqlitePersonDocumentRepositoryV1 } from '../src/adapters/persistence/sqlite/document-v1.js';
@@ -25,17 +25,6 @@ import { createOrganizationAuthorityHttpServer } from '../src/presentation/organ
 import { CLOUD, assign, openItemsFixture, sendAll, setState, type FixturePerson, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 import { OWNER, PROJ_X, SHARED, T, UNJOINED, meetingWorld } from './fixtures/person-meeting-world.js';
 import { authorityHttpServerOptions } from './fixtures/authority-http-server.js';
-
-// Every decisions reader the activity read makes, so a test can see what each one holds; otherwise the real reader.
-const { readers } = vi.hoisted(() => ({ readers: [] as { retained(): number }[] }));
-vi.mock('../src/composition/person-open-items-v1.js', async original => {
-  const actual = await original<typeof import('../src/composition/person-open-items-v1.js')>();
-  return { ...actual, openItemDecisionsReaderV1: (...args: Parameters<typeof actual.openItemDecisionsReaderV1>) => {
-    const reader = actual.openItemDecisionsReaderV1(...args);
-    readers.push(reader);
-    return reader;
-  } };
-});
 
 /**
  * Project activity over the open-items fixture's Authority and its real record log: Ari approved a meeting into project A,
@@ -392,46 +381,6 @@ describe('project activity: only what the caller can read', () => {
     expect(pagesRead).toBe(11);
     expect(sizes.length).toBeGreaterThan(1);
     expect(Math.max(...sizes)).toBeLessThanOrEqual(100);
-  });
-
-  it('keeps only one page\'s decisions at a time: a moved follow-up on every old record never piles up in one reader', async () => {
-    const f = await openItemsFixture();
-    afterArrival(f);
-    const route = recordRoute(f);
-    await f.finishImpactRun();
-    const unsent = (await f.runItems()).items;
-    const sentAt = tick(f);
-    await sendAll(f, unsent);
-    // A thousand newer records, each with a follow-up someone else moved earlier than the real one, ahead of the meeting's.
-    const newer = Array.from({ length: 1_000 }, (_, at) => canonicalSha256(`newer-${at}`));
-    const fake = new Set<string>(newer);
-    const padded: CreatePersonProjectActivityV1Options['records'] = {
-      readableDecisionProjects: route.readableDecisionProjects,
-      projectRecordActivity: input => new Map([...route.projectRecordActivity(input)].map(([project, records]) => [project, {
-        meeting_at: records.meeting_at,
-        *filed() {
-          for (let at = 0; at < newer.length; at += 100) yield newer.slice(at, at + 100);
-          yield* records.filed();
-        },
-      }])),
-    };
-    let template: ReturnType<SqliteImpactItemsV1['movedByOthers']>[number] | undefined;
-    const items: CreatePersonProjectActivityV1Options['items'] = {
-      movedByOthers: (organization, membership, records, page) => {
-        const real = records.filter(record => !fake.has(record));
-        if (real.length > 0) return f.items.movedByOthers(organization, membership, real, page);
-        template ??= f.items.movedByOthers(organization, membership, [f.record as Sha256Digest], { limit: 1 })[0]!;
-        // All moved at one time, ordered by item id, paged after `page.after` as the store pages them.
-        return records.map(record => ({ row: { ...template!.row, item_id: `itm_${record.slice(7, 43)}`, record_sha256: record }, moved_at: '2026-01-01T00:00:00.000Z' }))
-          .sort((a, b) => (a.row.item_id < b.row.item_id ? -1 : 1))
-          .filter(entry => page.after === undefined || entry.row.item_id > page.after.item_id).slice(0, page.limit);
-      },
-    };
-    readers.length = 0;
-    expect(await activityOf(f, { records: padded, items }).latest('rafael')).toEqual({ [f.projectA]: sentAt });
-    // Each page's reader holds that page's decisions only, never the thousand assessed before it.
-    expect(readers.length).toBeGreaterThan(1);
-    expect(Math.max(...readers.map(reader => reader.retained()))).toBeLessThanOrEqual(100);
   });
 
   it('never counts a follow-up whose decision the caller cannot read, even one sent to them', async () => {

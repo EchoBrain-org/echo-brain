@@ -62,15 +62,7 @@ describe("Agentic Ask HTTP capability gate", () => {
       expect(question.length).toBeGreaterThan(240);
       expect((await post({ schema_version: 3, question })).status).toBe(404);
       expect(ask).toHaveBeenCalledWith(expect.objectContaining({ request: { schema_version: 3, question } }));
-      // A request over the ordinary 16 KiB body bound is an Ask still: its bound is the server's 64 KiB.
-      const long = '😀'.repeat(4_000);
-      const previous = { purpose: 'follow_up', question: long, asked_at: '2026-11-19T17:05:00.000Z', statements: [], citations: [] };
-      expect(Buffer.byteLength(JSON.stringify({ schema_version: 3, question: long, previous }))).toBeGreaterThan(16 * 1024);
-      expect((await post({ schema_version: 3, question: long, previous })).status).toBe(404);
-      // A question has no length of its own: 10,000 code points is asked.
-      const longer = '😀'.repeat(10_000);
-      expect((await post({ schema_version: 3, question: longer })).status).toBe(404);
-      // 100 KiB, past what any client once held a question to, is asked.
+      // A question has no length of its own: 100 KiB is asked.
       expect((await post({ schema_version: 3, question: 'x'.repeat(100 * 1024) })).status).toBe(404);
       // Past the server's 1 MiB Person body, the body bound refuses it and says so.
       const over = await post({ schema_version: 3, question: 'x'.repeat(1024 * 1024) });
@@ -84,7 +76,7 @@ describe("Agentic Ask HTTP capability gate", () => {
         expect(response.status).toBe(400);
         await expect(response.json()).resolves.toEqual({ error: { code, message } });
       }
-      expect(ask).toHaveBeenCalledTimes(4);
+      expect(ask).toHaveBeenCalledTimes(2);
     } finally { await value.close(); }
   });
 

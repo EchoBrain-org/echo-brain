@@ -167,10 +167,6 @@ function otherFilters(input: EvidenceDeskListInputV2, source: WorkspaceSourceIdV
     invalid(takes.length === 0 ? `${source} take no filters` : `${source} take only ${takes.join(' and ')}`);
   }
 }
-/** Every name, joined with ", ". */
-function named(values: readonly string[]): string {
-  return values.join(', ');
-}
 /** Newest first, as the project list orders them; then by id. */
 const newestFirst = newestFirstV1<ProjectSummaryV2>(project => project.project_id);
 /** The connection a tool's release reflects: whether it is set up and linked, and to which site and account. */
@@ -255,10 +251,10 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
     const roster = shown.members.get(value.project_id) ?? [];
     const leads = roster.filter(member => member.role === 'lead').map(member => member.display_name);
     // A project's Jira project and Confluence spaces are their own sources, which name the projects mapped to them.
-    const lines = [`Members: ${named(roster.map(member => `${member.display_name} (${member.role})`))}`];
+    const lines = [`Members: ${roster.map(member => `${member.display_name} (${member.role})`).join(', ')}`];
     return item('project', value.project_id, { kind: 'project', project_id: value.project_id, grant: shown.grants.get(value.project_id)! }, {
       ref: `project:${value.project_id}` as const, label: value.name,
-      attributes: Object.freeze({ status: value.status, role: value.role, ...(leads.length === 0 ? {} : { leads: named(leads) }) }),
+      attributes: Object.freeze({ status: value.status, role: value.role, ...(leads.length === 0 ? {} : { leads: leads.join(', ') }) }),
       dates: Object.freeze({ created: value.created_at }), text: lines.join('\n'),
       ...(members === undefined ? {} : { links: Object.freeze({ members: Object.freeze([...members]) }) }),
       visibility: 'project' as const,
@@ -266,7 +262,7 @@ export function createPersonWorkspaceEvidenceSourcesV1(options: CreatePersonWork
   };
   const person = (shown: View, value: Person, projects?: readonly string[]): Shaped | undefined => {
     const shared = shown.memberships.get(value.membership_id) ?? [];
-    const roles = named(shared.map(entry => `${entry.project.name} (${entry.role})`));
+    const roles = shared.map(entry => `${entry.project.name} (${entry.role})`).join(', ');
     const text = value.membership_id === bound.membership_id
       ? `This is you.\n${shared.length === 0 ? 'You belong to no project.' : `Your projects: ${roles}`}`
       : shared.length === 0 ? 'Shares no project with you.' : `Projects shared with you: ${roles}`;

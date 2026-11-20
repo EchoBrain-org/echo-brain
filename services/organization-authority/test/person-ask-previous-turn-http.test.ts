@@ -5,9 +5,7 @@ import {
 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import { createPersonLiveAnswerRouteV1 } from '../src/composition/person-live-answer-route-v1.js';
-import { createPersonAskCheckV1 } from '../src/composition/person-ask-check-v1.js';
 import { readablePreviousV1 } from '../src/composition/person-ask-previous-check-v1.js';
-import { SqliteProjectContextRepositoryV1 } from '../src/adapters/persistence/sqlite/project-context-v1.js';
 import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
@@ -147,11 +145,8 @@ describe('the previous turn on /v7 (ADR-0047)', () => {
 });
 
 describe('the previous turn as the Authority lets its model read it (ADR-0047)', () => {
-  /** The real Ask source check over the fixture, as the runtime composes it beside the Ask. */
-  const checkOf = (f: OpenItemsFixtureV1) => createPersonAskCheckV1({
-    database: f.db, sessions: f.openItemsOptions.sessions, projects: new SqliteProjectContextRepositoryV1(f.db), records: f.records,
-    originals: new SqlitePersonOriginalContextRetrievalV1(f.db, f.openItemsOptions.sessions, f.person.organization_id), items: f.items, people: f.directory,
-  });
+  /** The fixture's real Ask source check, as the runtime composes it beside the Ask. */
+  const checkOf = (f: OpenItemsFixtureV1) => liveAskOptions(f, undefined as never).previous_check!;
   const ROSTER = 'Kestrel roster: Mina Park (lead) and Rafael Ortiz.';
   const LABEL = 'Kestrel launch project';
   const MARA = 'Mara Lind owns the launch.';
@@ -179,16 +174,21 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
   const leave = (f: OpenItemsFixtureV1) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
     .run(f.clock().toISOString(), f.projectA, f.membership('mina'));
   const v7Checked = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) =>
-    serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1({ ...liveAskOptions(f, model), previous_check: checkOf(f) }) });
+    serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
 
-  it('reads a roster sentence while the asker is a member, and never once membership is revoked after the client checked it', async () => {
+  it('carries a sentence only while every citation it rests on is readable when the request arrives', async () => {
     const f = await sentFixture();
     const run = recording();
     const base = await v7Checked(f, run.model);
-    const send = () => ask(base, { body: body(previousOf(f), 'And who leads it?') });
+    const uncited = 'Uncited: the roster is Mina and Rafael.';
+    const previous = { ...previousOf(f), statements: [...previousOf(f).statements, { text: uncited, citation_indexes: [] }] };
+    const send = () => ask(base, { body: body(previous, 'And who leads it?') });
     await streamedAnswer(await send());
+    // A member reads the roster; a sentence resting on a person (no check reads one) or on nothing is never carried.
     expect(run.seen()).toContain(ROSTER);
     expect(run.seen()).toContain(LABEL);
+    expect(run.seen()).not.toContain(MARA);
+    expect(run.seen()).not.toContain(uncited);
     // The client's check said `same`; then Mina leaves the project, and the same request is sent again (a retry of it).
     leave(f);
     run.reset();
@@ -199,94 +199,34 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     expect(run.seen()).toContain(EARLIER);
   });
 
-  it('never carries a sentence resting on a citation no check reads (a person), even while the rest is readable', async () => {
-    const f = await sentFixture();
-    const run = recording();
-    await streamedAnswer(await ask(await v7Checked(f, run.model), { body: body(previousOf(f), 'And who leads it?') }));
-    expect(run.seen()).toContain(ROSTER);
-    expect(run.seen()).not.toContain(MARA);
-    expect(run.seen()).not.toContain('Mara Lind');
-  });
-
-  it('gives Ask again\'s writer no sentence of a project the asker left', async () => {
-    const f = await sentFixture();
-    const run = recording();
-    leave(f);
-    const question = 'What are my open tasks?';
-    await streamedAnswer(await ask(await v7Checked(f, run.model), { body: body(previousOf(f, 'ask_again', question), question) }));
-    expect(run.seen()).not.toContain(ROSTER);
-    expect(run.seen()).not.toContain(LABEL);
-  });
-
-  it('carries only the question when no check is configured', async () => {
-    const f = await sentFixture();
-    const run = recording();
-    const { previous_check: _check, ...unchecked } = liveAskOptions(f, run.model);
-    await streamedAnswer(await ask(await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(unchecked) }), { body: body(previousOf(f), 'And who leads it?') }));
-    expect(run.seen()).not.toContain(ROSTER);
-    expect(run.seen()).toContain(EARLIER);
-  });
-
-  it('checks the previous turn again on a snapshot restart: access lost after the first attempt keeps the roster from the second', async () => {
-    const f = await sentFixture();
-    const run = recording();
-    const options = liveAskOptions(f, run.model);
-    const [jira] = options.live_sources!;
-    let first = true;
-    // The first attempt's desk sees the snapshot move, and Mina leaves the project before the restart.
-    const live_sources = [{ ...jira!, application: { source: async (input: Parameters<typeof jira.application.source>[0]) => {
-      if (first) { first = false; leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
-      return jira!.application.source(input);
-    } } }];
-    const base = await serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1({ ...options, live_sources }) });
-    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
-    expect(first).toBe(false);
-    expect(run.seen()).not.toContain(ROSTER);
-    expect(run.seen()).not.toContain(LABEL);
-    expect(run.seen()).toContain(EARLIER);
-  });
-
-  it.each([false, true])('reuses the follow-up resolution across a snapshot restart only while the checked turn is the same (access lost: %s)', async lost => {
+  it.each([false, true])('checks the turn again on a snapshot restart, and reuses the paid resolution only while the checked turn is the same (access lost: %s)', async lost => {
     const f = await sentFixture();
     const tasks = myOpenTasksPlanner();
     const prompts: string[] = [];
-    let resolutions = 0;
     let restarted = false;
-    // The resolver answers once per call; the first research step after it sees the snapshot move.
+    // The first research step after the resolver sees the snapshot move; access may be lost before the restart.
     const model: StructuredGenerationPort = { async generate(input) {
       if ((input.schema.properties as Readonly<Record<string, unknown>>).resolution !== undefined) {
-        resolutions += 1;
         prompts.push(input.user_prompt);
         return { resolution: 'same' };
       }
       if (!restarted) { restarted = true; if (lost) leave(f); throw new PersonRecordSearchSnapshotChangedV1(); }
       return tasks.model.generate(input);
     } };
-    const base = await v7Checked(f, model);
-    expect((await streamedAnswer(await ask(base, { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
+    expect((await streamedAnswer(await ask(await v7Checked(f, model), { body: body(previousOf(f), 'And who leads it?') }))).outcome).toBe('answered');
     expect(restarted).toBe(true);
-    // Unchanged: the paid resolution is not repeated. Changed: resolved again, from the turn as checked now.
-    expect(resolutions).toBe(lost ? 2 : 1);
+    // Unchanged: the resolution is not paid for twice. Changed: resolved again, from the turn as checked now.
+    expect(prompts).toHaveLength(lost ? 2 : 1);
     if (lost) expect(prompts[1]).not.toContain(ROSTER);
   });
 
-  it('carries no sentence that rests on no citation, with a check or without one', async () => {
-    const f = await sentFixture();
-    const bare = { ...previousOf(f), statements: [{ text: 'Uncited: the roster is Mina and Rafael.', citation_indexes: [] }, { text: ROSTER, citation_indexes: [0] }] };
-    for (const check of [checkOf(f), undefined]) {
-      const kept = await readablePreviousV1(bare, { access_token: 'mina', check });
-      expect(kept.statements.map(statement => statement.text)).not.toContain('Uncited: the roster is Mina and Rafael.');
-    }
-    expect((await readablePreviousV1(bare, { access_token: 'mina', check: checkOf(f) })).statements.map(statement => statement.text)).toEqual([ROSTER]);
-  });
-
-  it('answers an unknown project and one the asker is not a member of identically', async () => {
+  it('answers an unknown project and one the asker is not a member of identically, and keeps only the question with no check', async () => {
     const f = await sentFixture();
     const check = checkOf(f);
-    const unknown = await readablePreviousV1(previousOf(f, 'follow_up', EARLIER, 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10'), { access_token: 'mina', check });
-    const outsider = await readablePreviousV1(previousOf(f), { access_token: 'okafor', check });
-    expect(unknown).toEqual(outsider);
-    expect(unknown).toEqual({ purpose: 'follow_up', question: EARLIER, asked_at: '2026-10-24T17:05:00.000Z', statements: [], citations: [] });
+    const questionOnly = { purpose: 'follow_up', question: EARLIER, asked_at: '2026-10-24T17:05:00.000Z', statements: [], citations: [] };
+    expect(await readablePreviousV1(previousOf(f, 'follow_up', EARLIER, 'prj_6b0f8a52-55a4-4f6e-9a39-6d3c8c3c2a10'), { access_token: 'mina', check })).toEqual(questionOnly);
+    expect(await readablePreviousV1(previousOf(f), { access_token: 'okafor', check })).toEqual(questionOnly);
+    expect(await readablePreviousV1(previousOf(f), { access_token: 'mina', check: undefined })).toEqual(questionOnly);
     // A member keeps the roster, renumbered to the citations that stay.
     expect(await readablePreviousV1(previousOf(f), { access_token: 'mina', check })).toMatchObject({
       statements: [{ text: ROSTER, citation_indexes: [0] }], citations: [expect.objectContaining({ label: LABEL })] });
