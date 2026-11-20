@@ -620,25 +620,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           }
           if (fill.kind === "rows") filled.push({ list, block: placed.block, fill });
         }
-        // It stands on the items whose text the writer read (W1); after them, never as support, it cites the rows whose facts it
-        // may carry: each row it cites that the writer saw, and each private row of a list it cites that the writer saw or a
-        // block placing that list shows (W6, ADR-0054), so a sentence leaning on a list is as private as every row of it the
-        // reader is shown.
         const placedRows = new Map<string, readonly string[]>();
         for (const { list, fill } of filled) placedRows.set(list.id, [...(placedRows.get(list.id) ?? []), ...fill.selected.map(member => member.id)]);
-        const rowsOf = (id: string) => {
-          if (shownRows.has(id)) return [id];
-          const list = parseAgenticListIdV1(id);
-          const shown = list === null ? undefined : writerById.get(list);
-          if (shown === undefined) return [];
-          return [...new Set([...shown.members.map(member => member.id), ...(placedRows.get(shown.id) ?? [])])].filter(short => privateItem(byShort.get(short)!.item));
-        };
         /**
-         * The rows a sentence that cites no evidence text stands on (ADR-0054 W1, as widened): a row the writer saw, or every
-         * row of a list the writer saw that it cites, with the rows a block placing that list shows. A row states its
-         * member's title, dates, status and owner, so a sentence may state those, or a count across rows, from them. Each
-         * row is cited, so the sentence is as private as every row it rests on, and one resting on more than a statement's
-         * 40 citations is left out whole.
+         * The rows whose facts a sentence citing `id` may carry (ADR-0054 W1, W6): a row the writer saw, or every row of a list
+         * the writer saw that it cites, with the rows a block placing that list shows. A row states its member's title, dates,
+         * status and owner, so a sentence may state those, or a count across rows, from them. Every such row is cited whatever
+         * its visibility (visibility follows citations), so the sentence is hidden once any row it rests on is no longer
+         * readable, and it is private when any of them is.
          */
         const rowFacts = (id: string): readonly string[] => {
           if (shownRows.has(id)) return [id];
@@ -649,17 +638,17 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         /** The sentence with code's note, whole: a statement has no length of its own. */
         const fittedNote = (text: string, note: string) => withNote(text, note);
         /**
-         * A writer's or `since` sentence as code keeps it (W1): on the text the writer read, then the rows it may carry, and
-         * the lists it uses; with no text, on the rows or lists it cites (rowFacts); or, citing nothing it saw, none.
+         * A writer's, table's or `since` sentence as code keeps it (W1): on the text the writer read, then every row it may
+         * carry (rowFacts), and the lists it uses; with no text, on the rows or lists it cites; or, citing nothing it saw, none.
          */
         const drafted = (sentence: Pick<AnswerSentence, "text" | "evidence">) => {
           const read = sentence.evidence.filter(short => textGiven.has(short));
-          const onRows = read.length > 0 ? [] : [...new Set(sentence.evidence.flatMap(rowFacts))];
+          const onRows = [...new Set(sentence.evidence.flatMap(rowFacts))];
           if (read.length === 0 && onRows.length === 0) { correct("writer_uncited_sentence_dropped"); return undefined; }
           // An id that is no text, row or list the writer saw cites nothing.
           const unknown = sentence.evidence.filter(id => !textGiven.has(id) && !shownRows.has(id) && !writerById.has(parseAgenticListIdV1(id) ?? "L0")).length;
           if (unknown > 0) correct("writer_unknown_id_dropped", unknown);
-          return { text: sentence.text, shorts: read.length > 0 ? [...read, ...sentence.evidence.flatMap(rowsOf)] : onRows, read, uses: listsCitedBy(sentence.evidence) };
+          return { text: sentence.text, shorts: [...read, ...onRows], read, uses: listsCitedBy(sentence.evidence) };
         };
         /**
          * An item as code checks it against the evidence text it stands on (ADR-0051): a quote that is not word for word in

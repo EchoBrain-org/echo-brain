@@ -330,6 +330,7 @@ function vendorMeeting(pad: number) {
 }
 const SHARED = listed("dash", { kind: "action", list_label: "Publish the DVT dashboard (Exec vendor review, 2026-10-04)", attributes: { owner: "Mara Quinn" } });
 const RESTRICTED = listed("exec", { kind: "action", visibility: "approver_only", list_label: "Replace the fixture vendor if the drawings slip again. (Exec vendor review, 2026-10-04)", attributes: { owner: "Dana Lee" } });
+const PROJECT_ROW = listed("ticket", { kind: "action", visibility: "project", list_label: "Send the fixture drawings to the vendor (Exec vendor review, 2026-10-04)", attributes: { owner: "Dana Lee" } });
 const DRAWINGS = "The drawings go to the vendor on Friday; if they slip again, the vendor is to be replaced.";
 const x35 = (rows: readonly EvidenceDeskItemV2[], found: string) => ({
   q: "When do the fixture drawings go to the vendor?", need: "when the drawings go to the vendor", desk: () => meetings(rows, undefined, { search: vi.fn(async () => result([record("drawings", "Approved: fixture drawings go to the vendor on Friday.")]) as EvidenceDeskResultV2) }),
@@ -390,7 +391,7 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [...READ8, finish], w: [say(TWO, ["E11", "E12"])], out: "answered", says: [cite(TWO, 2)], wl: { count: 8, checked: 8, complete: true },
     })),
     { id: "X35d", name: "cites the 8 only_me page rows after the two sections when the sentence also cites the list", ...B4, steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 10)] },
-    { id: "X35d", name: "cites only the two sections on team pages, whatever the sentence cites beside them", ...B4, desk: () => oct4({ team: true }), steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 2, true)] },
+    { id: "X35d", name: "cites the two sections and the 8 team page rows when the sentence also cites the list", ...B4, desk: () => oct4({ team: true }), steps: [...READ8, fin(WS, "L1", "E11", "E12")], w: [say(TWO, ["L1", "E11", "E12"])], out: "answered", says: [cite(TWO, 10, true)] },
     { id: "X29", name: "counts an open by a page's title for the page it resolved to, so all eight are checked", ...B4,
       steps: [read([OCT4_LIST]), read(PAGES.slice(0, 4).map(row => ({ tool: "open", args: { id: row.label } }))), read(PAGES.slice(4).map(row => ({ tool: "open", args: { id: row.label } }))), fin(WS, "L1", "E11", "E12")],
       w: [say(TWO, ["E11", "E12"])], out: "answered", says: [TWO], wl: { count: 8, checked: 8 },
@@ -660,11 +661,16 @@ describe("Ask's declared kinds: the restructure's scenario corpus (ADR-0041)", (
       steps: [read([{ tool: "list", args: { source: "meetings", kind: "decision", status: "open" } }]), fin(WI, "L1")], w: [useL1], out: "answered", says: [expect.stringMatching(/^3 decisions with status open: /u)],
       notice: partialNotice("Decisions"), lists: [{ id: "L1", members: ids(1, 3), filter_applied: { kind: "applied", status: "partial" } }],
       check: ({ steps }) => expect(steps[1]!.last_results[0].note).toContain("some items do not record open or done; they are included") },
-    ...[["E2", "E3"], ["L1", "E3"], ["E3", "L1"]].map((evidence): Row => ({
-      id: "X35c", name: `makes a writer's sentence citing ${evidence.join(" and ")} private: it cites the approver_only row it saw beside team text`, ...x35([SHARED, RESTRICTED], "E3"), w: [say(DRAWINGS, evidence)], says: [cite(DRAWINGS, 2)],
-      check: run => { expect(run.writer[0]!.lists[0].members[1]).toMatchObject({ id: "E2", title: RESTRICTED.list_label }); visibilities(["decision", "team"], ["action", "approver_only"])(run); },
+    { id: "X35c", name: "makes a writer's sentence citing E2 and E3 private: it cites the approver_only row it saw beside team text", ...x35([SHARED, RESTRICTED], "E3"), w: [say(DRAWINGS, ["E2", "E3"])], says: [cite(DRAWINGS, 2)],
+      check: run => { expect(run.writer[0]!.lists[0].members[1]).toMatchObject({ id: "E2", title: RESTRICTED.list_label }); visibilities(["decision", "team"], ["action", "approver_only"])(run); } },
+    ...[["L1", "E3"], ["E3", "L1"]].map((evidence): Row => ({
+      id: "X35c", name: `makes a writer's sentence citing ${evidence.join(" and ")} private: it cites every row of the list it saw beside team text, the approver_only one included`, ...x35([SHARED, RESTRICTED], "E3"), w: [say(DRAWINGS, evidence)], says: [cite(DRAWINGS, 3)],
+      check: run => { expect(run.writer[0]!.lists[0].members[1]).toMatchObject({ id: "E2", title: RESTRICTED.list_label }); visibilities(["decision", "team"], ["action", "team"], ["action", "approver_only"])(run); },
     })),
-    { id: "X35c", name: "brings nothing through a list with no private row the writer saw", ...x35([SHARED], "E2"), w: [say(DRAWINGS, ["L1", "E2"])], says: [cite(DRAWINGS, 1, true)], check: visibilities(["decision", "team"]) },
+    // Visibility follows citations (ADR-0054): a sentence on text and a list carries every row of the list, whatever its
+    // visibility, so losing access to any row hides the sentence.
+    { id: "X35c", name: "cites a team row of a list the writer saw beside the text it read", ...x35([SHARED], "E2"), w: [say(DRAWINGS, ["L1", "E2"])], says: [cite(DRAWINGS, 2, true)], check: visibilities(["decision", "team"], ["action", "team"]) },
+    { id: "X35c", name: "cites a project row of a list the writer saw beside the text it read", ...x35([PROJECT_ROW], "E2"), w: [say(DRAWINGS, ["E2", "L1"])], says: [cite(DRAWINGS, 2, true)], check: visibilities(["decision", "team"], ["action", "project"]) },
     { id: "addition 4", name: "checks a ticket whose open was cut only beside it, its links; research is told only that the open was truncated", ...A4, desk: () => anchorJira({ anchor_truncated: false }), out: "answered", notice: COVERAGE, says: ["THERM-3 mentions BUG-412."], wl: { id: "L1", count: 4, checked: 4 },
       check: ({ research, steps }) => {
         expect(research.rounds[1].actions[2].result).toMatchObject({ id: "E3", opened: ["E3"], truncated: true, anchor_truncated: false });
