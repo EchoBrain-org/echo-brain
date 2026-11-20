@@ -113,6 +113,15 @@ describe("approved decision snapshot v2", () => {
     ).toEqual([]);
   });
 
+  it("accepts a snapshot whose cited evidence passes 256 KiB: only the record store's capacity bounds it", () => {
+    const payload = approvedPayload();
+    const decision = (payload.brief as { decisions: Record<string, unknown>[] }).decisions[0]!;
+    decision.evidence = Array.from({ length: 1_000 }, (_, n) => ({ meeting_id: "meeting-1", block_id: `block-${n}`, quote: "q".repeat(1_000) }));
+    const large = { ...snapshot(), approved_payload: payload };
+    expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(256 * 1024);
+    expect(validateApprovedDecisionSnapshotV2(large).approved_payload.brief.decisions[0]!.evidence).toHaveLength(1_000);
+  });
+
   it("accepts neither accessors nor symbols, a null prototype, non-enumerable keys, NaN nor an unpaired surrogate", () => {
     const accessor = snapshot();
     Object.defineProperty(accessor, "approval_id", { enumerable: true, get: () => "approval-1" });
