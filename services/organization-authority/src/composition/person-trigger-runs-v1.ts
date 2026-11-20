@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256, type Sha256Digest } from '@echo-brain/federation-protocol';
 import { RESTRICTED_REVIEWER_PERSON_POLICY_ID } from '@echo-brain/organization-protocol';
-import { PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
+import { isOrganizationApiValidationError, PERSON_IMPACT_CARD_LIMITS_V1, PERSON_RUNS_LIST_LIMIT_V1, validatePersonImpactCardV1, type PersonImpactCardV1, type PersonRunsResultsV1 } from '@echo-brain/organization-api';
 import { AgenticAskDeadlineErrorV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-trigger-definitions-v1';
 import { impactCardLineV1, impactItemKeyV1, refreshImpactCardV1, storableImpactCardV1, type FreshImpactItemV1, type StoredImpactCardV1 } from '@echo-brain/organization-authority-kernel/answer-composition/renderers/impact-card-storage-v1';
@@ -60,6 +60,10 @@ const actorOf = (value: PersonAccessAuthorization): ApprovalActorV1 => ({ organi
 const sameActor = (left: ApprovalActorV1, right: ApprovalActorV1) => left.organization_id === right.organization_id && left.principal_id === right.principal_id && left.membership_id === right.membership_id;
 function unavailable(error: unknown): boolean {
   return error instanceof AuthorityOperationError && error.code === 'unavailable';
+}
+/** A card the renderer or the contract refused: worth writing once more, unlike an outage, which the run's attempts retry. */
+function invalidCard(error: unknown): boolean {
+  return (error instanceof AuthorityOperationError && error.code === 'invalid_output') || isOrganizationApiValidationError(error);
 }
 /** One item a finished impact run makes, before its owner is matched; the owner name is used only to match a member and is never stored. */
 type ItemCandidateV1 = Omit<ImpactItemDraftV1, 'owner_membership_id' | 'owner_match'> & ImpactOwnerCandidateV1;
@@ -149,13 +153,26 @@ export function createPersonTriggerRunsV1(options: CreatePersonTriggerRunsV1Opti
     const shared = anchor.policy_id !== RESTRICTED_REVIEWER_PERSON_POLICY_ID;
     let card: PersonImpactCardV1;
     let outsideLabels: string[] = [];
-    try {
+    const assess = async () => {
       const run = await research(scope, { records: siblings, sources: source === undefined ? [] : [source], ...(shared ? { private: true } : {}) });
       const definition = AGENTIC_TRIGGER_DEFINITIONS_V1.find(value => value.name === 'approved_record')!;
       const event = definition.parseEvent({ record: anchor });
       const output = await run.renderWithResearch({ trigger: definition.name, brief: definition.brief(event, scope), renderer: definition.renderer!, trigger_input: event, signal });
-      card = validatePersonImpactCardV1(output.rendered);
-      outsideLabels = output.research.items
+      return { output, card: validatePersonImpactCardV1(output.rendered) };
+    };
+    try {
+      let assessed: Awaited<ReturnType<typeof assess>>;
+      try {
+        assessed = await assess();
+      } catch (error) {
+        // A finished run is frozen, so an invalid card is written once more before the run settles for "not assessed".
+        signal.throwIfAborted();
+        if (!invalidCard(error)) throw error;
+        observeCoreRuntimeDiagnosticV1({ kind: 'lifecycle', stage: 'research', event: 'failed', error_kind: coreRuntimeDiagnosticErrorKindV1(error), data: { run_id: row.run_id, retry: 'invalid_card' } });
+        assessed = await assess();
+      }
+      card = assessed.card;
+      outsideLabels = assessed.output.research.items
         .filter(item => (item.citation as { readonly kind?: unknown }).kind !== 'approved_record' && (item.citation as { readonly kind?: unknown }).kind !== 'source_revision').map(item => item.title);
     } catch (error) {
       signal.throwIfAborted();
