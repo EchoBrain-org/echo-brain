@@ -63,7 +63,9 @@ describe('Agentic Ask V1 public contracts', () => {
   it('validates evidence open coordinates', () => {
     expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 2, project_id }))
       .toMatchObject({ citation, neighbours: 2, project_id });
-    expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 3 })).toThrow();
+    // Any whole number of neighbours: the desk reads as many as its open's byte budget holds and offers the next.
+    expect(validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours: 40 })).toMatchObject({ neighbours: 40 });
+    for (const neighbours of [-1, 1.5, '2', null]) expect(() => validatePersonEvidenceOpenRequestV1({ schema_version: 1, citation, neighbours })).toThrow();
   });
 
   it('preserves exact evidence whitespace while requiring model prose to be trimmed', () => {
