@@ -2,11 +2,11 @@
 schema_version: 1
 id: ADR-0055
 kind: decision
-title: A limit needs a reason
+title: The only limits are capability limits
 component_ids:
   - CMP-ORGANIZATION-AUTHORITY
 created_at: 2026-11-19
-reviewed_at: 2026-11-19
+reviewed_at: 2026-11-20
 reviewed_ref: 5d1af075c1bdd53f2330cc622c2010446cc47bbb
 status: proposed
 supersedes: []
@@ -14,42 +14,57 @@ superseded_by: []
 updates:
   - ADR-0021
   - ADR-0022
+  - ADR-0023
   - ADR-0024
   - ADR-0030
+  - ADR-0032
+  - ADR-0036
+  - ADR-0039
   - ADR-0040
   - ADR-0041
   - ADR-0042
   - ADR-0045
+  - ADR-0046
   - ADR-0047
+  - ADR-0049
   - ADR-0051
+  - ADR-0053
   - ADR-0054
 ---
 
-# ADR-0055: A limit needs a reason
+# ADR-0055: The only limits are capability limits
 
 On 2026-11-19 a staging live test refused a 224-character question because it
 held 36 different words and the rule allowed 32. The rule was written for the
 first keyword search, where each word cost one index lookup, and Ask inherited
 it when Ask became a model-driven research loop. The desktop showed "Something
-went wrong". The founder's response: "a very weird limit that should not even
-exist in the first place. I suspect there is a lot of those in the system. Not
-just hardcoded limit but over defensive mechanism that is hurting the system
-and hobbling the model's capability", and then "remove everything we don't
-need."
+went wrong".
 
-This record states the rule that decides which limits stay, and lists the
-numbers in earlier records that it replaces. The founder has not yet accepted
-this record; the status is proposed.
+The founder's instructions that day, in order:
+
+- "a very weird limit that should not even exist in the first place. I suspect
+  there is a lot of those in the system. Not just hardcoded limit but over
+  defensive mechanism that is hurting the system and hobbling the model's
+  capability."
+- "remove everything we don't need."
+- "since we don't have any live users, let's do a full removal and move
+  backwards if something breaks."
+- "the only limit should be the capability limit like the context window,
+  model capability, storage limit etc."
+- "do the reset and remove the 5 stuck ones too", for the limits that stored
+  data enforced.
+
+This record states the rule, what it removed, and what it kept. The founder
+has not yet accepted this record; the status is proposed.
 
 ## Context and options
 
 ### What the audit found
 
-Five reviewers read `origin/main` at `5d1af07` on 2026-11-19: the Person API
-contracts, the Ask kernel, the Authority service and model adapters, meeting
-processing and the connectors, and the desktop and CLI. They read about 560
-limits and wrote up 108. Most had no recorded reason. The same few patterns
-repeat:
+Five reviewers read `origin/main` at `5d1af07`: the Person API contracts, the
+Ask kernel, the Authority service and model adapters, meeting processing and
+the connectors, and the desktop and CLI. They read about 560 limits and wrote
+up 108. Most had no recorded reason. The patterns:
 
 - A rule copied from another feature where its reason does not apply. The
   keyword-search question rule sat in about fifteen places, including the
@@ -70,143 +85,160 @@ repeat:
 
 ### Options
 
-1. Raise numbers case by case as live tests find them. This is what happened
-   until now, and it finds one limit per failed test.
-2. Remove every limit that has no reason, in one pass, and state the rule so
-   new ones are not added. Chosen.
+1. Raise numbers case by case as live tests find them. This finds one limit
+   per failed test.
+2. Raise every unreasoned limit to a generous number. Tried first, and
+   rejected by the founder: a generous number is still a number ECHO chose.
+3. Remove every limit ECHO chose, keep only capability limits, and add one
+   back when something breaks. Chosen.
 
 ## Decision and consequences
 
 ### The rule
 
-A limit or defensive check stays only if it is one of these:
+A limit stays only if it is one of these:
 
-1. **Someone else's limit.** A provider's documented maximum, or the model's
-   real context window and maximum output.
-2. **Protection against abuse or attack.** A request size bound, a sign-in
-   rate limit, identity and key checks.
-3. **A privacy or permission rule.**
-4. **A truth check.** A citation points at evidence that was read; a quote is
-   word for word; an error or an unfinished page is never reported as absence.
-5. **Protection of the host or of money.** Concurrency sized to memory; one
-   paid attempt.
+1. **The model's capability.** Its context window and its maximum output,
+   stated once in the model profile. Anything sized to the model is computed
+   from those two numbers.
+2. **Another system's hard maximum.** What Jira, Confluence, Granola, Slack
+   and the Claude SDK accept or return.
+3. **Storage and transport capacity.** What a database value, a file, a
+   request or a response stream can hold. One byte bound per transport, shared
+   by the server and every client, is the only limit on how much a person or
+   the model sends or receives.
+4. **Host capacity.** Concurrency sized to memory and to provider rate limits.
+   Work beyond it waits; it is never refused or cut.
 
-A limit that stays must also:
+These are not limits on capability and are unchanged: privacy and permission
+rules; truth checks (a citation points at evidence that was read, a quote is
+word for word, an error or an unfinished or untestable read is never reported
+as absence); identity, key and signature checks; sign-in rate limiting; a paid
+model call that was or may have been billed is never repeated automatically;
+a single repair.
 
-- be sized to the real constraint, not copied from another feature;
-- lose nothing silently: it pages, or it tells the person or the model what
-  was left out;
-- reject one bad item and never the whole reply;
-- give a specific reason when it refuses;
-- carry a comment that says why it exists;
-- be checked once, at the layer that owns it.
+Everything else is removed: every count, every field length, every whole-run
+deadline and step budget, every lower bound that forces a shape.
 
-Across a boundary between steps, tell the model; do not enforce. This is the
-rule of ADR-0054 applied to limits.
+A limit that stays loses nothing silently (it pages, or it says what was left
+out), rejects one bad item and never the whole reply, names its reason when it
+refuses, carries a comment saying why it exists, and is checked once.
 
-### Numbers this record replaces
+### Time: liveness in place of clocks
 
-Each line names the earlier record and the value that no longer holds.
+No Ask, research run, extraction or impact check is stopped by a clock while
+it makes progress. A model call or read that produces nothing for a stated
+silence period is stalled and fails with that reason. Progress means model
+output or a completed read; a keep-alive or a heartbeat is not progress.
+Clients wait as long as the server's heartbeat arrives. Both OpenRouter paths
+stream so that silence can be measured.
 
-- **ADR-0022:** Ask's whole-run deadline of 90 seconds, with its reason (a
-  proxy that drops a response after 100 seconds), and the client's wait of
-  135 seconds. Ask streams its progress with a heartbeat, so the deadline is
-  ECHO's own choice of how long a person waits: 300 seconds, with the client
-  at 345 and the desktop host at 355.
-- **ADR-0047:** the previous turn carried into a follow-up (8 sentences of
-  400 characters, 12 citations, 4 per sentence, inside a 16 KiB request) now
-  carries the earlier answer's sentences as released (up to 200, 400
-  citations, 40 per sentence, inside a 64 KiB request). "What is different
-  since" has no count of 6.
-- **ADR-0051 and ADR-0045:** a card's entity is not a closed list of four; a
-  timeline may run newest first; one layout fault repairs or turns to text
-  only the block at fault, and is counted; a code-filled table keeps more than
-  six columns; the writer's output allowance is 16,000 tokens, not 2,000.
-- **ADR-0054:** the writer is shown every list research read, not at most
-  five; a writer entry may cite 40 items, the statement contract's own limit,
-  not 12; a list block whose selection cannot be read gets the one repair
-  before it is dropped. Its three kept guarantees do not move.
-- **ADR-0041, ADR-0040, ADR-0042, ADR-0024:** a list row shows up to 300
-  characters of a record's text, not 80; searches return up to 25 results,
-  not 5, 8 or 10, and say when there are more; record text over 3,072 bytes
-  is carried whole, not dropped.
-- **ADR-0030:** the Granola folder list reads 1,000 folders and says when it
-  was cut. A mapped folder may hold 100,000 meetings.
-- **ADR-0021:** code no longer checks a proposed owner against an English
-  first-person phrase; the approver's confirmation is the check. A meeting
-  with more than 40 proposed owners offers the first 40, not none.
+### What was removed, by earlier record
+
+- **ADR-0022:** the 90-second Ask deadline, its round, call and receipt
+  budgets, and the client's fixed wait.
+- **ADR-0047:** the previous turn's counts; the one-hour follow-up window;
+  the 200-turn and 90-day history retention; the check of the 10 newest turns.
+  A follow-up carries a sentence of the earlier turn only when every citation
+  it rests on was checked and is still readable; a project citation is now
+  checked against current membership.
+- **ADR-0051, ADR-0045, ADR-0053:** field lengths, the closed card kinds, the
+  timeline's one direction, the six-column table rule, follow-up draft counts,
+  and the writer's fixed output allowance. One layout fault repairs or turns to
+  text only the block at fault, and is counted.
+- **ADR-0054:** the five-list cap; the citation counts, and with them the rule
+  that an entry over its citation limit is dropped whole, which has nothing
+  left to act on. A sentence may stand on a list row it was shown. Visibility
+  follows every citation, and a sentence that cites a list now carries every
+  row of it, whatever the row's visibility. A follow-up draft still points
+  only at an item the writer was shown.
+- **ADR-0041, ADR-0040, ADR-0042, ADR-0024, ADR-0036:** search and list
+  counts, the 80-character list row, the dropped record text over 3,072 bytes,
+  and lists cut at their newest 100. A search or list returns every match,
+  paged; an open returns the whole source.
+- **ADR-0021, ADR-0023, ADR-0046, ADR-0049:** the English first-person owner
+  rule, the 40 proposed owners, owner length, and 20 projects per approval or
+  capture. Who may read is still decided by membership.
+- **ADR-0030:** the folder and meeting counts; the transcript kept is sized to
+  the extraction model's window.
+- **ADR-0032:** an impact check's lease renews on progress.
+- **ADR-0039:** progress counts and clamps. The server accounts for its own
+  stream bound and always keeps room for the answer.
 
 ### What a person can now do
 
-- Ask a question of up to 4,000 characters, on several lines, with no rule
-  about how many different words it holds. The keyword rule remains only on
-  the real keyword searches.
+- Ask a question of any length the request can carry, on several lines.
 - Be told which rule a refused request broke.
-- Get a long answer: the writer has room for it, research has up to 300
-  seconds, 30 rounds and 60 model calls, and a step has 8,000 output tokens.
-- Have research read a whole note, document, meeting record or Jira ticket,
-  and find up to 25 results per search in ECHO, Jira and Confluence.
+- Get an answer as long as the model can write, from research that reads whole
+  notes, documents, meeting records and tickets, and runs as long as it makes
+  progress.
 - Open a Jira ticket that contains a screenshot or a macro.
-- Keep their Ask history when one stored turn is unreadable.
+- Keep their whole Ask history, and follow up on any earlier turn.
 
-### Kept, on purpose
+### Stored data
 
-Visibility follows citations. A follow-up draft points only at an item the
-writer was shown. An entry over its citation limit is dropped whole. An
-unknown or unfinished read is never reported as "not found". The keyword rule
-on real keyword search. Provider maximums. Request size and sign-in bounds.
-The session concurrency ceiling. One paid extraction attempt, which now
-retries when the provider was overloaded and nothing was billed.
+The limits stored data enforced were removed with it: follow-up text length,
+note size, owners per decision, extraction output, and project counts. The
+Authority database baseline moves from V17 to V18, and the extraction
+processor versions and configuration digests move. An Authority built from
+this code does not start on V17 state. Staging is reset through the operator
+playbook (the row for moving to a V18 release) before the release that carries
+this change; the reset empties the record log.
 
-### Not done, because the stored data fixes the limit
+Notes have a byte quota (250 MiB per member, 25 GiB per organization, the
+figures documents use) in place of a count of 100.
 
-These need a schema migration or a staging data reset, and are the founder's
-call:
+### Not removed, and why
 
-- Follow-up and action text beyond 120 characters: the V17 database checks 1
-  to 120.
-- A note beyond 8 KiB: the note tables cap text at 8,192 bytes.
-- More than 40 owners on a stored decision: the V17 database caps it.
-- Extraction output beyond 8,192 tokens: the value is part of the processor
-  configuration hash, so changing it stops every admitted source until it is
-  admitted again.
-- A Granola watch window beyond 7 days and 200 meetings: a wider window
-  re-imports older meetings as new and does not fit the stored cursor.
+These need something built first, and remain as they were:
 
-The extraction prompt and adapter versions were not advanced, although
-extraction's output changed (owners, trimming, rationales), for the same
-reason. They advance with the next reset.
+- The Granola watch window (30 days) and its 50 most recent meetings: a
+  checkpoint format and an API cursor.
+- The document transfer deadline (10 minutes for a whole transfer): resumable
+  upload.
+- An extraction in flight for more than 11 minutes can be marked interrupted
+  if two server processes overlap; it is never spent twice. Fixing it needs
+  progress recorded in the attempt ledger.
+- The Ask source check's 15-second live read: a miss answers "unknown", never
+  a refusal. Whether it becomes silence-based is the founder's call.
+- Single-request waits of 15 and 75 seconds on small replies that do not
+  stream.
 
-### Not done, because it is a new capability
-
-Reading Jira and Confluence comments. Extraction kinds beyond decisions,
-actions and rationales. A next page for Jira and Confluence search inside
-research. A multi-line Ask box in the desktop. Whether the desktop shows the
-answer's run report remains the open decision recorded in ADR-0054.
+Not built, because they are new capabilities: reading Jira and Confluence
+comments; extraction kinds beyond decisions, actions and rationales; a next
+page for Jira and Confluence search inside research; a multi-line Ask box in
+the desktop. Whether the desktop shows the answer's run report remains the
+open decision recorded in ADR-0054.
 
 ### Consequences
 
-- A desktop built before this change refuses answers it now may receive: more
-  than five parts, an unfamiliar card kind, a newest-first timeline, a larger
-  answer. The Authority and the clients are released together.
-- An Ask may take up to five minutes. Whether the proxy in front of staging
-  holds a streamed response that long is checked in the first staging round.
-- The writer's instructions and allowances changed, so the writer evaluation
-  gates the change.
-- Larger reads cost more tokens per Ask.
+- An Ask can read up to the model's whole window and write its whole output,
+  for as long as it makes progress. A hard question can cost many times what
+  it did. This is accepted and is the first thing to measure on staging.
+- A desktop built before this change refuses answers it may now receive. The
+  Authority and the clients are released together.
+- The model, not code, decides how much to read and write. Only the writer's
+  instructions and its evaluation guard quality where a count used to.
 
 ### What would make this a failure even if it works
 
-A truth, privacy or permission check weakened to make a test pass. A limit
-removed that was protecting the host, found only under load. A new limit
-added later with no reason beside it.
+A privacy, permission or truth check weakened to make a test pass. A paid call
+repeated. A run that cannot be stopped. A limit added back with no reason
+beside it.
 
 ## Migration, rollback, and evidence
 
-No stored format changes. The readable-search analyzer release moves to V5 in
-the change this one is built on, and the Authority rebuilds its search index
-at startup. Rollback is a revert together with the matching client release.
+Stored state changes: baseline V18 and new processor versions, so the change
+is released with a staging reset. The readable-search analyzer release moves
+to V5 in the change this one is built on. Rollback is a revert, the matching
+client release, and another reset.
 
-Evidence is recorded in the pull request: the repository check, the writer
-evaluation on the Claude account route, and what remains to check live. The
+A Codex review (`gpt-6.2-astra`, 2026-11-20) of the whole change found twelve
+defects, four of them blocking: two privacy defects that predate this change
+(a follow-up carrying a roster after project access was lost; a sentence
+citing text and a list dropping the list's non-private citations), and paid
+calls that could be repeated once clocks became silence timers. All twelve
+were fixed, each with a test that failed first. Evidence is recorded in the
+pull request: the repository check, the writer evaluation on the Claude
+account route, the review and its fixes, and what remains to check live. The
 OpenRouter half of the evaluation is owed, as in ADR-0054.
