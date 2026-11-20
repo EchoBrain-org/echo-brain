@@ -871,6 +871,32 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(calls('ask.run')[4]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and when is it due?' });
   });
 
+  it('builds the earlier turn again on Try again, from what is known then, never replaying the one the failed request sent', async () => {
+    const latest = turn('Latest?', 2 * DAY, status());
+    seed(latest);
+    let revoked = false;
+    checks = items => ok({ items: items.map(item => ({ state: revoked && item.citation.kind === 'ticket' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    store.pickSuggestion({ question: 'Latest?', turn: latest.id });
+    await flush();
+    const failing = held.hold('ask.run');
+    void store.ask('who owns it?');
+    await flush();
+    failing(fail('unavailable', { retryable: true }));
+    await flush();
+    const sent = (call: number) => (calls('ask.run')[call]!.previous as AskPrevious).statements.map(statement => statement.text);
+    expect(sent(0)).toContain('THERM-482, Sensor drift, is open.');
+    // Access to the ticket goes; later, past the five minutes a check is good for, the person tries again.
+    revoked = true;
+    vi.setSystemTime(NOW.getTime() + 10 * 60_000);
+    store.retryAsk();
+    await flush();
+    expect(calls('ask.run')).toHaveLength(2);
+    expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Latest?' });
+    expect(sent(1)).not.toContain('THERM-482, Sensor drift, is open.');
+    expect(sent(1)).toContain('The DVT plan moved the retest to Oct 30.');
+  });
+
   it('continues a turn chosen from the bar\'s suggestions, the latest included, which stays in full', async () => {
     const [older, latest] = [turn('Older?', 3 * DAY, status()), turn('Latest?', 2 * DAY, status())];
     seed(older, latest);

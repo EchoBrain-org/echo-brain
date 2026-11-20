@@ -40,14 +40,17 @@ export interface AskQuestion {
 
 /**
  * How a question is asked (ADR-0047): with the earlier turn it carries, as
- * built (a choice's, or as it went, for Try again; null for none), and the
- * turn it asks again. With none built, Ask again carries the turn it asks
- * again, as a follow-up carries the turn it continues, built once what that
- * turn cited is known now. Try again asks a failed question the same way.
+ * built (null for none), the turn it asks again, or the turn a follow-up
+ * continues. With none built, Ask again carries the turn it asks again, as a
+ * follow-up carries the turn it continues (`followed`), built once what that
+ * turn cited is known at the time it is sent. Try again and a choice of "Which
+ * one?" name the turn again and build what they carry anew, never replaying
+ * what an earlier request sent; the Authority checks what arrives either way.
  */
 interface AskHow {
   previous?: AskPrevious | null;
   againOf?: string;
+  followed?: string;
 }
 
 /** The question on its way, and what it has done so far (ADR-0039). */
@@ -59,6 +62,8 @@ export interface AskAsking extends AskQuestion {
 export interface AskClarify extends AskQuestion {
   choices: readonly AskChoice[];
   previous: AskPrevious | null;
+  /** The turn the follow-up continued, when it did: a choice builds what it carries of that turn anew. */
+  followed?: string;
 }
 
 /**
@@ -3706,7 +3711,10 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
  * Ask again carries of it (C5): what a check said in the last five minutes,
  * waiting for one on its way or making one; for a turn asked in the last
  * five minutes, what its own answer read of them; and null when nothing is,
- * so it carries none of its sentences.
+ * so it carries none of its sentences. This only spares the request sentences
+ * the page already knows are gone: access can change after any check, so the
+ * Authority checks every citation a request carries when it arrives, and that
+ * check, not this one, keeps what the person can no longer read from its model.
  */
 async function knownSources(turn: TimelineTurn): Promise<TurnChecks | null> {
   const recent = Date.now() - Date.parse(turn.asked_at) < CHECK_FRESH_MS;
@@ -3782,7 +3790,10 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const againOf = how?.againOf;
   // The turn it carries, unless `how` brings it built: the one it asks again, or the one a follow-up continues.
   const from = how?.previous !== undefined ? null : againOf !== undefined ? turnOf(againOf) ?? null
+    : how?.followed !== undefined ? turnOf(how.followed) ?? null
     : open && how === undefined ? followedTurn(threadOf(state.timeline.turns, scope), continued) : null;
+  // How Try again or a choice asks it again: naming the turn, so what it carries is built again then.
+  const again: AskHow = againOf !== undefined ? { againOf } : from ? { followed: from.id } : { previous: how?.previous ?? null };
   const view = open ?? { ...newAsk(), forQuestion: true };
   const mine = ++seq;
   const cancelId = crypto.randomUUID();
@@ -3809,14 +3820,14 @@ export async function ask(question: string, scope: AskScope = state.barScope, ho
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
   if (!result.ok) {
-    set({ ask: { ...current, asking: null, failed: { ...named, failure: result.failure, how: { previous, ...(againOf === undefined ? {} : { againOf }) } } } });
+    set({ ask: { ...current, asking: null, failed: { ...named, failure: result.failure, how: again } } });
     startSources();
     accountLost(result.failure);
     return;
   }
   const answer = result.value;
   if (answer.outcome === 'clarify') {
-    set({ ask: { ...current, asking: null, clarify: { ...named, choices: answer.choices ?? [], previous } } });
+    set({ ask: { ...current, asking: null, clarify: { ...named, choices: answer.choices ?? [], previous, ...(from && againOf === undefined ? { followed: from.id } : {}) } } });
     startSources();
     return;
   }
@@ -3904,7 +3915,7 @@ export function askAgain(id: string): void {
 export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (!clarify || state.ask?.asking) return;
-  void ask(choice.question, clarify.scope, { previous: clarify.previous });
+  void ask(choice.question, clarify.scope, clarify.followed !== undefined ? { followed: clarify.followed } : { previous: clarify.previous });
 }
 
 /** Try again, on a question that failed: asked as it was. */
