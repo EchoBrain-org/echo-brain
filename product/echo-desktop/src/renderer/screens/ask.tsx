@@ -103,7 +103,8 @@ export function Bar({ state }: { state: State }) {
         <input
           id="ask-field" data-testid="ask-field" type="text" autocomplete="off" spellcheck placeholder={name}
           role="combobox" aria-autocomplete="list" aria-expanded={shown.length > 0} aria-controls={shown.length > 0 ? 'ask-suggestions' : undefined}
-          aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined}          value={text} readOnly={covered} onMouseDown={() => { if (text === '') setSuggesting({ open: true, active: -1 }); }} onKeyDown={onKeyDown}
+          aria-activedescendant={active >= 0 ? `ask-suggestion-${active}` : undefined}
+          value={text} readOnly={covered} onMouseDown={() => { if (text === '') setSuggesting({ open: true, active: -1 }); }} onKeyDown={onKeyDown}
           onBlur={() => setSuggesting(CLOSED)}
           onInput={event => { setSuggesting(CLOSED); setBarText((event.target as HTMLInputElement).value); }}
         />
@@ -1062,13 +1063,11 @@ function OriginalSource({ state, target, source }: { state: State; target: PaneT
       {places.map((index, at) => {
         const read = all[at]!;
         if (read.loading || !('value' in read)) return null;
-        // Cut once, by the host (evidenceView), as the pane shows any text.
-        const text = read.value.text;
         return (
           <Fragment key={index}>
             {sharedReview === undefined && read.value.imported_meeting_review !== undefined && <SourceReviewBadge review={read.value.imported_meeting_review} />}
             <div class={`passage selectable${light && lit.includes(index) ? ' on' : ''}`} data-testid="evidence-text">
-              <Passage text={text} label={read.value.label} />
+              <Passage text={read.value.text} label={read.value.label} />
             </div>
           </Fragment>
         );

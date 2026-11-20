@@ -25,7 +25,7 @@ import { dropFile, rpc } from './api.js';
 import { renamedProject, reread } from './feed.js';
 import { askedWhen } from './format.js';
 import * as freshness from './freshness.js';
-import { meetingMessage, message } from './messages.js';
+import { message } from './messages.js';
 import { ACTIVE_STATES, CLOSED_STATES, fromChat, ownerRows, ownerShown, ownerUnmatched, reopenSends, sentWords, whoWords } from './needs.js';
 
 /** Only me: everything only you can read, filed in a project or not (ADR-0049). Follow-ups: everything you sent, own or last handed on. */
@@ -1020,7 +1020,7 @@ function cancelWaitingConnection(connect: Pick<ToolConnectSheet, 'tool' | 'phase
 
 /** A host call that failed: the page's words for it as its message, and the failure itself. */
 class CommandFailed extends Error {
-  constructor(readonly failure: Failure, words = message(failure)) { super(words); }
+  constructor(readonly failure: Failure) { super(message(failure)); }
 }
 
 /** The failure a command threw; a plain one when the account or the screen changed under it. */
@@ -1036,7 +1036,7 @@ function outcomeUnknown(failure: Failure, resend: boolean): boolean {
 /** Account-fenced command for a personal meeting tool. No provider token enters the renderer. */
 export function meetingCommand<K extends PersonMeetingOperationV2['operation']>(operation: PersonMeetingOperationV2 & { readonly operation: K }, tool_id: string): Promise<PersonMeetingResultsV2[K]> {
   return fencedCommand<PersonMeetingResultsV2[K]>(account => rpc('tools.meetings', { expect: account, request: { ...operation, schema_version: 2, tool_id } }),
-    isWriteCall('tools.meetings', { request: operation }), meetingMessage);
+    isWriteCall('tools.meetings', { request: operation }));
 }
 
 /** Reviews belong to the person, independent of any connected import tool. */
@@ -1057,7 +1057,7 @@ export function runsCommand<K extends keyof RunsResults>(request: PersonRunsRequ
  * it settles that. Another app in front changes nothing: the reply is the
  * Authority's answer, and the page it is for fences it by itself.
  */
-async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean, words: (failure: Failure) => string = message): Promise<T> {
+async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknown>>, write: boolean): Promise<T> {
   const account = expect();
   if (!account) throw new Error('Sign in to use meetings.');
   const result = await send(account);
@@ -1066,7 +1066,7 @@ async function fencedCommand<T>(send: (account: Expect) => Promise<Result<unknow
     const unsent = !result.ok && result.failure.mutation_outcome === 'not_submitted';
     throw new CommandFailed({ code: 'account_changed', retryable: false, mutation_outcome: unsent ? 'not_submitted' : 'unknown' });
   }
-  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure, words(result.failure)); }
+  if (!result.ok) { accountLost(result.failure); throw new CommandFailed(result.failure); }
   return result.value as T;
 }
 

@@ -428,15 +428,13 @@ async function followUpsMoved(run: Loop): Promise<FollowUpEvent[] | null> {
     if (was) tellOf(followUpEvent(was, row, me));
     else if (!run.boundary.has(seenKey(row))) tellOf(followUpEvent(null, row, me, since));
   }
-  const unexplained = [...left.values()].filter(was => !closed.has(was.item_id));
   // Every one, this check, a few side by side.
-  const asked = unexplained;
+  const asked = [...left.values()].filter(was => !closed.has(was.item_id));
   const reads: Awaited<ReturnType<typeof surfaces.readItem>>[] = [];
   for (let start = 0; start < asked.length; start += LEFT_READS_AT_ONCE) {
     reads.push(...await Promise.all(asked.slice(start, start + LEFT_READS_AT_ONCE).map(was => surfaces.readItem(account, was.item_id))));
     if (loop !== run) return null;
   }
-  if (loop !== run) return null;
   const pending = new Map<string, typeof asked[number]>();
   const readRows: OpenItemView[] = [];
   reads.forEach((read, index) => {
