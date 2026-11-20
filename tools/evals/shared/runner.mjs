@@ -35,7 +35,8 @@ export async function observedGeneration(structuredOutput, input) {
   const usages = [];
   let finishReason = null;
   const value = await structuredOutput.generate_with_admission(input, async (request, forward) => {
-    const result = await forward(request.signal ?? AbortSignal.timeout(input.timeout_ms));
+    // The port times silence itself (its timeout_ms); the harness adds no clock of its own.
+    const result = await forward(request.signal ?? new AbortController().signal);
     usages.push(result.usage ?? null);
     finishReason = result.finish_reason ?? finishReason;
     return result.value;

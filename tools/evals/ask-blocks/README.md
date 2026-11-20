@@ -172,8 +172,8 @@ it.'?" with "Zhen Ye owns the follow-up "Approve release
 clean-v1-20261026-ask-timeline-aa79d90 and choose who can read it."": the lead
 restated the question, and the release name was written again. The wording
 cases measure how often the writer does that, before and after a change to its
-wording rules. They run through the same gate, asked at 2026-10-26T17:00Z, with
-a 60-second default timeout per trial (85 seconds at most):
+wording rules. They run through the same gate, asked at 2026-10-26T17:00Z. A
+trial has no clock of its own: as in the product, only a call that goes silent stops it:
 
 ```sh
 node tools/evals/ask-blocks/run.mjs --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory \

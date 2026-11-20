@@ -80,16 +80,14 @@ test("makes no request without an explicit run and a private credential file, an
   assert.throws(() => parseArgs([...base, "--cases", "soak-owner,soak-owner"]), /--cases must select known cases, each once/u);
   assert.throws(() => parseArgs([...base, "--trials", "4"]), /--trials must be an integer from 1 to 3/u);
   const parsed = parseArgs([...base, "--cases", "soak-owner", "--trials", "1"]);
-  assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.timeoutMs, parsed.caseIds], ["main", 1, 4, 120_000, ["soak-owner"]]);
+  assert.deepEqual([parsed.caseSet, parsed.trials, parsed.concurrency, parsed.caseIds], ["main", 1, 4, ["soak-owner"]]);
+  // A trial has no clock of its own: there is no timeout to set.
+  assert.equal(Object.hasOwn(parsed, "timeoutMs"), false);
   assert.deepEqual([parseArgs(base).trials, parseArgs(base).caseIds, parseArgs([...base, "--case-set", "main"]).caseSet], [3, null, "main"]);
-  // Each case set names its own cases and its own timeout bounds.
+  // Each case set names its own cases.
   assert.throws(() => parseArgs([...base, "--case-set", "other"]), /--case-set must be main, wording, follow_ups or lists/u);
   assert.throws(() => parseArgs([...base, "--case-set", "wording", "--cases", "soak-owner"]), /--cases must select known cases/u);
-  assert.deepEqual([parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, parseArgs([...base, "--case-set", "wording"]).timeoutMs], [["owner-plain"], 60_000]);
-  assert.equal(parseArgs([...base, "--timeout-ms", "180000"]).timeoutMs, 180_000);
-  assert.throws(() => parseArgs([...base, "--timeout-ms", "180001"]), /--timeout-ms must be an integer from 15000 to 180000/u);
-  assert.equal(parseArgs([...base, "--case-set", "wording", "--timeout-ms", "85000"]).timeoutMs, 85_000);
-  assert.throws(() => parseArgs([...base, "--case-set", "wording", "--timeout-ms", "120000"]), /--timeout-ms must be an integer from 15000 to 85000/u);
+  assert.deepEqual(parseArgs([...base, "--case-set", "wording", "--cases", "owner-plain"]).caseIds, ["owner-plain"]);
 });
 
 test("reads no credential and writes nowhere but a private directory outside the repository", (t) => {
