@@ -19,8 +19,8 @@ import {
  */
 export const PERSON_SOURCE_EVIDENCE_PATH_V1 = '/v2/person/ask/source';
 /**
- * The most text one evidence item carries in transit (a cited original's read, a desk item, a live source's passage):
- * room for a long live passage. Stored packets stay their own size (3 KiB, RFC-0002); this bounds only what moves.
+ * How much of one unopened passage the research loop puts in its prompt before it needs an open. No desk, source or
+ * response holds evidence text to it: a passage moves whole. Only the research loop reads it, as a prompt-sizing choice.
  */
 export const PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 = 16 * 1024;
 
@@ -183,9 +183,7 @@ export function validatePersonSourceEvidenceV1(value: unknown): PersonSourceEvid
     text: input.text as string,
     ...(imported ? { imported_meeting_review: input.imported_meeting_review as PersonImportedMeetingReviewV1 } : {}),
   };
-  assertEvidenceText(result.text, 'Ask source evidence text', PERSON_EVIDENCE_TEXT_MAX_BYTES_V1);
-  if (canonicalJsonBytes(result).byteLength > PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 + 2048) {
-    fail('Ask source evidence response exceeds JSON byte bound');
-  }
+  // The cited packet's own text, whole: its stored size (RFC-0002) is the only size it has.
+  assertEvidenceText(result.text, 'Ask source evidence text', Number.POSITIVE_INFINITY);
   return Object.freeze(result);
 }
