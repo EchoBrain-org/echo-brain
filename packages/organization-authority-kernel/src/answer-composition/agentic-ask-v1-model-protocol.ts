@@ -25,12 +25,10 @@ import type { StructuredGenerationJsonSchema } from "./structured-generation-v1.
  */
 /** Rows one list page holds: as many as one desk fetch returns (the desk's page). A longer list says more and continues on the next call. */
 export const AGENTIC_ASK_LIST_PAGE_ROWS_V1 = 50;
-/** Hits one search returns: the desks' own maximum for one search (records, originals and live sources each return up to 25). */
-export const AGENTIC_ASK_SEARCH_LIMIT_V1 = 25;
-const QUESTION_CHARS = 400;
-const NEED_CHARS = 200;
+/** What a step writes in its part questions, needs, queries and arguments has no length of its own (the reply's bound carries it). */
+const ANY_LENGTH = Number.POSITIVE_INFINITY;
+/** A need's id is a short label the step mints (N1, N2...): its shape, not a cap on what it says. */
 const NEED_ID_CHARS = 8;
-const ARG_CHARS = 240;
 /**
  * Answer layout v2 (ADR-0051): no writer field (sentence, title, column, cell, event, who, label, value, quote, from,
  * not-found phrase, list selection, follow-up owner) has a length of its own, and no count caps how many blocks or items
@@ -110,7 +108,7 @@ const ASK_ACTION_ARGS = {
 function actionArgs(ask: boolean): Readonly<Record<StepTool, readonly (keyof StepArgs)[]>> { return ask ? ASK_ACTION_ARGS : ACTION_ARGS; }
 const ids = { type: "array", items: { type: "string", maxLength: 16 } } as const;
 const selectionIds = { type: "array", items: ids.items } as const;
-const argString = { type: "string", minLength: 1, maxLength: ARG_CHARS } as const;
+const argString = { type: "string", minLength: 1 } as const;
 const calendarDateArgument = { type: "string", minLength: 10, maxLength: 10, format: "date", pattern: "^\\d{4}-\\d{2}-\\d{2}$" } as const;
 
 const ARGUMENT_DESCRIPTIONS = Object.freeze({
@@ -162,11 +160,11 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
   type: "object", additionalProperties: false, required: ["parts", "actions"], properties: {
     parts: { type: "array", minItems: 1, items: {
       type: "object", additionalProperties: false, required: ["question", "needs", "notes"], properties: {
-        question: ask ? { type: "string", minLength: 1, maxLength: QUESTION_CHARS, description: "A non-blank part of the person's original question; keep the same parts across steps." } : { type: "string", maxLength: QUESTION_CHARS },
+        question: ask ? { type: "string", minLength: 1, description: "A non-blank part of the person's original question; keep the same parts across steps." } : { type: "string" },
         needs: { type: "array", items: {
           type: "object", additionalProperties: false, required: ask ? ["need", "kind", "status", "evidence"] : ["need", "status", "evidence"], properties: {
             id: { type: "string", maxLength: NEED_ID_CHARS },
-            need: { type: "string", maxLength: NEED_CHARS },
+            need: { type: "string" },
             ...(ask ? { kind: closedString(AGENTIC_RESEARCH_NEED_KINDS_V1) } : {}),
             status: closedString(["open", "found", "not_found"]),
             evidence: ask ? selectionIds : ids,
@@ -313,10 +311,9 @@ function modelLine(value: unknown): string {
   return oneLine(value);
 }
 
-/** A response part's question: V4 bounds part questions to 1 KiB of single-line text. */
+/** A response part's question: one line, whole (the answer's response bound carries it). */
 export function partQuestion(value: string): string {
-  let text = cleanLine(value, 400);
-  while (Buffer.byteLength(text, "utf8") > 1_000) text = cleanLine(text.slice(0, -8), 400);
+  const text = cleanLine(value, ANY_LENGTH);
   return text.length === 0 ? "Question" : text;
 }
 
@@ -409,7 +406,7 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
     for (const key of names) {
       const value = raw[key];
       if (value === undefined) continue;
-      const text = typeof value === "number" ? String(value) : cleanModelLine(value, ARG_CHARS);
+      const text = typeof value === "number" ? String(value) : cleanModelLine(value, ANY_LENGTH);
       if (text.length > 0) result[key] = text;
       else observeCoreModelCorrectionV1("model_entry_dropped");
     }
@@ -418,7 +415,7 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
   }
   const bare = typeof entry.args === "string" ? entry.args : typeof entry.input === "string" ? entry.input : undefined;
   if (bare !== undefined) {
-    const text = cleanModelLine(bare, ARG_CHARS);
+    const text = cleanModelLine(bare, ANY_LENGTH);
     if (text.length > 0 && primary !== undefined && result[primary] === undefined) {
       result[primary] = text;
       observeCoreModelCorrectionV1("model_bare_string");
@@ -433,7 +430,7 @@ export function normalizeQuery(value: unknown): string | null {
   try { return validatePersonQueryText(queryLine(value)); } catch { return null; }
 }
 /** A search's query as the model wrote it, its quotes and spacing cleaned. */
-function queryLine(value: unknown): string { return cleanLine(value, ARG_CHARS).replace(/^["'“”]+|["'“”]+$/gu, "").trim(); }
+function queryLine(value: unknown): string { return cleanLine(value, ANY_LENGTH).replace(/^["'“”]+|["'“”]+$/gu, "").trim(); }
 /** Why a search's query was refused, in the query rule's own words (PersonQueryInputError); null when it is valid. */
 export function queryRefusal(value: unknown): string | null {
   try { validatePersonQueryText(queryLine(value)); return null; } catch (error) { return error instanceof Error ? error.message : "query is invalid"; }
@@ -450,7 +447,7 @@ function needs(value: unknown, lists: boolean): readonly StepNeed[] {
   const result: StepNeed[] = [];
   for (const raw of value) {
     const entry = object(raw);
-    const need = entry === null ? cleanModelLine(raw, NEED_CHARS) : cleanModelLine(entry.need, NEED_CHARS);
+    const need = entry === null ? cleanModelLine(raw, ANY_LENGTH) : cleanModelLine(entry.need, ANY_LENGTH);
     const id = entry === null ? undefined : needId(entry.id);
     if (need.length === 0) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     if (result.some(existing => existing.need.toLowerCase() === need.toLowerCase() || (id !== undefined && existing.id === id))) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
@@ -480,7 +477,7 @@ export function parseStep(value: unknown, options: { readonly lists?: boolean } 
   for (const raw of body.parts) {
     const entry = object(raw);
     if (entry === null) throw new AgenticAskOutputErrorV1("each item in \"parts\" must be an object with question, needs, notes");
-    const question = cleanModelLine(entry.question, QUESTION_CHARS);
+    const question = cleanModelLine(entry.question, ANY_LENGTH);
     if (question.length === 0) throw new AgenticAskOutputErrorV1("each part needs a non-empty \"question\"");
     parts.push(Object.freeze({ question, needs: needs(entry.needs, options.lists === true), notes: cleanModelLine(entry.notes, Number.POSITIVE_INFINITY) }));
   }
@@ -872,7 +869,7 @@ function stepPrompt(list: boolean): string { return [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\": \"<source from source_catalog>\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: search all available sources, or only source. Scope and permissions still apply.",
   `  When to use: start with concrete names, codes or features. Use since/until for source/event timestamps. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date. For an exact identifier supplied by the asker or a result, search the identifier unchanged and on its own. Try different words while a need is open. Use open to read an item${list ? " and list to browse a source" : ""}.`,
-  `  Returns: the ids of up to ${AGENTIC_ASK_SEARCH_LIMIT_V1} items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. Open those items before relying on them.`,
+  `  Returns: the ids of every matching item, best match first. Read their details and bodies in seen or opened; any that did not fit are named in left_out, to open by id. A seen item with \"full\": true contains the complete released text in text, preserving its lines. This may be one matching passage, not the whole document or conversation. A preview is incomplete; no body means metadata only. Open those items before relying on them.`,
   `  Limits: keyword matching, not meaning. Keep identifiers intact; try synonyms. Truncated means incomplete; ${list ? "refine or list" : "refine the query"}. Repeats within one source return nothing new.`,
   `  Query recovery: some sources require every query word to match. Start with one exact identifier or one or two distinctive terms, not a whole question. Scope is applied separately; add a project name as a keyword only when the item's text is expected to contain it. After an empty search, try a known identifier or simpler terms once${list ? ", then list that source and open relevant candidates" : ""}. Empty keyword results do not prove the fact is absent.`,
   list ? "  Related: open reads a result in full; list shows everything of one kind." : "  Related: open reads a result in full.",
@@ -965,7 +962,7 @@ function askStepPrompt(): string { return [
   "search, args {\"query\": \"<keywords or an exact identifier>\", optional \"source\", \"since\", \"until\", \"date_field\"}",
   "  Purpose: find items whose title or text matches, ranked, in one source or across them. Without a source it searches meetings, documents, connected tools' items, follow-ups and projects; name people, tools, or a tool's projects or spaces as its source to search those. A search is never complete.",
   "  When to use: concrete names, codes, features and identifiers. For an exact identifier supplied by the asker or a result, search it unchanged and on its own. A date mentioned inside document text may instead be a keyword; never substitute its upload date for that content date.",
-  `  Returns: the ids of up to ${AGENTIC_ASK_SEARCH_LIMIT_V1} items, best match first. Read their details and bodies in seen or opened. A seen item with \"full\": true contains the complete released text in text, preserving its lines; it may be one matching passage, not the whole document. A preview is incomplete; no body means metadata only. Open those items before relying on what they say; a list's members need no open to show which items exist.`,
+  `  Returns: the ids of every matching item, best match first. Read their details and bodies in seen or opened; any that did not fit are named in left_out, to open by id. A seen item with \"full\": true contains the complete released text in text, preserving its lines; it may be one matching passage, not the whole document. A preview is incomplete; no body means metadata only. Open those items before relying on what they say; a list's members need no open to show which items exist.`,
   "  Limits: keyword matching, not meaning. Approved meeting-record search indexes record text and category, not the parent meeting title. Some sources require every query word to match: prefer an exact identifier or a few distinctive terms over a whole question. If results are empty or irrelevant, useful alternatives include simpler terms, another source, a supported date/kind list, or opening relevant related evidence. Empty or irrelevant keyword results alone do not establish absence.",
   "  Examples: {\"query\": \"battery reserve\"}, {\"query\": \"THERM-48\"}, {\"query\": \"fixture vendor\", \"source\": \"meetings\", \"since\": \"2026-10-01\"}",
   "",

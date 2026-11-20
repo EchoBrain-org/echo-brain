@@ -286,7 +286,7 @@ function answerCitation(value: unknown, version: 6 | 8): PersonAnswerCitationV8 
 function part(value: unknown, citations: readonly PersonAnswerCitationV8[]): PersonAnswerPartV4 {
   const input = object(value, 'Ask response part');
   assertExactKeys(input, ['question', 'status', 'statements', ...['gap', 'gap_details', 'records', 'blocks'].filter(key => Object.hasOwn(input, key))], 'Ask response part');
-  text(input.question, 'Ask response part question', 1024);
+  text(input.question, 'Ask response part question', Number.POSITIVE_INFINITY);
   // A part's statements have no count of their own (ADR-0051): its blocks arrange them, and the answer's bytes bound them.
   if (!['answered', 'partial', 'not_found', 'records_only'].includes(input.status as string) || !Array.isArray(input.statements)) fail('Ask response part is invalid');
   if (Object.hasOwn(input, 'gap')) text(input.gap, 'Ask response part gap', Number.MAX_SAFE_INTEGER, true);

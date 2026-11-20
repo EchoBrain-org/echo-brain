@@ -97,7 +97,7 @@ describe("agentic Ask model protocol parity", () => {
     closed(((byTool.search.properties as Schema).source as Schema), ["meetings", "tickets"]);
     closed(((byTool.list.properties as Schema).source as Schema), ["meetings", "tickets"]);
     closed(((byTool.open.properties as Schema).id as Schema), ["E3", "E17"]);
-    expect(((byTool.search.properties as Schema).query as Schema)).toEqual({ type: "string", minLength: 1, maxLength: 240 });
+    expect(((byTool.search.properties as Schema).query as Schema)).toEqual({ type: "string", minLength: 1 });
     expect(JSON.stringify(schema)).not.toContain("E99");
   });
 
@@ -362,10 +362,10 @@ describe("agentic Ask model protocol parity", () => {
     expect(step.parts[0]!.needs[4]).not.toHaveProperty("id");
   });
 
-  it("truncates an over-long part question or need to its bound instead of rejecting it, and keeps notes whole", () => {
+  it("keeps a long part question, need and notes whole: a step's fields have no length of their own", () => {
     const step = parseStep({ parts: [{ question: "q".repeat(900), needs: [{ need: "n".repeat(900), status: "open", evidence: [] }], notes: "n".repeat(5_000) }], actions: [{ tool: "finish", args: {} }] });
-    expect([...step.parts[0]!.question].length).toBeLessThanOrEqual(400);
-    expect([...step.parts[0]!.needs[0]!.need].length).toBeLessThanOrEqual(200);
+    expect(step.parts[0]!.question).toBe("q".repeat(900));
+    expect(step.parts[0]!.needs[0]!.need).toBe("n".repeat(900));
     expect(step.parts[0]!.notes).toBe("n".repeat(5_000));
   });
 
@@ -428,7 +428,7 @@ describe("agentic Ask model protocol parity", () => {
       ["six parts in a step: no cap, nothing to correct", step({ parts: Array.from({ length: 6 }, (_, index) => ({ question: `q${index}`, needs: [], notes: "" })) }), ask, {}],
       ["many actions in an Ask step: no cap, nothing to correct", actions(Array.from({ length: 30 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), ask, {}],
       ["many actions in a task step: no cap, nothing to correct", actions(Array.from({ length: 12 }, (_, index) => ({ tool: "search", args: { query: `q${index}` } }))), task, {}],
-      ["text past its cap (notes have none)", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, { model_text_truncated: 3 }],
+      ["long text, which no field cuts", step({ parts: [{ question: "q".repeat(401), needs: [content({ need: "n".repeat(201) })], notes: "n".repeat(801) }], actions: [{ tool: "search", args: { query: "x".repeat(241) } }] }), ask, {}],
       ["an argument with no text, or one its tool does not take", actions([{ tool: "search", args: { query: "OPS-17", since: "" } }, { tool: "open", args: { id: "E1", query: "OPS-17" } }]), ask, { model_entry_dropped: 2 }],
     ] as const)("in a step: %s", (_name, value, options, expected) => {
       expect(corrected(() => parseStep(value, options))).toEqual(expected);
@@ -454,7 +454,7 @@ describe("agentic Ask model protocol parity", () => {
     });
 
     it("counts what it reads of a reply it then rejects, and nothing outside a span", () => {
-      expect(corrected(() => { try { parseStep({ parts: [{ question: "q".repeat(401), needs: [], notes: "" }], actions: [{ tool: "delete", args: {} }] }); } catch { /* rejected */ } })).toEqual({ model_text_truncated: 1 });
+      expect(corrected(() => { try { parseStep({ parts: [{ question: "q".repeat(401), needs: [], notes: "" }], actions: [{ tool: "delete", args: {} }] }); } catch { /* rejected */ } })).toEqual({});
       expect(() => parseStep(actions([{ tool: "browse", args: { source: "meetings" } }]), ask)).not.toThrow();
     });
   });

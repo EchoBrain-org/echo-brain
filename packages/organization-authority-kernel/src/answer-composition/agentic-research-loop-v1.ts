@@ -17,7 +17,6 @@ import {
 import { followUpOwnerMatchesV1 } from "../shared/follow-up-evidence-v1.js";
 import {
   AGENTIC_ASK_LIST_PAGE_ROWS_V1,
-  AGENTIC_ASK_SEARCH_LIMIT_V1,
   AgenticAskOutputErrorV1,
   cleanId,
   cleanLine,
@@ -82,7 +81,6 @@ import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
  * paging, de-duplication and the stop rules.
  */
 
-const SEARCH_LIMIT = AGENTIC_ASK_SEARCH_LIMIT_V1;
 /** One list page: as many rows as one desk fetch returns; a list with more says so and continues on the next call. */
 const LIST_PAGE = AGENTIC_ASK_LIST_PAGE_ROWS_V1;
 const LIST_FETCH = AGENTIC_ASK_LIST_PAGE_ROWS_V1;
@@ -688,7 +686,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     }
     if (!repeat) searchesRun.push({ query, ...dates, ...(source === undefined ? {} : { source }) });
     noticedSearches.delete(fingerprint);
-    const result = await raceAbort(signal, desk.search({ query, ...dates, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), limit: SEARCH_LIMIT, signal }));
+    const result = await raceAbort(signal, desk.search({ query, ...dates, ...(source === undefined ? {} : { source, kinds: sourcesById.get(source)!.kinds }), signal }));
+    // Every match: the desk returns them all (a live source, one provider page with `truncated`), and the step prompt
+    // fits them to the model's window, naming what it left out.
     const apply = () => {
       observe(result);
       cover('search', source, result);
