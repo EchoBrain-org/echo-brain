@@ -12,7 +12,6 @@ import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answe
 import { ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
-import { AgenticAskDeadlineErrorV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
@@ -168,10 +167,10 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
 
   // Which earlier sources a resolved follow-up starts from, and how research goes on or stops when one cannot be read, are
   // agenticFollowUpStartingV1's and the brief's rules: agentic-follow-up-resolver-v1.test.ts and agentic-brief-v1.test.ts.
-  it("still fails on a starting read that a cancel or the deadline ends", async () => {
+  it("still fails on a starting read that a cancel ends", async () => {
     const resolved = () => scripted({ resolver: [{ resolution: "resolved", question: RESOLVED, about: [1] }] });
-    // A cancel or the deadline that ends the read stays what it is, whatever the tool said as it stopped.
-    for (const reason of [new DOMException("Ask cancelled", "AbortError"), new AgenticAskDeadlineErrorV1()]) {
+    // A cancel that ends the read stays what it is, whatever the tool said as it stopped.
+    for (const reason of [new DOMException("Ask cancelled", "AbortError")]) {
       const controller = new AbortController();
       const run = resolved();
       const { ask, audits } = askV8(desk({ openCitation: vi.fn(async () => {
@@ -180,7 +179,7 @@ describe("a follow-up on the V8 Ask (ADR-0047)", () => {
       }) }), run);
       await expect(ask.answer({ question: QUESTION, previous: FOLLOW_UP, signal: controller.signal }), reason.name).rejects.toMatchObject({ name: reason.name });
       expect(run.of("step"), reason.name).toEqual([]);
-      expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: reason instanceof AgenticAskDeadlineErrorV1 ? "timed_out" : "cancelled" })]);
+      expect(audits, reason.name).toEqual([expect.objectContaining({ outcome: "cancelled" })]);
     }
   });
 });

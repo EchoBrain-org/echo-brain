@@ -29,7 +29,7 @@ const writerInput: StructuredGenerationInput = {
 function researchSession(): AgenticResearchDriverSessionV1 {
   return {
     initial: { evidence: 'Synthetic E1' }, question: true, list_available: false,
-    signal: new AbortController().signal, remaining: () => 20_000, call: async () => ({}),
+    signal: new AbortController().signal, silence_ms: 20_000, call: async () => ({}),
     model_request: async (request, send) => {
       expect(request.model).toBe(model);
       return (await send(new AbortController().signal)).value;

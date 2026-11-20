@@ -52,9 +52,9 @@ export function createClaudeResearchDriverV1(options: {
           collect(payload);
           const payload_digests = [...packets].filter(([text]) => strings.some(value => value.includes(text))).map(([, digest]) => digest);
           return await session.model_request({ model: options.model, body_sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, payload_digests,
-            operation, timeout: session.remaining,
+            operation,
             ...(operation === 'messages' ? { diagnostic_input: { model: options.model, system_prompt: JSON.stringify(payload.system ?? []),
-              user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.remaining() } } : {}),
+              user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0, timeout_ms: session.silence_ms } } : {}),
           }, async admittedSignal => { const result = await forward(admittedSignal); return { ...result, value: result.content ?? null }; });
         } catch (error) {
           // Provider replies already reached the SDK, which owns its one retry; anything else stops research.

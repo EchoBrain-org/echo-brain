@@ -27,7 +27,7 @@ async function run(options: { truncated?: boolean; notice?: string; idle?: boole
     open: async () => { throw new AuthorityOperationError('not_found', 'private refusal details'); }, revalidate: async () => ({ checked_at: '2026-10-06T00:00:00.000Z' }),
   };
   const replies = options.idle
-    ? [step('search', { query: 'pilot' }), step('search', { query: 'gate results' }), step('search', { query: 'pilot tests' })]
+    ? [step('search', { query: 'pilot' }), step('search', { query: 'pilot' }), step('search', { query: 'pilot' })]
     : [options.inventory ? step('list', { source: 'pages' }) : step('search', { source: 'pages', query: 'pilot' }), step('finish', {}, true)];
   if (options.refusedOpen) replies.splice(1, 0, step('open', { id: 'E1' }));
   let writer: Record<string, unknown> = {};
@@ -84,9 +84,8 @@ describe('synthesis receives observed research coverage', () => {
 
   it('reports a no-progress stop instead of implying exhaustive research', async () => {
     const { writer, answer } = await run({ idle: true });
-    expect(writer.research).toMatchObject({ completed: false, stop_reason: 'no_progress', reads: [
-      { returned_items: 1 }, { returned_items: 0 }, { returned_items: 0 },
-    ] });
+    // The two repeats of the search are answered from what research holds: one read reached the desk.
+    expect(writer.research).toMatchObject({ completed: false, stop_reason: 'no_progress', reads: [{ returned_items: 1 }] });
     // Keep the supported fact, while the outcome still reports that research did not finish.
     expect(answer).toMatchObject({ outcome: 'partial', parts: [{ status: 'partial', statements: [{ text: 'The gate decision is pending.' }] }] });
     expect(answer.notice).toBe('Research stopped before it finished, so relevant context may be missing.');

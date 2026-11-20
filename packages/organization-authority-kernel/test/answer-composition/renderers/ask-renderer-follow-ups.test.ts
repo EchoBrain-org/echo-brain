@@ -29,7 +29,7 @@ function alone(input: {
   readonly question?: string; readonly typed?: string;
 }) {
   const trace: string[] = [];
-  const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
+  const { gate, inputs } = scriptedGate(input.replies, trace);
   const renderer = createAskRendererV1({
     answer_prompt: ANSWER_PROMPT, source_catalog: [], scope: "everything the asker can read",
     context: { today: "2026-11-18", time_zone: "America/Los_Angeles" }, desk_scope: input.bundle.gathered_for.scope,
@@ -37,7 +37,7 @@ function alone(input: {
     ...(input.earlier === true ? { answers: "What was decided?", earlier: { asked_on: "2026-11-10", statements: [{ text: "Earlier.", sources: ["Meeting r1"] }] } } : {}),
   });
   const render = () => renderer.render({
-    bundle: input.bundle, trigger_input: { question: input.question ?? "What was decided? Ask Sam to call the vendor by Friday.", ...(input.typed === undefined ? {} : { typed_question: input.typed }) }, gate, remaining: () => 30_000, signal: new AbortController().signal,
+    bundle: input.bundle, trigger_input: { question: input.question ?? "What was decided? Ask Sam to call the vendor by Friday.", ...(input.typed === undefined ? {} : { typed_question: input.typed }) }, gate, signal: new AbortController().signal,
     prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(undefined, system, output),
   });
   return { render, inputs, trace };

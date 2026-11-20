@@ -112,10 +112,10 @@ const SCENARIOS: Readonly<Record<string, Scenario>> = {
     desk: () => desk(),
     replies: [...RESEARCH, { ...CARD, affected: [affected("E3", "Change THERM-46 in Jira to format two decimals.", "needs_updating")] }, CARD],
   },
-  // Research runs out of time with a need still open; the card is still written, and says research stopped early.
-  research_stopped_on_budget: {
-    desk: () => desk(), model_call_ms: [220_000, 220_000, 1_000],
-    replies: [RESEARCH[0], RESEARCH[1], { decided: CARD.decided, affected: [CARD.affected[1]] }],
+  // Research stops on repeated reads with a need still open; the card is still written, and says research stopped early.
+  research_stopped_on_repeated_reads: {
+    desk: () => desk(), model_call_ms: [220_000, 220_000, 220_000, 220_000, 1_000],
+    replies: [RESEARCH[0], RESEARCH[1], RESEARCH[1], RESEARCH[1], { decided: CARD.decided, affected: [CARD.affected[1]] }],
   },
 };
 
@@ -153,7 +153,7 @@ async function run(name: string, scenario: Scenario) {
 
 describe("impact card golden replay", () => {
   it("removes an unfulfilled planner need from the stopped-research card", async () => {
-    const observed = await run("research_stopped_on_budget", SCENARIOS.research_stopped_on_budget!);
+    const observed = await run("research_stopped_on_repeated_reads", SCENARIOS.research_stopped_on_repeated_reads!);
     expect((observed.card as { readonly unconfirmed?: readonly string[] }).unconfirmed)
       .toEqual(["Research stopped before it finished, so other items may be affected too."]);
   });

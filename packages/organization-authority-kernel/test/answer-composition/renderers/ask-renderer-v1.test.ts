@@ -19,21 +19,21 @@ const OVERFULL_LIST = Math.ceil(180 * PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 / (64 
 
 /** Ask's renderer on its own: a hand-built bundle, a gate over scripted writer replies, and no desk. */
 function alone(input: {
-  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number;
+  readonly bundle: AgenticEvidenceBundleV1; readonly replies: readonly unknown[];
   /** An Ask again (ADR-0047): the earlier answer, and the question the answer names, as Ask passes them together. */
   readonly earlier?: Parameters<typeof createAskRendererV1>[0]["earlier"]; readonly answers?: string;
   /** The model's context window; without it, the kernel's default. */
   readonly context_tokens?: number;
 }) {
   const trace: string[] = [];
-  const { gate, inputs } = scriptedGate(input.replies, input.bundle.budget, trace);
+  const { gate, inputs } = scriptedGate(input.replies, trace);
   const renderer = createAskRendererV1({
     answer_prompt: ANSWER_PROMPT, source_catalog: [], scope: "everything the asker can read",
     context: { today: "2026-10-06" }, desk_scope: input.bundle.gathered_for.scope,
     ...(input.earlier === undefined ? {} : { earlier: input.earlier }), ...(input.answers === undefined ? {} : { answers: input.answers }),
   });
   const render = (question: string) => renderer.render({
-    bundle: input.bundle, trigger_input: { question }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
+    bundle: input.bundle, trigger_input: { question }, gate, signal: new AbortController().signal,
     prompt_budget: (system, output = AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer) => agenticAskContextBudgetBytesV1(input.context_tokens, system, output),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
@@ -63,7 +63,7 @@ function bundle(entries: readonly { readonly item: EvidenceDeskItemV2; readonly 
     items: entries.map((entry, index) => Object.freeze({
       short: `E${index + 1}`, source: "meetings", item: entry.item, full: entry.full, opened: false, preloaded: false, touched: entry.touched, cited_by_plan: cited.includes(`E${index + 1}`),
     })),
-    stop: { reason: completed ? "finished" as const : "budget" as const, completed },
+    stop: { reason: completed ? "finished" as const : "stalled" as const, completed },
   });
 }
 /** Approved records E1..En, each read in full and cited by the plan. */
@@ -93,13 +93,13 @@ describe("Ask renderer", () => {
   });
 
   it("keeps genuine unfinished research typed even beside useful facts", async () => {
-    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "budget", completed: false } }, replies: [writerReply([{ text: "The rule applies.", evidence: ["E1"] }])] }).render("What are all the rules?");
+    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "stalled", completed: false } }, replies: [writerReply([{ text: "The rule applies.", evidence: ["E1"] }])] }).render("What are all the rules?");
     expect(rendered.outcome).toBe("partial");
     expect(rendered.result.response.parts[0]).toMatchObject({ status: "partial", gap_details: { interrupted: true } });
   });
 
   it.each([false, true])("types only the retry reason when interrupted research leaves a writer's missing fact (with facts: %s)", async withFacts => {
-    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "budget", completed: false } }, replies: [writerReply(withFacts ? [{ text: "The rule applies.", evidence: ["E1"] }] : [], { not_found: ["the Harbor owner"] })] }).render("Who owns Harbor, and what is the rule?");
+    const rendered = await alone({ bundle: { ...records(1), stop: { reason: "stalled", completed: false } }, replies: [writerReply(withFacts ? [{ text: "The rule applies.", evidence: ["E1"] }] : [], { not_found: ["the Harbor owner"] })] }).render("Who owns Harbor, and what is the rule?");
     const part = rendered.result.response.parts[0]!;
     expect(rendered.outcome).toBe("partial");
     expect(part.gap).toBe("I couldn't complete the search. Please try again. Missing context: the Harbor owner.");
@@ -307,16 +307,11 @@ describe("Ask renderer", () => {
     else expect(rendered.result.response.notice).toBe(notice);
   });
 
-  it("writes only when the time the runner leaves it covers a writer call", async () => {
+  it("writes whatever time research took: no clock decides whether the writer runs", async () => {
     const entries = [{ item: record("read", "Approved: ship the enclosure in October."), full: true, touched: 1 }];
     const reply = writerReply([{ text: "The enclosure ships in October.", evidence: ["E1"] }]);
-    const enough = alone({ bundle: bundle(entries, ["E1"]), replies: [reply], remaining: 3_000 });
-    expect(await enough.render("What was decided?")).toMatchObject({ outcome: "answered", cited: ["E1"] });
-    const short = alone({ bundle: bundle(entries, ["E1"]), replies: [reply], remaining: 2_999 });
-    const fallback = await short.render("What was decided?");
-    expect(short.trace).toEqual(["context:E1"]);
-    expect(fallback).toMatchObject({ outcome: "partial", cited: ["E1"], fallbacks: 0, result: { writer_evidence: [] } });
-    expect(fallback.result.response.parts[0]).toMatchObject({ status: "records_only", gap: "I found these records, but could not write a verified summary." });
+    const late = alone({ bundle: { ...bundle(entries, ["E1"]), cost: { ...bundle(entries, ["E1"]).cost, elapsed_ms: 3_600_000 } }, replies: [reply] });
+    expect(await late.render("What was decided?")).toMatchObject({ outcome: "answered", cited: ["E1"] });
   });
 });
 
@@ -431,7 +426,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
   });
 
   it("keeps a selected no-match over a list read to its end typed beside the retry line when research stopped", async () => {
-    const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "budget", completed: false } };
+    const research: AgenticEvidenceBundleV1 = { ...listBundle(2, 0, [list("L1", ids(1, 2))], [WI(["L1"])]), stop: { reason: "stalled", completed: false } };
     const rendered = await alone({ bundle: research, replies: [{ ...use({ id: "L1", where: { field: "status", value: "Blocked" } }), not_found: ["the Harbor owner"] }] })
       .render("Which tickets are blocked, and who owns Harbor?");
     const part = rendered.result.response.parts[0]!;
@@ -665,11 +660,6 @@ describe("Ask renderer: lists (ADR-0041)", () => {
     ...([["X24a", WS(["L1", "E9"]), undefined], ["X24b", WI(ids(1, 8)), "I could not confirm the full list of items asked for."]] as const).map(([id, need, gap]): Row => ({
       id, name: `gives the records a failed writer falls back to ${id === "X24a" ? "with no gap for a which_say list (ADR-0054)" : "the gap of a which_items need left on rows"}`, bundle: eightAnd1([need]), replies: [{ wrong: true }, { still: "wrong" }], calls: 2,
       q: "Which tickets created on October 4 mention BUG-412?", status: "records_only", gap: gap === undefined ? RECORDS : `${RECORDS} ${gap}`, check: rendered => expect(rendered.result.response.parts[0]!.records).toEqual([expect.objectContaining({ text: "Approved record 1." })]),
-    })),
-    ...[[REVIEW], [REVIEW, { text: "THERM-2 is in progress.", evidence: ["E2"] }]].map((sentences): Row => ({
-      id: "W1", name: sentences.length === 1 ? "keeps the writer's sentence as written with no model call left for a repair" : "keeps a rows sentence on its row with no model call left",
-      bundle: eightAnd1([WI(["L1"]), C(["E9"])], { ...EMPTY_BUNDLE.budget, max_model_calls: 1 }), replies: [writerReply(sentences)], says: sentences.map(sentence => sentence.text),
-      ...(sentences.length === 1 ? { status: "answered", check: (rendered: Rendered) => expect(rendered.fallbacks).toBe(0) } : { status: "answered" }),
     })),
     { id: "W6", name: "names every member of two lists: no share of names, a list past 40 members in more statements", bundle: listBundle(68, 0, [list("L1", ids(1, 8)), list("L2", ids(9, 60))], [WI(["L1", "L2"])]), replies: [use({ id: "L1" }, { id: "L2" })], status: "answered",
       says: [EIGHT, `60 tickets created on October 4, 2026: ${names(9, 40)}.`, `60 tickets created on October 4, 2026: ${names(49, 20)}.`], citations: 68 },
@@ -1078,7 +1068,7 @@ describe("Ask renderer: lists (ADR-0041)", () => {
       expect(notice.startsWith(`${long(1)} ${long(2)} `)).toBe(true);
     });
     it("writes from notes that say nothing: an interrupted Claude account run's one synthetic open need", async () => {
-      const research: AgenticEvidenceBundleV1 = { ...records(1), plan: [{ part: 1, question: Q, notes: "", needs: [{ need: Q, kind: "content", status: "open", evidence: [] }] }], stop: { reason: "budget", completed: false } };
+      const research: AgenticEvidenceBundleV1 = { ...records(1), plan: [{ part: 1, question: Q, notes: "", needs: [{ need: Q, kind: "content", status: "open", evidence: [] }] }], stop: { reason: "stalled", completed: false } };
       const run = alone({ bundle: research, replies: [writerReply([{ text: "Approved record 1 says so.", evidence: ["E1"] }])] });
       const rendered = await run.render(Q);
       expect(run.prompt(0).research_notes.needs).toEqual([{ part: 1, need: Q, kind: "content", status: "open", on_desk: [] }]);

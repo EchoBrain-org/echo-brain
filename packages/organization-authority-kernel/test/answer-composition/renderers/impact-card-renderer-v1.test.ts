@@ -75,18 +75,18 @@ function bundle(options: { readonly cited?: readonly string[]; readonly complete
       inventories: [{ source: "tickets", shown_count: 25, more: true, available: true, truncated: false }, { source: "meetings", shown_count: 3, more: false, available: true, truncated: false }],
       notices: ["Knowledge search returns at most 50 pages."],
     },
-    stop: { reason: options.completed === false ? "budget" : "finished", completed: options.completed !== false },
+    stop: { reason: options.completed === false ? "stalled" : "finished", completed: options.completed !== false },
   };
   return Object.freeze(value);
 }
 
 /** The renderer alone: a bundle, a gate over scripted replies, and the approved-record event. */
-function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly remaining?: number; readonly prompt_budget?: number }) {
+function alone(input: { readonly bundle?: AgenticEvidenceBundleV1; readonly replies: readonly unknown[]; readonly prompt_budget?: number }) {
   const trace: string[] = [];
   const value = input.bundle ?? bundle();
-  const { gate, inputs } = scriptedGate(input.replies, value.budget, trace);
+  const { gate, inputs } = scriptedGate(input.replies, trace);
   const render = () => IMPACT_CARD_RENDERER_V1.render({
-    bundle: value, trigger_input: { record: recordCitation }, gate, remaining: () => input.remaining ?? 30_000, signal: new AbortController().signal,
+    bundle: value, trigger_input: { record: recordCitation }, gate, signal: new AbortController().signal,
     prompt_budget: system => input.prompt_budget ?? agenticAskContextBudgetBytesV1(undefined, system, AGENTIC_MODEL_OUTPUT_TOKENS_V1.answer),
     on_context: selected => { trace.push(`context:${selected.join(",")}`); },
   });
@@ -201,7 +201,7 @@ describe("impact card renderer", () => {
     const rendered = await alone({ bundle: quiet, replies: [REPLY] }).render();
     expect(rendered.result.unconfirmed).toEqual([]);
     expect(rendered.outcome).toBe("answered");
-    const stopped = await alone({ bundle: { ...quiet, stop: { reason: "budget", completed: false } }, replies: [REPLY] }).render();
+    const stopped = await alone({ bundle: { ...quiet, stop: { reason: "stalled", completed: false } }, replies: [REPLY] }).render();
     expect(stopped.result.unconfirmed).toEqual(["Research stopped before it finished, so other items may be affected too."]);
     expect(stopped.outcome).toBe("partial");
   });
@@ -295,13 +295,10 @@ describe("impact card renderer", () => {
     expect(rendered.result).toEqual((await alone({ replies: [{ wrong: true }, { still: "wrong" }] }).render()).result);
   });
 
-  it("makes no model call when the time left cannot cover one, and still ends with an honest card", async () => {
-    const run = alone({ replies: [REPLY], remaining: 2_999 });
-    const rendered = await run.render();
-    expect(run.trace).toEqual(["context:E1,E2,E3,E4,E6,E8,E7,E5"]);
-    expect(rendered).toMatchObject({ outcome: "partial", fallbacks: 0, result: { status: "not_assessed", unconfirmed: NOTES } });
+  it("still ends with an honest card when the model cannot answer", async () => {
+    const denied = Object.assign(new Error("denied"), { diagnostic: { failure_class: "adapter_http", http_status: 401, finish_reason: null } });
     // Nothing research cited: the card still says what the record decided.
-    const nothing = await alone({ bundle: bundle({ cited: [] }), replies: [], remaining: 0 }).render();
+    const nothing = await alone({ bundle: bundle({ cited: [] }), replies: [denied] }).render();
     expect(nothing).toMatchObject({ cited: ["E1", "E2"], outcome: "partial", result: { status: "not_assessed", affected: [], people: [], citations: ["E1", "E2"].map(citation) } });
     expect(nothing.result.decided.map(entry => entry.citation_index)).toEqual([0, 1]);
   });

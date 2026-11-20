@@ -1,6 +1,6 @@
 import { PersonRecordSearchSnapshotChangedV1 } from "../src/composition/person-record-search-route.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AGENTIC_ASK_DEADLINE_MS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AGENTIC_READ_SILENCE_MS_V1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { EvidenceDeskPortV1 } from "@echo-brain/organization-authority-kernel/shared/evidence-desk-v1";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
@@ -34,8 +34,8 @@ function fixture() {
   };
 }
 
-describe("Agentic Ask deadline at the Person route boundary", () => {
-  it('awaits the timeout witness after a restarted attempt reaches the shared deadline', async () => {
+describe("Agentic Ask stall at the Person route boundary", () => {
+  it('awaits the timeout witness after a restarted attempt stalls on its access check', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const f = fixture();
     f.revalidate.mockImplementationOnce(async () => {
@@ -49,7 +49,7 @@ describe("Agentic Ask deadline at the Person route boundary", () => {
     });
     let returned = false;
     const settled = f.ask().catch((error: unknown) => { returned = true; return error; });
-    await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
+    await vi.advanceTimersByTimeAsync(60_000 + AGENTIC_READ_SILENCE_MS_V1);
     expect(returned).toBe(false);
     expect(f.append).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'timed_out' }));
     await vi.advanceTimersByTimeAsync(250);
@@ -60,16 +60,18 @@ describe("Agentic Ask deadline at the Person route boundary", () => {
     expect(f.events.filter(event => event.stage === 'research_run' && event.event !== 'started').at(-1)).toMatchObject({ event: 'failed', result: 'timeout' });
   });
 
-  it("exposes a hard deadline as unavailable while retaining timeout telemetry and one terminal audit", async () => {
+  it("exposes a stalled access check as unavailable, with its reason, timeout telemetry and one terminal audit", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const f = fixture();
-    // The real kernel's 90 s timer interrupts a stalled permission fence.
+    // The access check sends nothing: the kernel's silence period stops the request, whatever has elapsed overall.
     const settled = f.ask().catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(AGENTIC_ASK_DEADLINE_MS_V1);
+    await vi.advanceTimersByTimeAsync(AGENTIC_READ_SILENCE_MS_V1 - 1);
+    expect(f.append).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
 
     const error = await settled;
     expect(error).toBeInstanceOf(AuthorityOperationError);
-    expect(error).toMatchObject({ code: "unavailable" });
+    expect(error).toMatchObject({ code: "unavailable", message: "Ask stopped: an access check sent nothing for 120 s" });
     expect(f.generate).not.toHaveBeenCalled();
     expect(f.revalidate).toHaveBeenCalledTimes(1);
     expect(f.append).toHaveBeenCalledTimes(1);

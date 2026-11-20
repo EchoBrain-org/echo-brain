@@ -1,7 +1,7 @@
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import type { PersonAnswerResponseV8 } from "@echo-brain/organization-api";
-import { describe, expect, it } from "vitest";
-import type { AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
+import { describe, expect, it, vi } from "vitest";
+import { AGENTIC_READ_SILENCE_MS_V1, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
 import type { AgenticModelGateStatsV1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { auditAgenticTerminalV1, releaseAgenticResultV1 } from "../../src/answer-composition/agentic-release-v1.js";
 import { AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
@@ -129,18 +129,23 @@ describe("release step", () => {
 });
 
 describe("release step: request terminals", () => {
-  it("writes a timed_out witness naming the trigger and its background budget when research outlives the deadline", async () => {
+  it("writes a timed_out witness naming the trigger and its background profile when a read stalls", async () => {
+    vi.useFakeTimers();
+    try {
     const events: CoreRuntimeDiagnosticObservationV1[] = [];
-    let clock = 0;
-    // The first step's reply lands after the ten-minute background deadline.
-    const h = researchHarness(() => { clock += 601_000; return step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]); }, {}, { now_ms: () => clock });
+    // The first step's search sends nothing back.
+    const h = researchHarness(() => step([part("Dashboard", [need("dashboard published", "open")])], [{ tool: "search", args: { query: "dashboard" } }]), { search: () => new Promise(() => undefined) });
     const brief = { goal: { kind: "task" as const, task: "Recheck the dashboard." }, starting: [], budget: AGENTIC_RESEARCH_BACKGROUND_BUDGET_V1, options: {} };
-    await expect(withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "approved_record", brief }))).rejects.toMatchObject({ name: "AgenticAskDeadlineErrorV1" });
+    const pending = withCoreRuntimeDiagnosticsV1(event => { events.push(event); }, () => h.research.research({ trigger: "approved_record", brief }));
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AgenticAskStalledErrorV1" });
+    await vi.advanceTimersByTimeAsync(AGENTIC_READ_SILENCE_MS_V1);
+    await rejected;
     // The witness binds the access check before the late step call.
     expect(h.audit).toEqual([expect.objectContaining({ trigger: "approved_record", budget: "background", outcome: "timed_out", model_calls: 1, checked_at: deskCheck.checked_at, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
     expect(events).toContainEqual(expect.objectContaining({ kind: 'lifecycle', stage: 'audit', event: 'started', data: { outcome: 'timed_out' } }));
-    expect(events.at(-1)).toMatchObject({ kind: 'lifecycle', stage: 'run', event: 'failed', error_kind: 'deadline' });
+    expect(events.at(-1)).toMatchObject({ kind: 'lifecycle', stage: 'run', event: 'failed', error_kind: 'stalled' });
     expect(events.filter(event => event.kind === 'lifecycle' && event.stage === 'release')).toEqual([]);
+    } finally { vi.useRealTimers(); }
   });
 
   it("writes no second witness and checks access no more when Ask is cancelled during its audit write", async () => {

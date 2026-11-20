@@ -17,7 +17,7 @@ export interface AgenticAskAuditEntryV1 {
   readonly kind: "echo-agentic-ask-audit-v1";
   /** A task trigger definition's name; an Ask audit omits it. */
   readonly trigger?: string;
-  /** Present only when the request ran beyond the live budget (research evaluation). */
+  /** Present only for a background run (a trigger, or the research evaluation's background profile). */
   readonly budget?: "background";
   /** An answer's outcome, a follow-up's `clarify` among them (ADR-0047), or the terminal witness's. */
   readonly outcome: PersonAnswerResponseV8["outcome"] | "cancelled" | "timed_out";
@@ -59,7 +59,7 @@ export interface AgenticAuditContextV1 {
   readonly gate_stats: () => AgenticModelGateStatsV1;
   /** Task triggers name themselves; Ask writes no trigger. */
   readonly trigger?: string;
-  /** The request ran beyond the live budget. */
+  /** A background run: nobody waits on the screen. */
   readonly background: boolean;
   /** Receipts of everything released, copied when the record is written. */
   readonly receipts: readonly Sha256Digest[];
@@ -78,9 +78,9 @@ export interface ReleaseAgenticResultV1Options<R> extends AgenticAuditContextV1 
   readonly result: R;
   /** The fingerprint of the result's answer, from its renderer. */
   readonly answer_sha256: Sha256Digest;
-  /** The request's active signal (caller cancel, deadline or terminal stop). */
+  /** The request's active signal (caller cancel, a stall or terminal stop). */
   readonly signal: AbortSignal;
-  /** Throws when the caller cancelled or the request deadline passed. */
+  /** Throws when the caller cancelled or the request stalled. */
   readonly assert_live: () => void;
   /** Receives each access check's time; the audit binds the final check's. */
   readonly on_checked: (checked_at: string) => void;

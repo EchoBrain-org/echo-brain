@@ -3,7 +3,7 @@
  * routes this module once served are retired: the evidence desk's search was the last (ADR-0048).
  */
 import { withPersonAskSnapshotRetryV1 } from './person-ask-snapshot-retry-v1.js';
-import { AgenticAskDeadlineErrorV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
+import { AgenticAskStalledErrorV1 } from "@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1";
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
 import type { StructuredGenerationPort } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AnswerCompositionGenerationProfileV1 } from "@echo-brain/organization-authority-kernel/composition/answer-composition-generation-bundle-v1";
@@ -81,8 +81,9 @@ export function personAskRequestContextV1(
 /**
  * One Ask after its own request checks: the asker authenticated, then
  * `started`. Every attempt a snapshot restart runs is one observed research
- * run. A deadline that is not the client's own cancellation answers
- * unavailable.
+ * run. A stall (a read or access check that sent nothing for its silence
+ * period) that is not the client's own cancellation answers unavailable, with
+ * the stall's own reason.
  */
 export async function runPersonAskV1<T>(
   options: Pick<CreatePersonAnswerV3RouteOptions, "authority_id" | "organization_id" | "state_lineage_id" | "sessions">,
@@ -101,9 +102,9 @@ export async function runPersonAskV1<T>(
     return await withPersonAskSnapshotRetryV1({ signal: input.signal, run: async signal =>
       observePersonResearchV1({ trigger: 'ask', run_id: context.request_id }, () => attempt({ authorization, context, signal })) });
   } catch (error) {
-    // Observe the original timeout before translating it into the Person API error.
-    if (error instanceof AgenticAskDeadlineErrorV1 && input.signal?.aborted !== true) {
-      throw new AuthorityOperationError("unavailable", "Ask deadline exhausted");
+    // Observe the original stall before translating it into the Person API error.
+    if (error instanceof AgenticAskStalledErrorV1 && input.signal?.aborted !== true) {
+      throw new AuthorityOperationError("unavailable", `Ask stopped: ${error.message}`);
     }
     throw error;
   }

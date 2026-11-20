@@ -25,10 +25,11 @@ export function createClaudeAccountStructuredGenerationV1(options: {
       // The writer thinks before it answers, and Claude Code's max_tokens holds both: give it the same reasoning headroom
       // OpenRouter does, so thinking never comes out of the answer's allowance. Extraction's single attempt keeps its own.
       const allowance = input.max_output_tokens + (options.max_model_requests === 1 ? 0 : REASONING_HEADROOM_TOKENS);
+      // `timeout_ms` is the silence period: the session (one generation, or the SDK's own retry) sends nothing until its
+      // reply is whole, so a session silent past it is stalled.
       const stop = new AbortController();
       const timeout = AbortSignal.timeout(input.timeout_ms);
       const signal = AbortSignal.any([...(input.signal === undefined ? [] : [input.signal]), stop.signal, timeout]);
-      const deadline = performance.now() + input.timeout_ms;
       let terminal: unknown;
       let providerFailure: unknown;
       let messages = 0;
@@ -52,10 +53,10 @@ export function createClaudeAccountStructuredGenerationV1(options: {
             // Native framing may surround these strings; it must preserve the exact admitted writer inputs.
             if (![input.system_prompt, input.user_prompt].every(text => strings.some(value => value.includes(text)))) throw new Error('Native writer changed its evidence input');
             return await admit({ model: input.model, body_sha256: `sha256:${createHash('sha256').update(body).digest('hex')}`, operation,
-              timeout: () => deadline - performance.now(), signal,
+              signal,
               ...(operation === 'messages' ? { diagnostic_input: { model: input.model, system_prompt: JSON.stringify(payload.system ?? []),
                 user_prompt: JSON.stringify(payload.messages ?? []), schema: { tools: payload.tools ?? [] }, max_output_tokens: payload.max_tokens ?? 0,
-                timeout_ms: Math.max(1, Math.floor(deadline - performance.now())) } } : {}),
+                timeout_ms: input.timeout_ms } } : {}),
             }, async admittedSignal => {
               const result = await forward(admittedSignal);
               providerFailure = undefined;

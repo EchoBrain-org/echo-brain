@@ -129,7 +129,7 @@ it('selects native extraction and default generation for interactive and backgro
     expect(nativeWriter).toHaveBeenCalledTimes(2);
     const initial = { authenticated_membership: 'mem_another_person', question: 'Synthetic question' };
     const session: AgenticResearchDriverSessionV1 = { initial, question: true, list_available: false,
-      signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() };
+      signal: new AbortController().signal, silence_ms: 1_000, call: async () => ({}), model_request: vi.fn() };
     await api.answer_composition_generation.research_driver!.run(session);
     await api.research_background_driver!.run(session);
     expect(nativeResearch).toHaveBeenCalledTimes(2);
@@ -173,7 +173,7 @@ it('shares the SDK session cap between default writers and research, reserving c
     }
     pending.push(api.answer_composition_generation.structured_output.generate_with_admission!({ ...input, user_prompt: 'interactive-writer' }, vi.fn()));
     pending.push(api.answer_composition_generation.research_driver!.run({ initial: {}, question: true, list_available: false,
-      signal: new AbortController().signal, remaining: () => 1_000, call: async () => ({}), model_request: vi.fn() }));
+      signal: new AbortController().signal, silence_ms: 1_000, call: async () => ({}), model_request: vi.fn() }));
     await flush();
     expect(started).toEqual(['background-1', 'background-2', 'interactive-writer']);
     releases.get('background-1')!(); await flush();

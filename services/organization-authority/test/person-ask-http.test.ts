@@ -231,7 +231,7 @@ function askFixture(nativeDriver = false) {
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
       expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
       const read = await session.call('search', { query: 'launch' });
-      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages', timeout: session.remaining }, async () => ({ value: true }));
+      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages' }, async () => ({ value: true }));
       expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.

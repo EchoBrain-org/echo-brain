@@ -63,7 +63,7 @@ import {
   type AgenticWriterListMemberV1,
   type AgenticWriterListV1,
 } from "../agentic-list-evidence-v1.js";
-import { AGENTIC_ASK_MIN_ANSWER_MS_V1, AGENTIC_MODEL_OUTPUT_TOKENS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
+import { AGENTIC_MODEL_OUTPUT_TOKENS_V1, type AgenticModelCallV1 } from "../agentic-model-gate-v1.js";
 import { agenticNotShownNoticeV1, agenticResearchNotesV1, type AgenticResearchNotesV1 } from "../agentic-research-notes-v1.js";
 import { callRendererModelV1, type AgenticRendererV1, type AgenticRenderInputV1 } from "../agentic-renderer-v1.js";
 import { observeCoreModelCorrectionV1, type CoreRuntimeModelCorrectionV1 } from "../../shared/core-runtime-observation-v1.js";
@@ -458,14 +458,14 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
         if (list !== null) return writerById.has(list) ? [list] : [];
         return shownRows.has(id) ? writerLists.filter(view => view.members.some(member => member.id === id)).map(view => view.id) : [];
       }))];
-      // A list block code cannot read takes the writer's one repair when a repair can still run; the repaired reply, or a
-      // first reply no repair can follow, is kept.
+      // A list block code cannot read takes the writer's one repair when the first reply was its only call; the repaired
+      // reply, or a first reply no repair can follow, is kept.
       const callsBefore = input.gate.stats().calls;
       /** The last reply parsed: kept when the repair's reply is unusable. */
       const last: { answer: Answer | null } = { answer: null };
       const repairable = () => {
         const stats = input.gate.stats();
-        return stats.calls === callsBefore + 1 && stats.calls < bundle.budget.max_model_calls && input.remaining() >= AGENTIC_ASK_MIN_ANSWER_MS_V1;
+        return stats.calls === callsBefore + 1;
       };
       const parse = (value: unknown): Answer => {
         const since = earlier === undefined ? {} : { since: true };

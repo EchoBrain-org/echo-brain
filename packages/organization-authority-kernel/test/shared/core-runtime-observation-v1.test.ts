@@ -33,7 +33,7 @@ describe("core runtime observations", () => {
   });
 
   it.each([
-    [Object.assign(new Error("PRIVATE"), { name: "AgenticAskDeadlineErrorV1" }), "timeout"],
+    [Object.assign(new Error("PRIVATE"), { name: "AgenticAskStalledErrorV1" }), "timeout"],
     [Object.assign(new Error("PRIVATE"), { name: "AbortError" }), "cancelled"],
     [{ code: "stale_access_state" }, "authorization"],
     [{ code: "invalid_request" }, "invalid_request"],

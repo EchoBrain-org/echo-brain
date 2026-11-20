@@ -652,12 +652,11 @@ Ask journey, so it is listed, counted and alarmed like any Ask:
 | `ask_response` | `answered`, `partial`, `not_found` or `clarify` (a follow-up that asked which one, ADR-0047). |
 
 The retrieval summary also records `research_stop_reason`: `finished`,
-`empty_catalog`, `no_progress`, `step_limit`, `budget`, or `unusable_step`.
-When a required access revalidation leaves too little time to admit the next
-planner call, the stop is `budget` and `research_admission` is
-`post_revalidation_no_time`. This does not count as an unusable model reply;
-the writer can still use evidence already released within its reserved time.
-These fields contain only fixed diagnostic values, never queries or evidence.
+`empty_catalog`, `no_progress`, `stalled`, or `unusable_step`. Research has
+no round, call or time budget: `stalled` means a research model call sent
+nothing for its silence period, twice. The writer still answers from evidence
+already released. These fields contain only fixed diagnostic values, never
+queries or evidence.
 
 An Ask (a question, never a background task) also records five counts on the
 span that carries its `planned_query_count`, for the research tool contract
