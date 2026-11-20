@@ -81,8 +81,8 @@ export function createClaudeAccountLlmProviderClientV1(options: ClaudeAccountDec
             timeout_ms: options.request_timeout_ms ?? CLAUDE_ACCOUNT_DECISION_PROCESSOR_TIMEOUT_MS_V1,
             ...(request.signal === undefined ? {} : { signal: request.signal }) }, async (admission, forward) => {
             admission.signal?.throwIfAborted();
-            // Extraction has no model gate: the native writer's own silence period (reset by the same output) is its liveness.
-            const result = await forward(admission.signal ?? new AbortController().signal, () => undefined);
+            // Extraction has no model gate: the native writer's own silence period is its liveness.
+            const result = await forward(admission.signal ?? new AbortController().signal);
             observation = usageObservation(result.usage, result.finish_reason);
             return result.value;
           });

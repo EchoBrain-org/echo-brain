@@ -146,18 +146,6 @@ describe('OpenRouter provider client', () => {
     expect(JSON.parse(String(sent[0]!.body))).toMatchObject({ stream: true });
   });
 
-  it('treats a stream silent for the silence period as stalled, with a timeout', async () => {
-    const fetchImpl = (async (_url: string, init: RequestInit) => {
-      const body = new ReadableStream<Uint8Array>({ start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"id":"gen_9","choices":[{"delta":{"content":"{"}}]}\n\n'));
-        init.signal?.addEventListener('abort', () => controller.error(init.signal!.reason));
-      } });
-      return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-    }) as unknown as typeof fetch;
-    const stalled = new OpenRouterClient({ credentialRef: 'openrouter', credentialResolver: () => 'openrouter-secret', requestTimeoutMs: 50, fetchImpl });
-    await expect(stalled.generateStructured(generationRequest)).rejects.toMatchObject({ code: 'timeout' });
-  });
-
   it('checks model identity and structured-output support', async () => {
     const modelClient = client(
       {

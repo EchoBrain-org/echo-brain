@@ -18,7 +18,7 @@ import {
 } from "@echo-brain/organization-processing/llm/llm-provider";
 
 import { UNBILLED_REFUSAL_STATUSES_V1 } from '../unbilled-refusal-v1.js';
-import { openRouterReplyCapacityBytesV1, OpenRouterReplyTooLargeErrorV1, OpenRouterStreamCutErrorV1, openRouterSilenceV1, readOpenRouterReplyV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
+import { callOpenRouterV1, OpenRouterCallFailureV1, type OpenRouterReplyV1 } from '../openrouter-stream-v1.js';
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -71,10 +71,8 @@ export class OpenRouterClient implements LlmProviderClient {
 
   /**
    * One request with the resolved bearer credential: the reply's JSON (a streamed reply assembled into the same shape),
-   * or the provider's refusal. Liveness, not a whole-call clock: the call is stalled only when the model produces
-   * nothing (no content, reasoning, tool-call text or finish reason; OpenRouter's keep-alive comments do not count) for
-   * `requestTimeoutMs`; a reply that keeps arriving is never cut off, however long it runs. The reply is held to its
-   * transport capacity (`openRouterReplyCapacityBytesV1` of `maxOutputTokens`) while it is read.
+   * or the provider's refusal. The call stalls only when the model sends nothing for `requestTimeoutMs`
+   * (`callOpenRouterV1`), and its reply is held to what `maxOutputTokens` can produce.
    */
   private async request(path: string, init: RequestInit, signal: AbortSignal | undefined, maxOutputTokens: number): Promise<{ readonly payload: unknown; readonly response: Response; readonly streamed: boolean }> {
     let credential: string | undefined;
@@ -84,54 +82,34 @@ export class OpenRouterClient implements LlmProviderClient {
       throw new AdapterError('unauthorized', 'OpenRouter credential is unreadable', false);
     }
     if (!nonEmptyString(credential)) throw new AdapterError('unauthorized', 'OpenRouter credential is unavailable', false);
-    const silence = new AbortController();
-    const quiet = openRouterSilenceV1(this.requestTimeoutMs, () => silence.abort(new DOMException('OpenRouter sent nothing for the silence period', 'TimeoutError')));
-    const alive = quiet.output;
-    const stalled = (error: unknown): never => {
-      if (signal?.aborted === true) throw new DOMException('OpenRouter request was cancelled', 'AbortError');
-      if (silence.signal.aborted || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))) {
-        throw new AdapterError('timeout', 'OpenRouter sent nothing for the silence period, or the request was cancelled', true);
-      }
-      throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
-    };
-    alive();
+    let response: Response;
+    let reply: OpenRouterReplyV1;
     try {
-      let response: Response;
-      try {
-        response = await this.fetchImpl(`${OPENROUTER_BASE_URL}${path}`, {
-          ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers },
-          signal: signal === undefined ? silence.signal : AbortSignal.any([silence.signal, signal]),
-          // A model request is never re-sent by a redirect: the first endpoint may already have run (and billed) it.
-          redirect: 'error',
-        });
-      } catch (error) { return stalled(error); }
-      annotateCoreRuntimeV1({ counts: { http_status: response.status } });
-      // A redirect answered a request the first endpoint may have run: retryable, never unbilled.
-      if (response.status >= 300 && response.status < 400) {
-        await response.body?.cancel().catch(() => undefined);
-        throw new AdapterError('temporarily_unavailable', `OpenRouter answered with a redirect (${response.status}); the request is not re-sent`, true);
+      ({ response, reply } = await callOpenRouterV1({ fetch: this.fetchImpl, url: `${OPENROUTER_BASE_URL}${path}`,
+        init: { ...init, headers: { 'content-type': 'application/json', authorization: `Bearer ${credential}`, ...init.headers } },
+        ...(signal === undefined ? {} : { signal }), silence_ms: this.requestTimeoutMs, max_output_tokens: maxOutputTokens }));
+    } catch (error) {
+      if (!(error instanceof OpenRouterCallFailureV1)) throw error;
+      // Every failure after sending is retryable and never unbilled: the model may have run.
+      switch (error.kind) {
+        case 'cancelled': throw new DOMException('OpenRouter request was cancelled', 'AbortError');
+        case 'timeout': throw new AdapterError('timeout', 'OpenRouter sent nothing for the silence period', true);
+        case 'too_large': throw invalidProviderResponse('OpenRouter', 'reply passed its transport capacity');
+        case 'redirect': throw new AdapterError('temporarily_unavailable', `OpenRouter answered with a redirect (${error.response?.status}); the request is not re-sent`, true);
+        case 'not_json': throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
+        case 'cut': throw new AdapterError('temporarily_unavailable', 'OpenRouter stream closed in the middle of an event', true);
+        default: throw new AdapterError('temporarily_unavailable', 'OpenRouter is unreachable', true);
       }
-      let reply: OpenRouterReplyV1;
-      try {
-        reply = await readOpenRouterReplyV1(response, { capacity_bytes: openRouterReplyCapacityBytesV1(maxOutputTokens), progress: alive, arriving: quiet.arriving, nothing: quiet.nothing });
-      } catch (error) {
-        if (error instanceof OpenRouterReplyTooLargeErrorV1) throw invalidProviderResponse('OpenRouter', `reply passed its ${error.capacity_bytes}-byte transport capacity`);
-        if (error instanceof SyntaxError) throw new AdapterError('temporarily_unavailable', 'OpenRouter returned a non-JSON response body', true);
-        // Cut mid-event after the model may have run: retryable, never unbilled, so the meeting cycle parks it.
-        if (error instanceof OpenRouterStreamCutErrorV1) throw new AdapterError('temporarily_unavailable', error.message, true);
-        return stalled(error);
-      }
-      // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
-      if (response.status === 400 && !reply.streamed) {
-        let refusal: unknown;
-        try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
-        if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
-      }
-      // Known unbilled only when the status says the request was refused before generation (rate-limited or overloaded);
-      // any other 5xx, a gateway 504 included, can arrive after the model ran.
-      if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
-      return this.parsed(reply, response);
-    } finally { quiet.stop(); }
+    }
+    // A prompt past the model's own context window: the one real limit on how long a meeting one call can read.
+    if (response.status === 400 && !reply.streamed) {
+      let refusal: unknown;
+      try { refusal = JSON.parse(reply.text) as unknown; } catch { refusal = undefined; }
+      if (isContextWindowRefusal(response.status, refusal)) throw new ExtractionInputTooLongError('OpenRouter');
+    }
+    // Known unbilled only when the status says the request was refused before generation.
+    if (!response.ok) throw providerStatusError('OpenRouter', response.status, UNBILLED_REFUSAL_STATUSES_V1.has(response.status));
+    return this.parsed(reply, response);
   }
 
   private parsed(reply: OpenRouterReplyV1, response: Response): { readonly payload: unknown; readonly response: Response; readonly streamed: boolean } {
