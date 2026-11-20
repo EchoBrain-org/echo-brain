@@ -1,10 +1,7 @@
-import { fail } from './validation.js';
+import { fail, MAX_ORGANIZATION_API_BODY_BYTES } from './validation.js';
 
-/**
- * A note has no size of its own. Its submit request is held to 1 MiB of JSON:
- * an abuse bound on what one request may make the Authority read and store.
- */
-export const PERSON_UPDATE_REQUEST_MAX_BYTES_V1 = 1024 * 1024;
+/** A note has no size of its own: its submit request is held to the one Person request body bound. */
+export const PERSON_UPDATE_REQUEST_MAX_BYTES_V1 = MAX_ORGANIZATION_API_BODY_BYTES;
 /** An opened note or imported meeting's text comes a page of at most 8 KiB at a time, with a cursor for the rest. */
 export const PERSON_OPEN_TEXT_PAGE_MAX_BYTES_V1 = 8 * 1024;
 export type PersonUploadMetadataStateV1 = 'pending' | 'processing' | 'ready' | 'unavailable';

@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
-import { MAX_ASK_BODY_BYTES, MAX_CHECK_REQUEST_BYTES, MAX_COPY_CHARACTERS, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
+import { MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, PREVIOUS_LIMITS } from '../../src/shared/protocol.js';
 import {
   allOmitted, answeredNow, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
   unreadableAfter, visibleTurns,
@@ -187,11 +187,11 @@ describe('what a check asks, and what it says of a turn', () => {
     expect(split.requests.map(request => request.items.length)).toEqual([150]);
     expect(split.turns).toEqual(turns.map(value => value.id));
     // Only the request body's bound splits them: a turn one request cuts short goes on in the next.
-    const many = Array.from({ length: 20 }, (_, at) => turn(`M${at}?`, at * HOUR, wide));
+    const many = Array.from({ length: 300 }, (_, at) => turn(`M${at}?`, at * HOUR, wide));
     const parts = checkPlan(many).requests;
     expect(parts.length).toBeGreaterThan(1);
-    expect(parts.reduce((total, request) => total + request.items.length, 0)).toBe(600);
-    for (const request of parts) expect(new TextEncoder().encode(JSON.stringify({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: request.items })).length).toBeLessThanOrEqual(MAX_CHECK_REQUEST_BYTES);
+    expect(parts.reduce((total, request) => total + request.items.length, 0)).toBe(9_000);
+    for (const request of parts) expect(new TextEncoder().encode(JSON.stringify({ schema_version: 1, kind: 'echo-person-ask-check-request-v1', items: request.items })).length).toBeLessThanOrEqual(MAX_REQUEST_BYTES);
   });
 
   it('turns the results into each turn\'s sources\' states', () => {
@@ -283,14 +283,14 @@ describe('the earlier turn an Ask carries (C3)', () => {
 
   it('leaves sentences off the end until the whole Ask fits its body bound', () => {
     // Eight sentences, each citing a ticket with a long link: more than the Ask body holds.
-    const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(9_000)}${at}`;
+    const permalink = (at: number) => `https://example.atlassian.net/browse/${'L'.repeat(150_000)}${at}`;
     const sources = Array.from({ length: 8 }, (_, at) => ticket(`L-${at}`, String(3000 + at), permalink(at)));
     const answer = answerOf('Long?', sources, Array.from({ length: 8 }, (_, at) => [`${'y'.repeat(200)} ${at}.`, [at]] as [string, number[]]));
     const long = turn('Long?', HOUR, answer);
     const previous: AskPrevious = previousOf(long, 'follow_up', answeredNow(long), 'And then?', { kind: 'global' });
     const body = JSON.stringify({ schema_version: 3, question: 'And then?', previous });
-    expect(MAX_ASK_BODY_BYTES).toBe(64 * 1024);
-    expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(MAX_ASK_BODY_BYTES);
+    expect(MAX_REQUEST_BYTES).toBe(1024 * 1024);
+    expect(new TextEncoder().encode(body).length).toBeLessThanOrEqual(MAX_REQUEST_BYTES);
     expect(previous.statements.length).toBeGreaterThan(0);
     expect(previous.statements.length).toBeLessThan(8);
     // From the end: the first sentences stay.

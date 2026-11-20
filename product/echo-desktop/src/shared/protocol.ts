@@ -408,7 +408,7 @@ export interface TimelineTurn {
  * The most a put may send: one turn, whose answer is at most the API's 256 KiB
  * (PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) with its sources' citations kept
  * beside them, so four times the answer's bound. Every other call keeps the
- * broker's MAX_PARAMS_BYTES. A literal, as the sandboxed renderer imports this
+ * broker's MAX_REQUEST_BYTES. A literal, as the sandboxed renderer imports this
  * file; a test holds it above the API's bound.
  */
 export const MAX_TIMELINE_PUT_BYTES = 1024 * 1024;
@@ -419,8 +419,12 @@ export type AskCheckState = PersonAskCheckStateV1;
 export type AskCheckItem = PersonAskCheckRequestItemV1;
 /** What the check said of one item, in the request's order. */
 export type AskCheckResult = Pick<PersonAskCheckItemV1, 'state'>;
-/** Transport: a check's body bound (C1), its one bound; a check takes any number of items within it. */
-export const MAX_CHECK_REQUEST_BYTES = 64 * 1024;
+/**
+ * The Authority's one Person request body bound (MAX_ORGANIZATION_API_BODY_BYTES), a transport bound: an Ask with
+ * its `previous`, a source check, a note and every other call's parameters are held to it, and never to less. A
+ * literal, as the sandboxed renderer cannot import the API's runtime module; a unit test pins the two equal.
+ */
+export const MAX_REQUEST_BYTES = 1024 * 1024;
 
 /**
  * The previous turn an Ask carries (C3, ADR-0047): the asker's own context,
@@ -433,8 +437,6 @@ export const PREVIOUS_LIMITS = {
   statements: PERSON_ANSWER_PREVIOUS_MAX_STATEMENTS_V1, statement_bytes: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_BYTES_V1,
   citations: PERSON_ANSWER_PREVIOUS_MAX_CITATIONS_V1, statement_citations: PERSON_ANSWER_PREVIOUS_STATEMENT_MAX_CITATIONS_V1,
 } as const;
-/** The Ask request body's bound, which `previous` shares: the Authority's own request body bound. */
-export const MAX_ASK_BODY_BYTES = 64 * 1024;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;
@@ -1023,22 +1025,13 @@ export function changesLogLine(params: unknown): string | null {
   return `changes moved ${areas.filter(area => moved.includes(area)).join(',')}`;
 }
 
-/** Parameters larger than this are refused at the broker. */
-export const MAX_PARAMS_BYTES = 64 * 1024;
-/**
- * A note has no size of its own: it is bounded by the Authority's 1 MiB note
- * request (PERSON_UPDATE_REQUEST_MAX_BYTES_V1, an abuse bound; a unit test
- * pins the two equal). The renderer cannot import the API's runtime module.
- */
-export const MAX_NOTE_REQUEST_BYTES = 1024 * 1024;
 /**
  * The most a call's parameters may take at the broker: a timeline put and
- * Copy answer each carry one whole answer, a note the Authority's note
- * request bound, every other call MAX_PARAMS_BYTES.
+ * Copy answer each carry one whole answer, every other call (an Ask, a note)
+ * the Authority's Person request bound, MAX_REQUEST_BYTES.
  */
 export function paramsLimit(method: string): number {
-  if (method === 'notes.submit') return MAX_NOTE_REQUEST_BYTES;
-  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_PARAMS_BYTES;
+  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { byTestId, cover, elements, fail, flush, Held, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text } from './harness.js';
-import { MAX_NOTE_REQUEST_BYTES } from '../../src/shared/protocol.js';
+import { MAX_REQUEST_BYTES } from '../../src/shared/protocol.js';
 
 const { rpc, dropFile } = vi.hoisted(() => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile }));
@@ -228,7 +228,7 @@ describe('files and unresolved captures', () => {
 
   it('sends a long note whole, and refuses before sending only one that cannot fit the 1 MiB note request', async () => {
     const store = await startStore();
-    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(MAX_NOTE_REQUEST_BYTES)}`);
+    store.openCompose(); store.setComposeText(`Long note\n${'x'.repeat(MAX_REQUEST_BYTES)}`);
     await store.sendCompose();
     expect(store.getState().compose).toMatchObject({ notice: expect.stringContaining('too long to send in one piece'), status: 'editing' });
     expect(sent('notes.submit')).toHaveLength(0);

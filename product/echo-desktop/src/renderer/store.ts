@@ -10,7 +10,7 @@ import type {
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_NOTE_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
@@ -4477,7 +4477,7 @@ const NOTE_OR_FILE = 'Save this note before attaching a file.';
  * A note has no size of its own; its text must fit the Authority's 1 MiB note
  * request, with room for the request's other fields and JSON escaping.
  */
-const MAX_NOTE_BYTES = MAX_NOTE_REQUEST_BYTES - 64 * 1024;
+const MAX_NOTE_BYTES = MAX_REQUEST_BYTES - 64 * 1024;
 const TOO_LONG = 'This note is too long to send in one piece. Split it into notes under about 1 MB each, or attach it as a file.';
 
 /** What main's quit guard was last told. */

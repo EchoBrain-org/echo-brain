@@ -968,7 +968,8 @@ export class PersonAuthorityClient {
         throw new Error('Person tool request must remain on its Authority');
       }
     };
-    const assertBounds = (bytes: number, timeout = this.timeoutMs, request = MAX_ORGANIZATION_API_BODY_BYTES): void => {
+    // A tool request goes to a provider route, whose body bound at the Authority is PERSON_TOOL_REQUEST_MAX_BYTES_V1.
+    const assertBounds = (bytes: number, timeout = this.timeoutMs, request = PERSON_TOOL_REQUEST_MAX_BYTES_V1): void => {
       if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 ||
           !Number.isSafeInteger(timeout) || timeout < 1 || timeout > 75_000 ||
           !Number.isSafeInteger(request) || request < 1 || request > PERSON_TOOL_REQUEST_MAX_BYTES_V1) {
@@ -981,7 +982,7 @@ export class PersonAuthorityClient {
         assertBounds(input.maximum_response_bytes ?? MAXIMUM_ORDINARY_RESPONSE_BYTES, input.timeout_ms, input.maximum_request_bytes);
         return this.json({ path: input.path, body: input.body, validate_request: input.validate_request,
           validate_response: input.validate_response, maximum_response_bytes: input.maximum_response_bytes,
-          ...(input.maximum_request_bytes === undefined ? {} : { maximum_request_bytes: input.maximum_request_bytes }),
+          maximum_request_bytes: input.maximum_request_bytes ?? PERSON_TOOL_REQUEST_MAX_BYTES_V1,
           timeout_ms: input.timeout_ms, access_token: accessToken, signal });
       },
       getJson: async <T>(input: PersonToolGetRequestV1<T>): Promise<T> => {

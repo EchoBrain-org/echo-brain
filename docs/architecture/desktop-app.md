@@ -36,7 +36,8 @@ flowchart LR
 
 1. The renderer calls `rpc(method, params)`.
 2. Main's broker accepts it only from the app's own main frame, only as plain
-   JSON up to 64 KiB (256 KiB for `timeline.put`), and only for an allowlisted
+   JSON up to the Authority's 1 MiB Person request bound (1 MiB for `timeline.put`
+   and Copy answer, which carry one whole answer), and only for an allowlisted
    method. Main answers its own methods (dialogs, clipboard, menus, notices,
    updates) and forwards host methods, swapping file handles for paths on the
    way. Dropped files use a separate channel with the path read from a real

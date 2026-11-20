@@ -8,10 +8,12 @@ import type {
 } from './contracts.js';
 
 /**
- * A Person API request body's bound: what the Authority's HTTP server reads for one JSON request (its own body bound),
- * the one bound on what a request may carry. A route with a larger transport (a note) names its own.
+ * The Person API request body bound, one for every authenticated Person and project route (an Ask with its previous
+ * turn, a source check, a note, a project change): what the Authority's HTTP server reads for one JSON request. A
+ * transport bound against abuse, and the only limit on how much a person sends; the server, the CLI client and the
+ * desktop all hold a request to this one figure, so no client refuses what the server accepts.
  */
-export const MAX_ORGANIZATION_API_BODY_BYTES = 64 * 1024;
+export const MAX_ORGANIZATION_API_BODY_BYTES = 1024 * 1024;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;

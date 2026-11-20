@@ -934,9 +934,12 @@ describe("Person client", () => {
       // A question has no length of its own: 10,000 code points is sent.
       await client.askWithLiveSources("😀".repeat(10_000));
       expect(sent).toHaveLength(4);
-      // Past the 64 KiB request body, the transport bound, it is not sent and says why.
-      await expect(client.askWithLiveSources("x".repeat(64 * 1024))).rejects.toMatchObject({ code: "request_too_large", unsent: true });
-      expect(sent).toHaveLength(4);
+      // The client holds a question to the Authority's own 1 MiB Person body bound, never less: 100 KiB is sent.
+      await client.askWithLiveSources("x".repeat(100 * 1024));
+      expect(sent).toHaveLength(5);
+      // Past that bound, the transport's, it is not sent and says why.
+      await expect(client.askWithLiveSources("x".repeat(1024 * 1024))).rejects.toMatchObject({ code: "request_too_large", unsent: true });
+      expect(sent).toHaveLength(5);
     });
   });
 

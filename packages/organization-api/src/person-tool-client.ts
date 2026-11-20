@@ -14,7 +14,7 @@ export interface PersonToolJsonRequestV1<T> {
   readonly validate_request: (value: unknown) => unknown;
   readonly validate_response: (value: unknown) => T;
   readonly maximum_response_bytes?: number;
-  /** The request's canonical JSON bound, at most PERSON_TOOL_REQUEST_MAX_BYTES_V1; the ordinary API body bound otherwise. */
+  /** The request's canonical JSON bound, at most PERSON_TOOL_REQUEST_MAX_BYTES_V1, the provider-route body bound, which is also its default. */
   readonly maximum_request_bytes?: number;
   readonly timeout_ms?: number;
 }

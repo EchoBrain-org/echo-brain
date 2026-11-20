@@ -76,7 +76,7 @@ import {
   validatePersonOpenRequestV1,
 } from "@echo-brain/organization-api";
 import type { PersonListHttpApplicationV1 } from "./person-list-http-application-v1.js";
-import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { PERSON_CHANGES_ROUTE_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_REQUEST_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import type { PersonChangesHttpApplicationV1 } from "./person-changes-http-application.js";
 import { PERSON_PROJECT_ACTIVITY_PATH_V1 } from '@echo-brain/organization-api';
 import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-activity-http-application.js";
@@ -84,15 +84,15 @@ import type { PersonProjectActivityHttpApplicationV1 } from "./person-project-ac
 /**
  * Request body bounds, one per route family. They are transport bounds: the most one request may carry, refused whole
  * with "request body is too large" before it is buffered further, and the only limit on how much a person sends.
- * - Person JSON (Ask with its previous turns, reads, sign-in, employees, record search): the note upload's 1 MiB, so a
- *   person's question is never held to less than a note.
- * - Project and settings bodies: the organization API's own bound (`MAX_ORGANIZATION_API_BODY_BYTES`), with a note upload
- *   at `PERSON_UPDATE_REQUEST_MAX_BYTES_V1`.
- * - Provider ingress (webhooks and sign-in callbacks from a provider, before any person is known): 64 KiB, with its query
- *   string at 8 KiB. Unauthenticated, so it stays small against abuse.
+ * - Person and project JSON (Ask with its previous turns, source checks, reads, sign-in, employees, record search,
+ *   notes, project and settings bodies): the organization API's one bound, `MAX_ORGANIZATION_API_BODY_BYTES` (1 MiB),
+ *   which the CLI client and the desktop hold a request to as well.
+ * - Provider routes (webhooks and sign-in callbacks from a provider, before any person is known, and a Person tool's
+ *   requests): `PERSON_TOOL_REQUEST_MAX_BYTES_V1` (64 KiB), which the client's tool transport holds a request to, with
+ *   its query string at 8 KiB. Reachable unauthenticated, so it stays small against abuse.
  */
-const PERSON_REQUEST_BODY_MAX_BYTES = PERSON_UPDATE_REQUEST_MAX_BYTES_V1;
-const PROVIDER_REQUEST_BODY_MAX_BYTES = 64 * 1024;
+const PERSON_REQUEST_BODY_MAX_BYTES = MAX_ORGANIZATION_API_BODY_BYTES;
+const PROVIDER_REQUEST_BODY_MAX_BYTES = PERSON_TOOL_REQUEST_MAX_BYTES_V1;
 const MAXIMUM_PROVIDER_QUERY_BYTES = 8 * 1024;
 /** Response bounds for provider ingress, by kind: a JSON answer, raw bytes, and a provider's sign-in callback page. */
 const MAXIMUM_PROVIDER_RESPONSE_BYTES = 64 * 1024;

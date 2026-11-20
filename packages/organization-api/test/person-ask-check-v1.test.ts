@@ -6,6 +6,7 @@ import {
   PERSON_ASK_CHECK_LIMITS_V1,
   PERSON_ASK_CHECK_PATH_V1,
   PERSON_ASK_CHECK_REQUEST_KIND_V1,
+  MAX_ORGANIZATION_API_BODY_BYTES,
   validatePersonAnswerEvidenceCitationV8,
   validatePersonAskCheckRequestV1,
   validatePersonAskCheckV1,
@@ -32,7 +33,8 @@ const answer = (items: readonly unknown[], fields: Record<string, unknown> = {})
 describe('Ask source check request (Ask timeline v1, C1)', () => {
   it('serves one path and freezes its bounds and kinds', () => {
     expect(PERSON_ASK_CHECK_PATH_V1).toBe('/v1/person/ask/check');
-    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, body_bytes: 64 * 1024 });
+    expect(PERSON_ASK_CHECK_LIMITS_V1).toEqual({ items_min: 1, body_bytes: MAX_ORGANIZATION_API_BODY_BYTES });
+    expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(1024 * 1024);
     expect(Object.isFrozen(PERSON_ASK_CHECK_LIMITS_V1)).toBe(true);
     expect([...PERSON_ASK_CHECK_CITATION_KINDS_V1]).toEqual(['approved_record', 'source_revision', 'follow_up', 'ticket', 'page']);
   });
@@ -50,14 +52,14 @@ describe('Ask source check request (Ask timeline v1, C1)', () => {
     expect(validatePersonAskCheckRequestV1(request([item(citations.page), item(citations.page, { asked_at: '2026-10-21T09:30:00.000Z' })])).items).toHaveLength(2);
   });
 
-  it('takes any number of items within 64 KiB, and at least one', () => {
+  it('takes any number of items within the Person body bound, and at least one', () => {
     expect(validatePersonAskCheckRequestV1(request(Array.from({ length: 300 }, () => item(citations.follow_up)))).items).toHaveLength(300);
     refused(() => validatePersonAskCheckRequestV1(request([])), 'no items');
     // The byte bound is the request's one bound.
     const long = { ...citations.source_revision, revision_id: 'r'.repeat(512), label: 'L'.repeat(200) };
-    const heavy = request(Array.from({ length: 100 }, () => item(long)));
+    const heavy = request(Array.from({ length: 1_500 }, () => item(long)));
     expect(canonicalJsonBytes(heavy).byteLength).toBeGreaterThan(PERSON_ASK_CHECK_LIMITS_V1.body_bytes);
-    refused(() => validatePersonAskCheckRequestV1(heavy), 'over 64 KiB');
+    refused(() => validatePersonAskCheckRequestV1(heavy), 'over 1 MiB');
   });
 
   it.each([

@@ -38,8 +38,9 @@ describe('neutral Person tool extension boundary', () => {
     const transport = new PersonAuthorityClient({ authority_origin: 'https://authority.example', fetch }).toolTransport('test-credential');
     const send = (bytes: number, maximum_request_bytes?: number) => transport.json({ path: '/v3/tools/mail', body: { text: 'x'.repeat(bytes) }, validate_request: value => value,
       validate_response: value => value, ...(maximum_request_bytes === undefined ? {} : { maximum_request_bytes }) });
-    // The ordinary bound is the Authority's own 64 KiB request body: 20 KiB goes, a body past it does not.
-    await expect(send(MAX_ORGANIZATION_API_BODY_BYTES)).rejects.toThrow('body bound');
+    // A tool request is held to the Authority's provider-route body bound, never to the larger Person bound: 20 KiB goes, past it does not.
+    expect(PERSON_TOOL_REQUEST_MAX_BYTES_V1).toBeLessThan(MAX_ORGANIZATION_API_BODY_BYTES);
+    await expect(send(PERSON_TOOL_REQUEST_MAX_BYTES_V1)).rejects.toThrow('body bound');
     for (const maximum of [0, 1.5, PERSON_TOOL_REQUEST_MAX_BYTES_V1 + 1]) await expect(send(20 * 1024, maximum)).rejects.toThrow('bounds');
     expect(fetch).not.toHaveBeenCalled();
     await send(20 * 1024);

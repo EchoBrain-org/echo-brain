@@ -80,8 +80,8 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: again.question, previous: previous() }).previous!.purpose).toBe('follow_up');
   });
 
-  it('carries a long earlier question, and keeps the whole request within the Authority\'s 64 KiB body bound, not 16 KiB', () => {
-    expect(PERSON_ANSWER_REQUEST_MAX_BYTES_V3).toBe(64 * 1024);
+  it('carries a long earlier question, and keeps the whole request within the Authority\'s one 1 MiB Person body bound', () => {
+    expect(PERSON_ANSWER_REQUEST_MAX_BYTES_V3).toBe(1024 * 1024);
     expect(MAX_ORGANIZATION_API_BODY_BYTES).toBe(PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
     const long = `${'Who owns the thermal retest, '.repeat(130)}and when?\nAnd what is blocked?`;
     expect(validatePersonAnswerRequestV3(ask(previous({ question: long }))).previous!.question).toBe(long);

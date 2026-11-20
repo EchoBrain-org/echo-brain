@@ -1,7 +1,7 @@
 import { canonicalJsonBytes } from '@echo-brain/federation-protocol';
 import { validatePersonAnswerEvidenceCitationV8 } from './person-answer-v4.js';
 import type { PersonAnswerEvidenceCitationV8 } from './person-answer-v8.js';
-import { asEnumerableRecord, assertExactKeys, assertTimestamp, boundedList, fail, oneOf } from './validation.js';
+import { asEnumerableRecord, assertExactKeys, assertTimestamp, boundedList, fail, MAX_ORGANIZATION_API_BODY_BYTES, oneOf } from './validation.js';
 
 /**
  * The Ask source check (Ask timeline v1, C1; ADR-0047). The desktop keeps old
@@ -24,8 +24,8 @@ export type PersonAskCheckCitationKindV1 = (typeof PERSON_ASK_CHECK_CITATION_KIN
 const PERSON_ASK_CHECK_STATES_V1 = Object.freeze(['same', 'unreadable', 'unknown'] as const);
 export type PersonAskCheckStateV1 = (typeof PERSON_ASK_CHECK_STATES_V1)[number];
 
-/** At least one item, and transport: a request body of at most 64 KiB of canonical JSON, its one bound. */
-export const PERSON_ASK_CHECK_LIMITS_V1 = Object.freeze({ items_min: 1, body_bytes: 64 * 1024 });
+/** At least one item, and transport: the one Person request body bound, its only bound. */
+export const PERSON_ASK_CHECK_LIMITS_V1 = Object.freeze({ items_min: 1, body_bytes: MAX_ORGANIZATION_API_BODY_BYTES });
 
 export interface PersonAskCheckRequestItemV1 {
   /** When the turn whose answer cited this source was asked. */
