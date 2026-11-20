@@ -247,21 +247,68 @@ it.each([
   expect([admissions, forwards]).toEqual([1, 1]);
 });
 
-it('marks a connection lost before the request was fully sent as unbilled, and one lost after as billing unknown', async () => {
-  for (const sentBeforeFailure of [false, true]) {
-    vi.mocked(https.request).mockImplementation(() => {
-      const upstream = Object.assign(new EventEmitter(), { end(_body: unknown, sent?: () => void) {
-        queueMicrotask(() => { if (sentBeforeFailure) sent?.(); upstream.emit('error', new Error('synthetic socket failure')); });
-      } });
-      return upstream as unknown as ReturnType<typeof https.request>;
-    });
-    const transport = await startClaudeModelTransportV1({ signal: new AbortController().signal, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
-      admit: async (_body, _operation, send) => send(new AbortController().signal).catch((error: unknown) => {
-        expect(error).toMatchObject({ unbilled: !sentBeforeFailure }); throw error;
-      }) });
-    try { expect((await fetch(`${transport.base_url}/v1/messages`, { method: 'POST', body: '{}' })).status).toBe(502); }
-    finally { transport.close(); }
-  }
+it.each([
+  // [what happened to the connection before the failure, known never delivered]
+  ['no connection was ever made (refused, DNS, TLS)', 'none', true],
+  ['a new connection failed during its TLS handshake', 'handshake', true],
+  ['the request went out on an established connection, though its write never reported complete', 'established', false],
+  ['the request went out on a reused connection', 'reused', false],
+] as const)('treats a request as never delivered only when %s', async (_name, connection, unbilled) => {
+  vi.mocked(https.request).mockImplementation(() => {
+    const upstream = Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        // The write-completion callback is never called: it proves nothing about what the peer received.
+        if (connection !== 'none') {
+          const socket = Object.assign(new EventEmitter(), { connecting: connection !== 'reused' });
+          upstream.emit('socket', socket);
+          if (connection === 'established') socket.emit('secureConnect');
+        }
+        upstream.emit('error', new Error('synthetic socket failure'));
+      });
+    } });
+    return upstream as unknown as ReturnType<typeof https.request>;
+  });
+  let failure: unknown;
+  const transport = await startClaudeModelTransportV1({ signal: new AbortController().signal, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    admit: async (_body, _operation, send) => send(new AbortController().signal).catch((error: unknown) => { failure = error; throw error; }) });
+  try { expect((await fetch(`${transport.base_url}/v1/messages`, { method: 'POST', body: '{}' })).status).toBe(502); }
+  finally { transport.close(); }
+  expect(failure).toMatchObject({ unbilled });
+  if (unbilled) expect(failure).toMatchObject({ diagnostic: { unbilled: true } });
+  else expect((failure as { diagnostic: object }).diagnostic).not.toHaveProperty('unbilled');
+});
+
+it('fails a 200 stream that ends cleanly without the message\'s terminal event as possibly billed, and never admits the retry', async () => {
+  vi.mocked(https.request).mockImplementation((...args: Parameters<typeof https.request>) => {
+    const receive = args.find(value => typeof value === 'function') as (reply: IncomingMessage) => void;
+    const upstream = Object.assign(new EventEmitter(), { end() {
+      queueMicrotask(() => {
+        const reply = Object.assign(new PassThrough(), { statusCode: 200, headers: { 'content-type': 'text/event-stream' } });
+        receive(reply as unknown as IncomingMessage);
+        reply.end('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1,"output_tokens":0}}}\n\n'
+          + 'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n');
+      });
+    } });
+    return upstream as unknown as ReturnType<typeof https.request>;
+  });
+  const errors: unknown[] = [];
+  let admissions = 0;
+  const driver = createClaudeResearchDriverV1({ model, forward: openRouterClaudeForwarderV1(() => 'synthetic credential', model),
+    run: async input => {
+      const send = () => fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      // The SDK receives the cut stream as a broken connection, never a clean end it could read as complete.
+      const first = await send(); expect(first.status).toBe(200); await expect(first.text()).rejects.toThrow();
+      // The SDK's retry of the incomplete message.
+      expect((await send()).status).toBe(403);
+    },
+  });
+  await expect(driver.run({ initial: {}, question: true, list_available: false, signal: new AbortController().signal,
+    silence_ms: 60_000, call: async () => ({}), model_request: async (_request, send) => {
+      admissions++;
+      try { return (await send(new AbortController().signal, () => undefined)).value; } catch (error) { errors.push(error); throw error; }
+    } })).rejects.toMatchObject({ recovery: 'fallback' });
+  expect(admissions).toBe(1);
+  expect(errors).toEqual([expect.objectContaining({ diagnostic: { failure_class: 'adapter_transport', http_status: null } })]);
 });
 
 it('recovers on a successful SDK retry after a network failure before the request was sent', async () => {
