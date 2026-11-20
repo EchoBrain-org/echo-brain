@@ -13,6 +13,7 @@ import {
   cleanId,
   createStepSchema,
   normalizeQuery,
+  queryRefusal,
   parseBlocksAnswer,
   parseStep,
   SEARCH_ONLY_STEP_PROMPT,
@@ -461,6 +462,11 @@ describe("agentic Ask model protocol parity", () => {
     const query = Array.from({ length: 40 }, (_, index) => `t${index}`).join(" ");
     expect(normalizeQuery(query)).toBe(query);
     expect(normalizeQuery("?!")).toBeNull();
+    // The rule a refused query broke reaches the model in its own words, not one message for every rule.
+    const refused = queryRefusal("?!");
+    expect(refused).toEqual(expect.any(String));
+    expect(refused).not.toBe(queryRefusal("x".repeat(65)));
+    expect(queryRefusal("launch date")).toBeNull();
   });
 
   it("preserves identifiers and punctuation for each provider to interpret", () => {

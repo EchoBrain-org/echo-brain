@@ -488,8 +488,13 @@ function args(name: StepTool, entry: Record<string, unknown>, ask = false): Step
 
 /** Normalize presentation and validate bounds; interpretation belongs to the source. */
 export function normalizeQuery(value: unknown): string | null {
-  const line = cleanLine(value, ARG_CHARS).replace(/^["'“”]+|["'“”]+$/gu, "").trim();
-  try { return validatePersonQueryText(line); } catch { return null; }
+  try { return validatePersonQueryText(queryLine(value)); } catch { return null; }
+}
+/** A search's query as the model wrote it, its quotes and spacing cleaned. */
+function queryLine(value: unknown): string { return cleanLine(value, ARG_CHARS).replace(/^["'“”]+|["'“”]+$/gu, "").trim(); }
+/** Why a search's query was refused, in the query rule's own words (PersonQueryInputError); null when it is valid. */
+export function queryRefusal(value: unknown): string | null {
+  try { validatePersonQueryText(queryLine(value)); return null; } catch (error) { return error instanceof Error ? error.message : "query is invalid"; }
 }
 
 /** A need's id as the plan shows it ("N3"); accept common spellings and ignore the rest. */

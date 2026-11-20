@@ -24,6 +24,7 @@ import {
   cleanLine,
   createStepSchema,
   normalizeQuery,
+  queryRefusal,
   parseStep,
   partQuestion,
   type NeedStatus,
@@ -281,7 +282,8 @@ function toolRefusal(error: unknown): string | null {
   const value = object(error);
   if (value?.name !== "AuthorityOperationError") return null;
   if (value.code === "not_found") return "that item is not available";
-  if (value.code === "invalid_request") return typeof value.message === "string" && value.message.length <= 200 ? value.message : "that request is not valid";
+  // The desk's own static message names the rule the request broke; it carries no source content.
+  if (value.code === "invalid_request") return typeof value.message === "string" && value.message.length > 0 ? value.message : "that request is not valid";
   return null;
 }
 /** The desk says the person cannot read this item now: deleted, or no longer visible to them. */
@@ -678,7 +680,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const search = async (args: StepArgs, admit?: OrderedAdmission, signal: AbortSignal = activeSignal): Promise<ToolResult> => {
     const query = normalizeQuery(args.query);
-    if (query === null) return { tool: "search", args, error: "query must include a letter or number and fit on one line of at most 240 Unicode code points, with at most 64 UTF-8 bytes per term" };
+    if (query === null) return { tool: "search", args, error: queryRefusal(args.query) ?? "query is invalid" };
     const source = sourceOf(args);
     if (args.source !== undefined && source === undefined) return { tool: 'search', args, error: `source must be ${sourceCatalog.map(value => value.source).join(', ')}; omit it to search all available sources` };
     // Ask checks a dated search against the source's capabilities (research tool contract v1): a date it does not record
@@ -1320,7 +1322,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (!finishAvailable) problems.unshift(`no source has been read; use ${listAvailable ? 'search or list' : 'search'} first`);
     if (problems.length > 0) {
       observeCoreModelCorrectionV1('research_finish_refused');
-      throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.slice(0, 8).join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
+      throw new AgenticAskOutputErrorV1(`finish was not accepted: ${problems.join('; ')}. ${listAvailable ? 'Search, list or open more' : 'Search or open more'}, or correct the need status and evidence.`);
     }
   };
 

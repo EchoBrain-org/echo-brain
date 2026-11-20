@@ -10,7 +10,7 @@ import {
   createAgenticAskV5,
   type AgenticAskAuditEntryV1,
 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_PROMPT, queryRefusal } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { AGENTIC_ASK_FINALIZE_RESERVE_MS_V1 } from "../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../src/answer-composition/agentic-research-v1.js";
 import { AGENTIC_TRIGGER_DEFINITIONS_V1 } from "../../src/answer-composition/agentic-trigger-definitions-v1.js";
@@ -649,7 +649,7 @@ describe("agentic Ask: research loop", () => {
     const evidence = desk();
     await ask({ desk: evidence, model: script.model }).answer({ question: "When is launch?" });
     expect(script.prompt(1).last_results).toEqual([
-      expect.objectContaining({ tool: "search", error: expect.stringContaining("at most 240 Unicode code points") }),
+      expect.objectContaining({ tool: "search", error: queryRefusal("!!!") }),
     ]);
     expect(evidence.open).not.toHaveBeenCalled();
   });
