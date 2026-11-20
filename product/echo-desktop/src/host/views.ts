@@ -12,7 +12,7 @@ import type {
 import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
-  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_COUNT_MAX_V1,
+  validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2,
   validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
@@ -296,8 +296,7 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   // A count is bounded by the progress contract: one at its bound is at least that many.
-  const atLeast = receipt.looked_through >= PERSON_ASK_PROGRESS_COUNT_MAX_V1 ? { at_least: true as const } : {};
-  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through, ...atLeast },
+  return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }),
