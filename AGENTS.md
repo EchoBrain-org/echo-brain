@@ -13,15 +13,20 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
 
 # Post-merge local sync (all coding agents)
 
-After every PR merge, sync the primary checkout's `main`: run
-`git pull --ff-only origin main` there and check that `HEAD` matches
-`origin/main` before reporting the merge complete or starting staging. If your
-session cannot reach the primary checkout, say so in your report. Never reset or
-discard local work to sync. If local edits block the pull, stash them under a
-named message, pull, then apply the stash back and drop it; keep the stash only
-when it does not apply cleanly, and name it in your report. If local `main` has
-diverged, report it instead of forcing a reset. Feature worktrees stay on their
-own branches.
+After every PR merge, sync the primary checkout's `main` before reporting the
+merge complete or starting staging. First check that `main` is the branch
+checked out there (`git symbolic-ref --short HEAD` prints `main`); on another
+branch or a detached `HEAD`, report that and do not pull. Then run
+`git pull --ff-only origin main` and check that `HEAD` matches `origin/main`.
+If your session cannot reach the primary checkout, say so in your report. Never
+reset or discard local work to sync. If local edits block the pull, stash them
+under a named message and note that stash's commit id
+(`git rev-parse stash@{0}`), pull, then restore them with
+`git stash apply --index <id>`. When that applies cleanly, drop that same
+entry, finding its current `stash@{n}` by the id first: the stash list is
+shared with every worktree. Keep the stash when it does not apply cleanly, and
+name it in your report. If local `main` has diverged, report it instead of
+forcing a reset. Feature worktrees stay on their own branches.
 
 # Full checks (all coding agents)
 
