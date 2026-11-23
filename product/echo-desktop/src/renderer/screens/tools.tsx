@@ -22,8 +22,12 @@ function Mark({ tool }: { tool: ConnectedTool }) {
   return <span class={`tool-mark${tool.status === 'unavailable' ? ' off' : ''}`} aria-hidden="true">{tool.name.slice(0, 1).toUpperCase()}</span>;
 }
 
-/** A connection Disconnect can end: a live one, or a stopped one, which only Disconnect frees for a different account. */
-const disconnectable = (tool: ConnectedTool) => tool.status === 'linked' || tool.status === 'revoked';
+/**
+ * A connection Disconnect can end: a live one, or a stopped one, which only Disconnect frees for a different account.
+ * A stopped Slack link is left out: it is tied to no account, and Slack's disconnect only ends a live link, so
+ * Disconnect would change nothing.
+ */
+const disconnectable = (tool: ConnectedTool) => tool.status === 'linked' || (tool.status === 'revoked' && tool.tool_id !== 'slack');
 
 function ToolRow({ tool }: { tool: ConnectedTool }) {
   return (

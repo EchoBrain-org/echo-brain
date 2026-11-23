@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectedTool } from '../../src/shared/protocol.js';
-import { byTestId, click, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, uncover } from './harness.js';
+import { byTestId, byType, click, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, uncover } from './harness.js';
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
@@ -74,6 +74,31 @@ describe('connected tools', () => {
     const idle = store.getState().sheet!;
     if (idle.kind !== 'tool-manage') throw new Error('Missing manage sheet');
     expect(byTestId(render(ToolManage({ sheet: idle })), 'tool-disconnect')).toEqual([]);
+  });
+
+  it('a stopped Slack connection offers Reconnect and no Manage, and every other stopped connection keeps Manage', async () => {
+    // A stopped Slack link is tied to no account, and Slack's disconnect only ends a live link: Disconnect would change nothing.
+    tools = tools.map((tool): ConnectedTool => ({ ...tool, status: 'revoked' }));
+    const store = await startStore(); await store.openTools(); await flush();
+    const { Tools } = await import('../../src/renderer/screens/tools.js');
+    const rows = byTestId(render(Tools({ state: store.getState(), page: store.getState().tools! })), 'tool-row');
+    expect(rows.map(row => [row.props['data-tool'], byType(row, 'button').map(text)])).toEqual([
+      ['jira', ['Manage', 'Reconnect']], ['slack', ['Reconnect']], ['confluence', ['Manage', 'Reconnect']], ['granola', ['Manage', 'Reconnect']]]);
+  });
+
+  it('a stopped Slack connection has no Disconnect even with Manage open, while a live one and a stopped Jira connection keep theirs', async () => {
+    const slack: ConnectedTool = { tool_id: 'slack', name: 'Slack', status: 'revoked' };
+    const managed: ConnectedTool[] = [slack, { ...slack, status: 'linked' }, { ...jira, status: 'revoked' }];
+    const store = await startStore();
+    const { ToolManage } = await import('../../src/renderer/screens/tools.js');
+    const offered = managed.map(tool => {
+      store.manageTool(tool);
+      const sheet = store.getState().sheet!;
+      if (sheet.kind !== 'tool-manage') throw new Error('Missing manage sheet');
+      store.closeSheet();
+      return byTestId(render(ToolManage({ sheet })), 'tool-disconnect').map(text);
+    });
+    expect(offered).toEqual([[], ['Disconnect'], ['Disconnect']]);
   });
 
   it('Cancel ends a waiting connection and polling, even after another app was in front', async () => {
