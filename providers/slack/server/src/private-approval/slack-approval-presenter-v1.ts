@@ -305,6 +305,10 @@ export function createSlackApprovalPresenterV1(options: {
         const target = JSON.parse(row.target_json) as SlackApprovalTargetV1;
         if (!options.targetCurrent(target)) { backoff(row, true); continue; }
         const proposal = options.core.proposal(row.approval_id);
+        // A removed reviewer gets no Slack call, though their link may still be stored active (a removal can stop before its
+        // link write). A row with a marker posted or in flight ends as a stale target does; one with nothing posted yet ends
+        // below, as it does for any proposal that is no longer pending.
+        if (proposal?.reviewer_active === false && (row.delivery === "posted" || row.marker_state === "in_flight")) { backoff(row, true); continue; }
         if (row.delivery === "opening") {
           if (!pendingActive(proposal)) { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
           // Any card-build failure is this row's problem; it must not stall the rows after it.
@@ -367,6 +371,8 @@ export function createSlackApprovalPresenterV1(options: {
             }
           }
           const liveProposal = options.core.proposal(row.approval_id);
+          // The reviewer may have been removed while the marker call was awaited.
+          if (liveProposal?.reviewer_active === false) { backoff(row, true); continue; }
           const shows = liveProposal === undefined ? "superseded" : outcome(liveProposal);
           const message = database.prepare("SELECT dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack'").get(row.approval_id) as { dm_channel_id: string; message_ts: string };
           try {

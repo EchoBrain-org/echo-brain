@@ -27,7 +27,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
   const views = new Map<string, ReturnType<typeof proposal>>();
   let projects: { project_id: string; name: string }[] = [];
   let linked = true, current = true, clock = new Date('2026-10-07T00:00:00.000Z');
-  let afterOpen: (() => void) | undefined;
+  let afterOpen: (() => void) | undefined, afterPost: (() => void) | undefined;
   const unlinkedPrincipals = new Set<string>();
   const reconcileInputs: { post_started_at: string }[] = [];
   const next = (name: string): Outcome => outcomes[name]?.shift() ?? (name === 'open' ? 'opened' : name === 'publish' ? 'done' : 'posted');
@@ -37,7 +37,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
     target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
       async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1', user_id: 'U1' } : { kind: 'retry_allowed' as const }; },
-      async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
+      async postMarker() { const x = take('post'); afterPost?.(); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish(input) { cards.push(input.card); const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
     }), ...overrides });
@@ -46,7 +46,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
     return id;
   };
-  return { db, calls, cards, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
+  return { db, calls, cards, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set afterPost(value: (() => void) | undefined) { afterPost = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
 }
 function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
@@ -198,6 +198,55 @@ describe('Slack approval presenter V1', () => {
     f.proposal = { ...proposal(id), reviewer_active: false }; f.current = false;
     await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: null });
+  });
+
+  // A removal can stop between its two writes: the reviewer's membership has ended while their link is still stored active.
+  it('makes no Slack call for a marker in flight once its reviewer was removed, though their link is still stored', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    markInFlight(f);
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    // The row ends as one whose target is no longer current does.
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'failed', attempts: 5, retry_at: null, message_ts: null, card_sha256: null });
+  });
+
+  it('does not publish the card when its reviewer is removed while the marker is being posted', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    f.afterPost = () => { f.proposal = { ...proposal(id), reviewer_active: false }; };
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: '1.000001', card_sha256: null });
+  });
+
+  it('does not publish the card of a posted marker once its reviewer was removed', async () => {
+    const f = fixture(); const id = f.stage(); f.outcomes.publish = ['uncertain'];
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: 'posted', message_ts: '1.000001', card_sha256: null });
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'publish']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: '1.000001', card_sha256: null });
+  });
+
+  it.each(['superseded', 'approved'] as const)('does not redraw a removed reviewer\'s open card when its proposal is later %s', async (status) => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: 'posted', shows: 'open' });
+    f.proposal = { ...proposal(id), reviewer_active: false, status, decided_on: status === 'approved' ? 'desktop' : null };
+    if (status === 'superseded') f.db.prepare("UPDATE authority_live_approval_outbox_v2 SET state='superseded' WHERE approval_id=?").run(id);
+    else f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'publish']); expect(row(f)).toMatchObject({ delivery: 'failed', shows: 'open', message_ts: '1.000001' });
+  });
+
+  it.each(['before its DM is opened', 'before its first marker'] as const)('still ends a removed reviewer\'s row %s as unrepresentable, with no Slack call', async (when) => {
+    const f = fixture(); const id = f.stage();
+    if (when === 'before its DM is opened') f.outcomes.open = ['retry_allowed'];
+    await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: when === 'before its DM is opened' ? 'opening' : 'posting' });
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'unrepresentable', message_ts: null });
   });
 
   it.each(['while opening the DM', 'during channel reservation'] as const)('does not post a first marker when desktop decides %s', async (when) => {
