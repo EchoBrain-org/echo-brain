@@ -21,7 +21,7 @@ import type Database from "better-sqlite3";
 import { appendAuditRowV1 } from "./audit-row-v1.js";
 import { canonicalSourceContentV1, sourceContentSha256V1 } from "@echo-brain/organization-processing/core";
 import type { MeetingDocument } from "@echo-brain/organization-processing/core";
-import type { PersonImportedMeetingReviewV1, PersonItemRefV1 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, type PersonImportedMeetingReviewV1, type PersonItemRefV1 } from "@echo-brain/organization-api";
 import type {
   OriginalContextReleaseV1,
   OriginalContextCitationV1,
@@ -181,11 +181,32 @@ function queryTerms(query: string): readonly string[] {
   return terms.filter(term => !PERSON_QUERY_FUNCTION_WORDS_V1.has(term) || acronyms.has(term));
 }
 
+/**
+ * A packet's heading: the title, whole up to the size a label has in transit and cut there at a character boundary.
+ * A limit that stays (ADR-0055): a packet is a stored 3,072-byte format whose heading and text share its bytes, so a
+ * title of any length would leave the text little room or none, and a label has a 1,024-byte transport bound. Nothing
+ * is lost to the cut: `packets` packs a cut title whole with the text.
+ */
+function packetHeading(title: string): string {
+  if (Buffer.byteLength(title, "utf8") <= PERSON_EVIDENCE_LABEL_MAX_BYTES_V1) return title;
+  let heading = "";
+  let bytes = 0;
+  for (const character of title) {
+    bytes += Buffer.byteLength(character, "utf8");
+    if (bytes > PERSON_EVIDENCE_LABEL_MAX_BYTES_V1) break;
+    heading += character;
+  }
+  return heading;
+}
+
 function packets(title: string, body: string): readonly string[] {
-  const heading = title.normalize("NFC");
+  const whole = title.normalize("NFC");
+  const heading = packetHeading(whole);
   const available = MAXIMUM_PACKET_BYTES - Buffer.byteLength(`${heading}\n`, "utf8");
-  if (available < 1) unavailable();
-  const characters = [...body.normalize("NFC")];
+  const text = body.normalize("NFC");
+  // A cut title is packed whole ahead of the text, so every word of it is still found and read. Not when the text
+  // already carries it (a note whose first line is its title), and a source with no text still has no packet.
+  const characters = [...(heading === whole || text === "" || text.includes(whole) ? text : `${whole}\n${text}`)];
   const values: string[] = [];
   let offset = 0;
   while (offset < characters.length) {
@@ -200,7 +221,6 @@ function packets(title: string, body: string): readonly string[] {
       currentBytes += characterBytes;
       end += 1;
     }
-    if (current.length === 0) unavailable();
     values.push(`${heading}\n${current}`);
     if (end === characters.length) break;
     // A fixed overlap exceeds the validated 64-byte lexical-term bound. It
@@ -237,11 +257,11 @@ function firstPacket(title: string, body: string): { readonly index: number; rea
   return Object.freeze({ index: 0, text: packets(title, body)[0]! });
 }
 
-/** Labels cross the public API boundary; evidence retains the full filename. */
+/** Labels cross the public API boundary; evidence retains the full filename or title. */
 function presentationLabel(value: string): string {
-  // Upload filenames deliberately permit a broader set of Unicode than Ask
-  // citation labels. This is presentation-only; packets and anchors retain
-  // the exact immutable filename.
+  // Upload filenames and note titles permit more than an Ask citation label
+  // does: one trimmed NFC line of at most 200 characters. This is
+  // presentation-only; packets and anchors retain the immutable filename or title.
   const sanitized = value.normalize("NFC").replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").trim();
   const label = sanitized.length === 0 ? "Saved context" : sanitized;
   const codepoints = [...label];
@@ -258,7 +278,7 @@ function originalPacketAtomV1(row: SourceRow | DocumentRow, packet: { readonly i
     kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id,
     source_sha256: row.source_sha256, representation_sha256: row.representation_sha256,
     anchor_sha256: canonicalSha256(anchor), ...(document ? { document_id: row.document_id } : {}),
-    label: document ? presentationLabel(row.title) : row.title, text: packet.text,
+    label: presentationLabel(row.title), text: packet.text,
   });
 }
 
