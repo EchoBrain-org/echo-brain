@@ -21,12 +21,30 @@ export interface PersonExternalIdentityRuntimeInputV1 {
     readonly principal_id: string;
     readonly membership_id: string;
   }) => "employee" | "owner";
+  /**
+   * Whether the Authority still holds this exact membership active. A removed
+   * or unknown one is not; a failed read throws and decides nothing.
+   */
+  readonly membership_active: (input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+  }) => boolean;
 }
 
 export interface OpenedPersonExternalIdentityRuntimeV1 {
   /** The currently-versioned external-identity HTTP application. */
   readonly application: ProviderHttpApplicationV1;
   tools(accessToken: string): Promise<readonly OrganizationPersonToolV4[]>;
+  /**
+   * The Authority removed this membership: its external identity link and any
+   * link proof still under way end at `now`, the Authority's time. A system
+   * action with no Person session; repeating it changes nothing.
+   */
+  endMembershipLinks(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly now: string;
+  }): void;
   close(): void;
 }
 

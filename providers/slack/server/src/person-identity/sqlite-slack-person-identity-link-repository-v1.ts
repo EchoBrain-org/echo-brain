@@ -45,6 +45,11 @@ export interface CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
     readonly principal_id: string;
     readonly membership_id: string;
   }) => "employee" | "owner";
+  /** Whether the Authority still holds this membership active: a link left on one it does not is stale. */
+  readonly membership_active: (input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+  }) => boolean;
   readonly slack: SlackIdentityProviderV1;
   readonly slack_token_access: SlackBotTokenAccessV1;
   /** Synchronously clears short-lived browser proof after a durable revoke. */
@@ -587,6 +592,18 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     });
   }
 
+  /**
+   * The Authority removed this membership: its Slack links and pending DM proofs end, whatever connection is active.
+   * A system action with no Person session; repeating it changes nothing.
+   */
+  endMembershipSlackIdentity(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly now: string;
+  }): void {
+    this.transaction(() => this.endMembershipLinks(input, input.now));
+  }
+
   async readSlackToken(
     tool: ActiveSlackOrganizationTool,
     options?: { readonly force_refresh?: boolean },
@@ -632,6 +649,15 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
     });
   }
 
+  /** Revokes one membership's active Slack links and expires its pending DM proofs. The caller owns the transaction. */
+  private endMembershipLinks(membership: { readonly principal_id: string; readonly membership_id: string }, now: string): void {
+    this.options.database.prepare(`UPDATE organization_external_human_link_current SET current_status = 'revoked', updated_at = ?
+      WHERE principal_id = ? AND membership_id = ? AND provider_issuer = 'https://slack.com' AND current_status = 'active'`).run(
+      now, membership.principal_id, membership.membership_id);
+    this.options.database.prepare(`UPDATE organization_person_slack_link_challenges SET status = 'expired', completed_at = ?
+      WHERE membership_id = ? AND status = 'pending'`).run(now, membership.membership_id);
+  }
+
   private upsertExternalHumanLink(input: {
     readonly verification_event_id: string;
     readonly person_session: PersonSlackIdentityLinkSession;
@@ -647,12 +673,20 @@ export class SqliteSlackPersonIdentityLinkRepositoryV1 implements SlackPersonIde
       AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '') AND current_status = 'active'`).get(
       input.person_session.membership_id, active.connection.provider_tenant_id, active.connection.provider_enterprise_id,
     ) as { external_identity_link_id: string; principal_id: string; membership_id: string; provider_subject_id: string } | undefined;
-    const subject = this.options.database.prepare(`SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
+    let subject = this.options.database.prepare(`SELECT external_identity_link_id, principal_id, membership_id, provider_subject_id
       FROM organization_external_human_link_current WHERE provider_issuer = 'https://slack.com' AND provider_tenant_kind = 'workspace'
       AND provider_tenant_id = ? AND COALESCE(provider_enterprise_id, '') = COALESCE(?, '') AND provider_subject_id = ?
       AND current_status = 'active'`).get(
       active.connection.provider_tenant_id, active.connection.provider_enterprise_id, input.provider_subject_id,
     ) as { external_identity_link_id: string; principal_id: string; membership_id: string; provider_subject_id: string } | undefined;
+    // A link whose membership the Authority no longer holds active is stale: its removal never reached the link
+    // write (it stopped between its two writes, or predates removals ending links). It ends here, and the proving
+    // membership makes its own link below, inheriting nothing.
+    if (subject !== undefined && subject.membership_id !== input.person_session.membership_id &&
+      !this.options.membership_active({ principal_id: subject.principal_id, membership_id: subject.membership_id })) {
+      this.endMembershipLinks(subject, input.now);
+      subject = undefined;
+    }
     if ((member !== undefined && member.provider_subject_id !== input.provider_subject_id) ||
       (subject !== undefined && (subject.principal_id !== input.person_session.principal_id || subject.membership_id !== input.person_session.membership_id)) ||
       (member !== undefined && subject !== undefined && member.external_identity_link_id !== subject.external_identity_link_id)) {

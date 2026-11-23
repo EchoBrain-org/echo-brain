@@ -185,6 +185,21 @@ describe('Slack approval presenter V1', () => {
     expect(f.calls).toEqual(['open', 'post', 'publish']);
   });
 
+  it('never opens a DM for a reviewer whose membership is no longer active, though their Slack link still resolves', async () => {
+    const f = fixture(); f.stage('apr_live', { reviewer_active: false });
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual([]); expect(row(f)).toBeUndefined();
+  });
+
+  it('makes no further Slack call for a card in flight once its reviewer was removed and their link ended', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    markInFlight(f);
+    f.proposal = { ...proposal(id), reviewer_active: false }; f.current = false;
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: null });
+  });
+
   it.each(['while opening the DM', 'during channel reservation'] as const)('does not post a first marker when desktop decides %s', async (when) => {
     const f = fixture(); const id = f.stage();
     const decide = () => { f.proposal = { ...proposal(id), status: 'publishing', decided_on: 'desktop' }; };

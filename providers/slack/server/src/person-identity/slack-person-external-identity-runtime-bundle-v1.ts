@@ -181,6 +181,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
           state_lineage_id: runtime.state_lineage_id,
           authentication: runtime.authentication,
           membership_type: runtime.membership_type,
+          membership_active: runtime.membership_active,
           slack: input.provider,
           slack_token_access: {
             readActiveSlackBotToken: (connection, options) => input.bot_token_source.botToken(connection, options),
@@ -246,6 +247,7 @@ export function createSlackPersonExternalIdentityRuntimeBundleV1(input: {
             return [Object.freeze({ tool_id: 'slack', display_name: 'Slack (approval notifications)', availability: 'unavailable' as const,
               personal_status: 'unavailable' as const, external_scope_id: null, external_subject_id: null, organization_setup: organizationSetup })];
           },
+          endMembershipLinks: (membership: Parameters<typeof application.endMembershipLinks>[0]) => application.endMembershipLinks(membership),
           close: () => database.close(),
         });
       } catch (error) {

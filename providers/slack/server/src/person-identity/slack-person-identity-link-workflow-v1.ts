@@ -78,6 +78,12 @@ export interface SlackPersonIdentityLinkRepositoryPort {
     readonly person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
     readonly now: string;
   }): readonly OrganizationPersonToolV2[];
+  /** Ends a removed membership's links and pending DM proofs; repeating it changes nothing. */
+  endMembershipSlackIdentity(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly now: string;
+  }): void;
   /** The tool's bot token, read per use; refused once the tool no longer names the active connection. */
   readSlackToken(
     tool: ActiveSlackOrganizationTool,
@@ -213,7 +219,7 @@ function repositoryOperation<T>(operation: () => T): T {
  * `application/` would weaken the Authority's inward dependency boundary.
  */
 export class SlackPersonIdentityLinkWorkflowV1 {
-  /** Fences DM-proof provider work that started before a local disconnect. */
+  /** Fences DM-proof provider work that started before a local disconnect or the membership's removal. */
   private readonly disconnect_generation_by_membership = new Map<string, number>();
 
   constructor(
@@ -234,6 +240,19 @@ export class SlackPersonIdentityLinkWorkflowV1 {
 
   async disconnect(input: unknown, accessToken: string) {
     return this.observe("person_tool_completion", () => this.disconnectInternal(input, accessToken));
+  }
+
+  /**
+   * The Authority removed this membership. Its link and pending proofs end the way a disconnect ends them, as a
+   * system action: there is no Person session to authenticate, and repeating it changes nothing.
+   */
+  endMembershipLinks(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly now: string;
+  }): void {
+    this.options.repository.endMembershipSlackIdentity(input);
+    this.invalidatePendingProofs(input.membership_id);
   }
 
   private observe<T>(phase: CoreRuntimePhaseV1, operation: () => Promise<T>): Promise<T> {
@@ -589,11 +608,7 @@ export class SlackPersonIdentityLinkWorkflowV1 {
         now: current.checked_at,
       }),
     );
-    this.disconnect_generation_by_membership.set(
-      session.membership_id,
-      this.disconnectGeneration(session.membership_id) + 1,
-    );
-    this.options.invalidate_browser_attempts?.(session.membership_id);
+    this.invalidatePendingProofs(session.membership_id);
     return validateOrganizationPersonTools({
       schema_version: 2,
       kind: "echo-organization-person-tools",
@@ -601,6 +616,15 @@ export class SlackPersonIdentityLinkWorkflowV1 {
       membership_id: current.membership_id,
       tools,
     });
+  }
+
+  /** After the durable revoke: fences this membership's DM-proof work in flight and cancels its browser attempts. */
+  private invalidatePendingProofs(membershipId: string): void {
+    this.disconnect_generation_by_membership.set(
+      membershipId,
+      this.disconnectGeneration(membershipId) + 1,
+    );
+    this.options.invalidate_browser_attempts?.(membershipId);
   }
 
   private disconnectGeneration(membershipId: string): number {

@@ -27,6 +27,16 @@ interface EmployeeIdentityFactory {
   next(prefix: "prn" | "mem"): string;
 }
 
+/** What a removed membership holds outside the Authority's database: its link in an external identity provider. */
+interface MembershipExternalLinks {
+  /** Ends that link and any link proof still under way. Repeating it changes nothing. */
+  endMembershipLinks(input: {
+    readonly principal_id: string;
+    readonly membership_id: string;
+    readonly now: string;
+  }): void;
+}
+
 function validateEmployeeName(value: string): void {
   if (
     typeof value !== "string" ||
@@ -75,6 +85,7 @@ export class PersonEmployeeLifecycleApplication {
   constructor(
     private readonly sessions: PersonIdentitySessionApplication,
     private readonly identities: EmployeeIdentityFactory,
+    private readonly links: MembershipExternalLinks,
   ) {}
 
   invite(input: {
@@ -166,24 +177,39 @@ export class PersonEmployeeLifecycleApplication {
   revoke(input: { access_token: string; email: string }): void {
     validateDurableEmployeeEmail(input.email);
     const emailSha256 = personLoginGrantExpectedEmailSha256(input.email);
-    this.sessions.withAuthenticatedMembershipWrite({
+    // First write, in the Authority's database: the membership ends, and its sessions and sign-in with it.
+    const { membership, observedAt } = this.sessions.withAuthenticatedMembershipWrite({
       access_token: input.access_token,
-      commit: (authorization, transaction) => {
+      commit: (authorization, transaction, observedAt) => {
         ownerOnly(authorization.membership_type);
+        // The employee's active membership, or else their latest removed one, as it was before this removal.
         const membership = transaction.employeeMembershipByEmailSha256(emailSha256);
-        if (membership === undefined || membership.status !== "active") {
-          throw new AuthorityOperationError("not_found", "active employee was not found");
+        if (membership?.status === "active") {
+          transaction.invalidatePendingPersonLoginGrants(membership.membership_id);
+          if (
+            transaction.revokeEmployeeMembership(
+              membership.membership_id,
+              "owner_revoked_employee",
+            ) === undefined
+          ) {
+            throw new AuthorityOperationError("conflict", "employee membership changed");
+          }
         }
-        transaction.invalidatePendingPersonLoginGrants(membership.membership_id);
-        if (
-          transaction.revokeEmployeeMembership(
-            membership.membership_id,
-            "owner_revoked_employee",
-          ) === undefined
-        ) {
-          throw new AuthorityOperationError("conflict", "employee membership changed");
-        }
+        return { membership, observedAt };
       },
     });
+    // Second write, in the provider's own database, so outside that transaction. It runs only once the membership
+    // has ended, and again for an employee already removed: a removal that stopped between its two writes never
+    // leaves the membership active, and running it again finishes it.
+    if (membership !== undefined) {
+      this.links.endMembershipLinks({
+        principal_id: membership.principal_id,
+        membership_id: membership.membership_id,
+        now: observedAt,
+      });
+    }
+    if (membership?.status !== "active") {
+      throw new AuthorityOperationError("not_found", "active employee was not found");
+    }
   }
 }
