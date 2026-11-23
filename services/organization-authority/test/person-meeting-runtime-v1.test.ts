@@ -37,6 +37,8 @@ import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-
 import { writeFileSync } from 'node:fs';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
+import { openGranolaPersonMeetingProviderV1 } from '../src/composition/granola-person-live-runtime-v1.js';
+import { fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
 import { validateApprovalDecisionRequestV1, type AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
@@ -1225,6 +1227,80 @@ describe('personal meeting intake uses the shared processing path', () => {
     expect(failing.sources[0]).toMatchObject({ error: expect.stringContaining('needs attention'), checked_at: expect.any(String) });
     await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: failing.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', error: null, checked_at: null });
+  });
+  it('stops the watch when the person disconnects Granola, so another account starts as its own source and what was kept stays', async () => {
+    const f = await fixture(), connections = new Database(':memory:');
+    // The real Granola provider over a fake Granola with two accounts, each already holding one meeting.
+    const accounts = { a: { email: 'a@example.test', workspace: '00000000-0000-4000-8000-0000000000a1', meeting: id },
+      b: { email: 'b@example.test', workspace: '00000000-0000-4000-8000-0000000000b1', meeting: '00000000-0000-4000-8000-0000000000b2' } };
+    let signedIn = accounts.a;
+    const mcp: string[] = [];
+    const granolaFetch: typeof fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body)), { name, arguments: args } = request.params;
+      mcp.push(name);
+      const meeting = `id="${signedIn.meeting}" title="Pilot plan" date="Oct 2, 2026 8:08 PM PDT" url="https://notes.granola.ai/d/${signedIn.meeting}"`;
+      const text = name === 'get_account_info' ? JSON.stringify({ email: signedIn.email, active_workspace: { id: signedIn.workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } })
+        : name === 'list_meeting_folders' ? JSON.stringify({ count: 0, folders: [] })
+        : name === 'search_meetings' ? `<pagination has_more="false" total_count="1" completion_status="exhausted" />\n\n<meetings_data count="1"><meeting ${meeting} captured_by_me="true" updated_at="2026-10-02T20:38:00.000-07:00" /></meetings_data>`
+        : name === 'get_meetings' ? `<meetings_data count="1"><meeting ${meeting}><summary>Send the pilot plan.</summary></meeting></meetings_data>`
+        : JSON.stringify({ id: args.meeting_id, created_at: '2026-08-29T22:14:34.163-07:00', transcript: 'Send the pilot plan.' });
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
+    };
+    const nango = fakeConfluenceNangoV1();
+    const granola = openGranolaPersonMeetingProviderV1({ state_directory: 'unused', sessions: f.sessions, resources: { coordinates: f.context.coordinates },
+      nango_authorization: () => 'unused', seams: { database: connections, nango: nango.nango, fetch: granolaFetch } });
+    const runtime = f.create([granola.provider], { processor: llmProcessor(JSON.stringify({ signals: [extractedItem('action', 'Send the pilot plan.', ['T1'])] })) });
+    const tool = async (verb: 'connect' | 'status' | 'disconnect', body: Record<string, unknown> = {}) => {
+      const response = await runtime.applications.find(application => application.routes.some(route => route.route_id === `granola-${verb}`))!.accept({ route_id: `granola-${verb}`, method: 'POST',
+        path: `/v1/person/tools/granola/${verb}`, headers: { authorization: 'Bearer owner' }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...body })) });
+      if (!('body' in response)) throw new Error('Expected JSON');
+      return response.body as Record<string, unknown>;
+    };
+    const connectAs = async (account: typeof signedIn) => { signedIn = account; const { attempt } = await tool('connect'); nango.finish(); return tool('status', { attempt }); };
+    const pass = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    const watchMine = async () => f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: (await f.call(runtime, { operation: 'home' })).settings_sha256 });
+    // What ECHO keeps of the person's meetings: the retained originals, their reviews and records, and the notes in the person's own list.
+    const kept = async () => ({ originals: f.db.prepare('SELECT * FROM authority_source_revisions_v1 ORDER BY revision_id').all(),
+      records: f.record.prepare('SELECT canonical_envelope FROM organization_record_log').all(),
+      reviews: await f.reviewCall(runtime, { operation: 'reviews' }), listed: (await f.listRoute().list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items });
+    try {
+      // Account A: one meeting kept and approved into a record, then a watch on the person's meetings, with its baseline taken.
+      expect(await connectAs(accounts.a)).toMatchObject({ status: 'complete' });
+      const { pending, opened } = await f.pendingReview(runtime);
+      await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-kept', action: 'approve', routes: f.routes(opened), owners: [] });
+      await runtime.processing.recoverV4Appends(new AbortController().signal);
+      await watchMine(); await pass();
+      const [former] = (await f.call(runtime, { operation: 'home' })).sources;
+      expect(former).toMatchObject({ watch: 'mine', baseline: true, error: null });
+      const before = await kept();
+      expect(before).toMatchObject({ originals: [expect.anything()], records: [expect.anything()], reviews: { reviews: [expect.objectContaining({ status: 'approved' })] }, listed: [expect.objectContaining({ kind: 'imported_meeting' })] });
+
+      // The person disconnects, then connects account B.
+      expect(await tool('disconnect')).toEqual({ schema_version: 1, connected: false });
+      expect(await runtime.tools('owner')).toMatchObject([{ tool_id: 'granola', personal_status: 'unlinked' }]);
+      expect(await connectAs(accounts.b)).toMatchObject({ status: 'complete' });
+      mcp.length = 0;
+      // Past the former watch's next check, so a pass on its source would run now.
+      const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 301_000);
+      try { await pass(); await pass(); } finally { later.mockRestore(); }
+      const passes = [...mcp];
+      // The former account's source is off and quiet. Left on, its watch would fail every pass: account B cannot read it.
+      expect(await f.call(runtime, { operation: 'home' })).toMatchObject({ connected: true, email: accounts.b.email,
+        sources: [{ source_key: former!.source_key, watch: 'off', baseline: false, pending_imports: [], checked_at: null, error: null }] });
+      expect(passes).toEqual([]);
+
+      // Saved again, the watch is account B's own source with a fresh baseline: the meeting B already held is not imported.
+      await watchMine(); await pass(); await pass();
+      const sources = (await f.call(runtime, { operation: 'home' })).sources;
+      expect(sources).toHaveLength(2);
+      expect(sources.find(source => source.source_key === former!.source_key)).toMatchObject({ watch: 'off', error: null });
+      const fresh = sources.find(source => source.source_key !== former!.source_key)!;
+      expect(fresh).toMatchObject({ watch: 'mine', baseline: true, pending_imports: [], error: null });
+      // Its baseline marked the meeting B already held as seen, and read none of it.
+      expect(f.intake.checkpoint(fresh.source_key)).toMatchObject({ seen: { [accounts.b.meeting]: expect.any(String) } });
+      expect(mcp.filter(name => name === 'get_meetings' || name === 'get_meeting_transcript')).toEqual([]);
+      expect(await kept()).toEqual(before);
+    } finally { runtime.close(); granola.close(); connections.close(); f.db.close(); }
   });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);

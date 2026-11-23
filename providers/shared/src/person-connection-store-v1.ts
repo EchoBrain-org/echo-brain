@@ -132,6 +132,13 @@ export class PersonConnectionStoreV1 {
     if (row === undefined) return undefined;
     return this.cancel(person, row.attempt);
   }
+  /**
+   * A person's own Disconnect ends the account pin: with no saved row, `begin` expects no account or site, so the next
+   * consent accepts whichever the provider verifies. Only a switched-off connection is forgotten; one completed since stays.
+   */
+  forget(person: ConnectedPersonV1): void {
+    this.db.prepare(`DELETE FROM ${this.bindingTable} WHERE person_key=? AND json_extract(body_json, '$.active')=0`).run(this.key(person));
+  }
   requireCurrent(binding: PersonConnectorReadBindingV1): StoredPersonConnectionV1 {
     const current = this.current({ organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id });
     if (current === undefined || !current.active || canonicalSha256(current.binding) !== canonicalSha256(binding)) this.provider.failure('stale_access_state');

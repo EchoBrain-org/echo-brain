@@ -332,3 +332,139 @@ describe('person connection lifecycle request credential reuse', () => {
     expect(subject.providerFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+const otherAccount = 'other@example.test';
+const otherWorkspace = '00000000-0000-4000-8000-000000000008';
+
+/** One person's consent flow over a real store; the test sets the account and workspace the provider verifies. */
+function consent() {
+  const database = new Database(':memory:');
+  databases.push(database);
+  const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+  const verified = { account, workspace };
+  const connections = new Map<string, Readonly<Record<string, string>>>();
+  let pending: Readonly<Record<string, string>> = {}, consents = 0;
+  const nango = {
+    connect: vi.fn(async (tags: Readonly<Record<string, string>>) => { pending = tags; return { link: 'https://connect.nango.dev/fixture' }; }),
+    find: vi.fn(async (tags: Readonly<Record<string, string>>) => [...connections].find(([, saved]) => saved.echo_attempt === tags.echo_attempt)?.[0]),
+    connection: vi.fn(async (saved: string) => ({ tags: connections.get(saved)!, access_token: 'synthetic-access-token' })),
+    disconnect: vi.fn(async (saved: string, _signal?: AbortSignal) => { connections.delete(saved); }),
+  };
+  const { application } = createPersonConnectionLifecycleV1({
+    provider: GRANOLA_PERSON_PROVIDER_V1, store, nango, fetch: vi.fn() as unknown as typeof fetch,
+    authenticate: () => ({ ...person, authorization_sha256: canonicalSha256(person) }),
+    verify: async (_authenticated, input) => { input.require_account(verified.account); return { account_id: verified.account, scope_id: verified.workspace, origin }; },
+  });
+  const session = { access_token: 'person-session' };
+  /** The person approves the pending consent in the browser. */
+  const approve = () => { connections.set(`connection-${++consents}`, pending); };
+  return { store, nango, application, session, approve, tool: () => application.tool(session),
+    /** Connect, approve as this account in this workspace, and read the attempt's outcome. */
+    async connectAs(who = account, where = workspace) {
+      verified.account = who; verified.workspace = where;
+      const begun = await application.connect(session);
+      approve();
+      return application.status({ ...session, attempt: begun.attempt });
+    },
+  };
+}
+
+describe('person connection account pin', () => {
+  it('accepts whichever account and workspace the provider verifies once the person has disconnected', async () => {
+    const subject = consent();
+    expect(await subject.connectAs()).toMatchObject({ status: 'complete' });
+    const first = subject.store.current(person)!;
+
+    expect(await subject.application.disconnect(subject.session)).toEqual({ schema_version: 1, connected: false });
+    expect(subject.nango.disconnect).toHaveBeenLastCalledWith(first.reference, undefined);
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked', external_scope_id: null, external_subject_id: null });
+
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'complete', failure_reason: null });
+    expect(subject.tool()).toMatchObject({ personal_status: 'linked', external_scope_id: otherWorkspace, external_subject_id: otherAccount });
+  });
+
+  it.each([['account', otherAccount, workspace], ['workspace', account, otherWorkspace]] as const)('refuses another %s on a reconnect without a Disconnect', async (_what, who, where) => {
+    const subject = consent();
+    await subject.connectAs();
+
+    expect(await subject.connectAs(who, where)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+    // The refused reconnect leaves the connection switched off and still pinned; the first account is still accepted.
+    expect(subject.tool()).toMatchObject({ personal_status: 'revoked' });
+    expect(await subject.connectAs(who, where)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+    expect(await subject.connectAs()).toMatchObject({ status: 'complete' });
+    expect(subject.tool()).toMatchObject({ personal_status: 'linked', external_scope_id: workspace, external_subject_id: account });
+  });
+
+  it('keeps the pin on a connection the system switched off, until the person disconnects', async () => {
+    const subject = consent();
+    await subject.connectAs();
+    const first = subject.store.current(person)!;
+    // As a provider does when it sees another account behind the grant.
+    subject.store.revoke(person);
+    expect(subject.tool()).toMatchObject({ personal_status: 'revoked' });
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+
+    await subject.application.disconnect(subject.session);
+    expect(subject.nango.disconnect).toHaveBeenLastCalledWith(first.reference, undefined);
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'complete' });
+    expect(subject.tool()).toMatchObject({ personal_status: 'linked', external_scope_id: otherWorkspace, external_subject_id: otherAccount });
+  });
+
+  it('disconnects a switched-off connection as it does a live one', async () => {
+    const subject = consent();
+    await subject.connectAs();
+    subject.store.revoke(person);
+    expect(subject.tool()).toMatchObject({ personal_status: 'revoked' });
+
+    expect(await subject.application.disconnect(subject.session)).toEqual({ schema_version: 1, connected: false });
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
+    expect(subject.store.current(person)).toBeUndefined();
+  });
+
+  it.each(['a first consent', 'a reconnect'])('cancels %s still pending when the person disconnects, so a late approval binds nothing', async pending => {
+    const subject = consent();
+    if (pending === 'a reconnect') await subject.connectAs();
+    const begun = await subject.application.connect(subject.session);
+
+    await subject.application.disconnect(subject.session);
+    expect(await subject.application.status({ ...subject.session, attempt: begun.attempt })).toMatchObject({ status: 'cancelled', failure_reason: null });
+    subject.approve();
+    expect(await subject.application.status({ ...subject.session, attempt: begun.attempt })).toMatchObject({ status: 'cancelled' });
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
+  });
+
+  it('keeps a switched-off connection and its pin while its remote grant could not be deleted, and finishes on the next Disconnect', async () => {
+    const subject = consent();
+    await subject.connectAs();
+    const first = subject.store.current(person)!;
+    subject.nango.disconnect.mockRejectedValueOnce(new Error('synthetic Nango outage'));
+
+    await expect(subject.application.disconnect(subject.session)).rejects.toThrow('synthetic Nango outage');
+    // Local revocation won, and the reference stays so the remote deletion can be tried again.
+    expect(subject.tool()).toMatchObject({ personal_status: 'revoked' });
+    expect(subject.store.current(person)).toMatchObject({ active: false, reference: first.reference });
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+
+    await subject.application.disconnect(subject.session);
+    expect(subject.nango.disconnect).toHaveBeenLastCalledWith(first.reference, undefined);
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'complete' });
+  });
+
+  it('keeps a connection completed while its Disconnect was still deleting the former grant', async () => {
+    const subject = consent();
+    await subject.connectAs();
+    const deleting = deferred<void>();
+    subject.nango.disconnect.mockImplementationOnce(() => deleting.promise);
+
+    const disconnecting = subject.application.disconnect(subject.session);
+    expect(await subject.connectAs()).toMatchObject({ status: 'complete' });
+    const fresh = subject.store.current(person)!;
+    deleting.resolve();
+    await disconnecting;
+
+    expect(subject.store.current(person)).toEqual(fresh);
+    expect(subject.tool()).toMatchObject({ personal_status: 'linked' });
+  });
+});

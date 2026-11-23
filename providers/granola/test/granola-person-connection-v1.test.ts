@@ -188,6 +188,33 @@ describe('Granola verified account and meeting listings', () => {
       }
     } finally { db.close(); }
   });
+  it.each(['account', 'workspace'] as const)('moves to another %s only after the person disconnects, as a meeting source of its own', async change => {
+    const db = new Database(':memory:');
+    try {
+      const other = change === 'account' ? account('other@example.test') : account(undefined, '00000000-0000-4000-8000-000000000002');
+      let signedIn = account();
+      const { service } = await connected(db, name => name === 'get_account_info' ? signedIn : name === 'list_meeting_folders' ? folders : empty);
+      const session = { access_token: 'session' };
+      const first = await service.open(person, () => {});
+      // Granola answers as the other account: the read is refused and the connection is switched off (ADR-0030).
+      signedIn = other;
+      await expect(first.window(window)).rejects.toMatchObject({ code: 'stale_access_state' });
+      expect(service.tool(session)).toMatchObject({ personal_status: 'revoked' });
+      // A reconnect cannot silently move the same importer to that account.
+      const refused = await service.connect(session);
+      expect(await service.status({ ...session, attempt: refused.attempt })).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+      expect(service.tool(session)).toMatchObject({ personal_status: 'revoked' });
+      // The person's own Disconnect ends the pin.
+      expect(await service.disconnect(session)).toEqual({ schema_version: 1, connected: false });
+      expect(service.tool(session)).toMatchObject({ personal_status: 'unlinked' });
+      const accepted = await service.connect(session);
+      expect(await service.status({ ...session, attempt: accepted.attempt })).toMatchObject({ status: 'complete' });
+      expect(service.tool(session)).toMatchObject({ personal_status: 'linked', external_subject_id: other.email, external_scope_id: other.active_workspace.id });
+      // Another account is another meeting source: the former one's watch and seen meetings are not its own.
+      const next = await service.open(person, () => {});
+      expect(next.identity.instance_id).not.toBe(first.identity.instance_id);
+    } finally { db.close(); }
+  });
   it('browses the newest 50 meetings the person captured, or a listed folder\'s', async () => {
     const db = new Database(':memory:');
     try {

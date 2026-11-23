@@ -584,7 +584,28 @@ export function createPersonMeetingRuntimeV1(options: {
     observed.delete(setting.source_key);
     return setting;
   }
-  return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
+  /**
+   * A provider's connection routes, with one addition: a person's own Disconnect also stops their watch on that tool.
+   * A source is one person's one tool account, so the account they connect next is another source, with no watch and
+   * nothing seen. A watch left on the former account's source could never read again and would fail every pass.
+   * Queued imports stay pending, and what was kept stays (ADR-0030).
+   */
+  function connectionRoutes(provider: PersonMeetingProviderV1): ProviderHttpApplicationV1 {
+    const connection = provider.connection_http;
+    return { ...connection, async accept(request) {
+      const response = await connection.accept(request);
+      // The shared connection application names its four verbs `<tool>-<verb>`.
+      if (request.route_id !== `${provider.id}-disconnect`) return response;
+      const person = meetingIntakePersonV1(authenticate(request.headers.authorization?.slice(7) ?? ''));
+      const watched = intake.list(person).find(s => s.watch !== 'off' && s.source_adapter_id === provider.cursor.policy.source_adapter_id);
+      if (watched) {
+        ownerOf(watched.source_adapter_id).intake.watch(watched, { watch: 'off', folder_id: null }, null, () => {});
+        observed.delete(watched.source_key);
+      }
+      return response;
+    } };
+  }
+  return { applications: [...providers.map(connectionRoutes), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     tools: async (token: string) => providers.filter(p => p.listed !== false).map(p => p.tool(token)), approvals,
     /**
      * The change check's `reviews` area (desktop refresh and notifications v1, ADR-0036): each meeting `reviews` lists for a

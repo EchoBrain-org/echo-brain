@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectedTool } from '../../src/shared/protocol.js';
-import { byTestId, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, uncover } from './harness.js';
+import { byTestId, click, cover, elements, flush, Held, ok, plainHooks, render, rpcFor, startStore, storeLifecycle, text, uncover } from './harness.js';
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc, dropFile: vi.fn() }));
 vi.mock('preact/hooks', original => plainHooks(original));
@@ -18,6 +18,7 @@ beforeEach(() => {
     'tools.connect': () => ok({ attempt_id: `att_${++attempts}`, expires_at: '2026-10-31T12:30:00.000Z' }),
     'tools.status': () => ok(result),
     'tools.cancel': () => ok({ status: 'cancelled', failure_reason: null }),
+    'tools.disconnect': () => { tools = tools.map(tool => tool.tool_id === 'jira' ? jira : tool); return ok(null); },
   }, () => ({ active: [], archived: [] })));
 });
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params);
@@ -30,7 +31,7 @@ describe('connected tools', () => {
     const shown = render(Tools({ state: store.getState(), page: store.getState().tools! }));
     expect(elements(shown).filter(node => node.type === 'section' && node.props['aria-label']).map(node => node.props['aria-label']))
       .toEqual(['Needs attention', 'Connected', 'Available', 'Not turned on']);
-    expect(byTestId(shown, 'tool-row').map(text)).toEqual(['JJiraConnection stopped. Reconnect to keep using it.Reconnect', 'SSlackConnectedManage',
+    expect(byTestId(shown, 'tool-row').map(text)).toEqual(['JJiraConnection stopped. Reconnect to keep using it.ManageReconnect', 'SSlackConnectedManage',
       'CConfluenceNot connectedConnect', 'GGranolaNot turned on for your organization.']);
     cover(store); expect(store.pageCovered()).toBe(true);
     await uncover(store); expect(store.pageCovered()).toBe(false); expect(store.getState().tools?.items).toHaveLength(4);
@@ -46,12 +47,33 @@ describe('connected tools', () => {
     const { ToolConnect } = await import('../../src/renderer/screens/tools.js');
     const shown = render(ToolConnect({ sheet }));
     expect(elements(shown).filter(node => node.type === 'h2').map(text)).toEqual(['Jira was not connected']);
-    expect(text(byTestId(shown, 'tool-connect-failure'))).toBe('That Jira account does not match the one you connected before. Sign in with that account and try again.');
+    expect(text(byTestId(shown, 'tool-connect-failure'))).toBe('That Jira account does not match the one you connected before. Sign in with that account and try again, or disconnect first to connect a different account.');
     void store.connectTool(jira); await flush();
     expect(calls('tools.connect')).toHaveLength(2);
     expect(store.getState().sheet).toMatchObject({ phase: 'waiting' });
     store.cancelConnect(); await flush();
     expect(store.getState().sheet).toBeNull(); expect(calls('tools.cancel')[0]).toMatchObject({ attempt_id: 'att_2', tool_id: 'jira' });
+  });
+
+  it('a stopped connection can be disconnected from Manage, which leaves the tool not connected', async () => {
+    const stopped: ConnectedTool = { ...jira, status: 'revoked' };
+    tools[0] = stopped;
+    const store = await startStore(); await store.openTools(); await flush();
+    store.manageTool(stopped);
+    const sheet = store.getState().sheet!;
+    if (sheet.kind !== 'tool-manage') throw new Error('Missing manage sheet');
+    const { ToolManage } = await import('../../src/renderer/screens/tools.js');
+    const disconnect = byTestId(render(ToolManage({ sheet })), 'tool-disconnect');
+    expect(disconnect.map(text)).toEqual(['Disconnect']);
+    click(disconnect[0]); await flush();
+    expect(calls('tools.disconnect')).toEqual([expect.objectContaining({ tool_id: 'jira' })]);
+    expect(store.getState()).toMatchObject({ sheet: null, toast: 'Jira disconnected' });
+    expect(store.getState().tools?.items?.find(tool => tool.tool_id === 'jira')?.status).toBe('unlinked');
+    // Not connected (Granola's Manage opens then too), there is nothing to disconnect.
+    store.manageTool(jira);
+    const idle = store.getState().sheet!;
+    if (idle.kind !== 'tool-manage') throw new Error('Missing manage sheet');
+    expect(byTestId(render(ToolManage({ sheet: idle })), 'tool-disconnect')).toEqual([]);
   });
 
   it('Cancel ends a waiting connection and polling, even after another app was in front', async () => {

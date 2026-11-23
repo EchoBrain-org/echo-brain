@@ -96,7 +96,7 @@ const TOOL_REASONS: Record<string, (name: string) => string> = {
   provider_rejected: name => `${name} did not confirm the connection. Try again.`,
   provider_unavailable: name => `${name} is unavailable right now. Try again.`,
   identity_conflict: name => `This ${name} account is already connected to another ECHO person.`,
-  account_mismatch: name => `That ${name} account does not match the one you connected before. Sign in with that account and try again.`,
+  account_mismatch: name => `That ${name} account does not match the one you connected before. Sign in with that account and try again, or disconnect first to connect a different account.`,
   tool_unavailable: name => `${name} is not turned on for your organization.`,
   browser_unavailable: name => `The ${name} page could not be opened.`,
   expired: () => 'That took too long. Try again.',

@@ -49,6 +49,36 @@ describe('person-discovered workspace uses the shared consent lifecycle', () => 
       expect(store.current(person)?.active).toBe(false);
     } finally { database.close(); }
   });
+  it('forgets a switched-off connection, so the next consent expects no account or workspace', () => {
+    const database = new Database(':memory:');
+    try {
+      const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+      const first = store.begin(person);
+      store.complete(person, first.attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      store.revoke(person);
+      store.forget(person);
+      expect(store.current(person)).toBeUndefined();
+      const next = store.begin(person);
+      const other = store.complete(person, next.attempt, 'new-reference', '00000000-0000-4000-8000-000000000008', 'other@example.test', 'https://mcp.granola.ai');
+      expect(other).toMatchObject({ active: true, reference: 'new-reference' });
+      expect(other.binding).toMatchObject({ external_subject_id: 'other@example.test', external_scope_id: '00000000-0000-4000-8000-000000000008' });
+      expect(store.current(person)).toEqual(other);
+    } finally { database.close(); }
+  });
+  it('never forgets an active connection, nor another person\'s', () => {
+    const database = new Database(':memory:');
+    try {
+      const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+      const other = { ...person, principal_id: 'person-other', membership_id: 'membership-other' };
+      const kept = store.complete(person, store.begin(person).attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      store.complete(other, store.begin(other).attempt, 'other-reference', cloud, 'other@example.test', 'https://mcp.granola.ai');
+      store.revoke(other);
+      store.forget(person);
+      expect(store.current(person)).toEqual(kept);
+      expect(store.requireCurrent(kept.binding)).toEqual(kept);
+      expect(store.current(other)).toMatchObject({ active: false, reference: 'other-reference' });
+    } finally { database.close(); }
+  });
 });
 
 describe('shared Atlassian custody with separate product identities', () => {

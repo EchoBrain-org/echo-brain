@@ -194,7 +194,7 @@ it('connects Jira for the authenticated Person, audits tickets before Ask, and r
     expect(events()).toEqual(expect.arrayContaining([expect.objectContaining({ event: 'failed', diagnostic: expect.objectContaining({ phase: 'evidence_connection', evidence_source: 'ticket', result: 'authorization' }) })]));
     expect(telemetry.join('')).not.toContain('private-provider-error');
     expect((await post('/v1/person/tools/jira/disconnect', { schema_version: 1 })).status).toBe(200);
-    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'revoked', external_subject_id: null })]));
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'jira', personal_status: 'unlinked', external_subject_id: null })]));
     telemetry.length = 0;
     expect((await post('/v7/person/ask', { schema_version: 3, question: 'What is in Jira?' })).body).toMatchObject({
       outcome: 'not_found', parts: [expect.objectContaining({ status: 'not_found', gap: "I couldn't find this in the sources you can access." })],

@@ -72,7 +72,7 @@ export function createPersonToolConnectionVerbsV1(
   const messages: Readonly<Record<string, string>> = {
     provider_rejected: `${display_name} did not accept this connection. Try again.`,
     provider_unavailable: `${display_name} is unavailable right now. Try again.`,
-    account_mismatch: `That ${display_name} account does not match your previously connected ${display_name} account. Try again with that account.`,
+    account_mismatch: `That ${display_name} account does not match your previously connected ${display_name} account. Try again with that account, or disconnect first to connect a different account.`,
   };
   return {
     connect: {

@@ -267,6 +267,9 @@ export function createPersonConnectionLifecycleV1(options: {
       const stored = options.store.current(person);
       options.store.revoke(person); // Local revocation wins even if remote deletion/abort fails.
       if (stored !== undefined) await options.nango.disconnect(stored.reference, input.signal);
+      // The person's own Disconnect ends the account pin; a reconnect never does. A remote deletion that failed threw
+      // above, so the switched-off row keeps its reference and its pin until a Disconnect gets through.
+      options.store.forget(person);
       requirePerson(); return Object.freeze({ schema_version: 1 as const, connected: false as const });
     },
   }) });
