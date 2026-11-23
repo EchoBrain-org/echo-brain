@@ -6,12 +6,15 @@ import { encodeProjectCursorV1, frameCursorV1 } from "../src/adapters/persistenc
 import {
   decodePersonListCursorV1,
   decodePersonOpenCursorV1,
+  decodePersonReviewsCursorV1,
   encodePersonListCursorV1,
   encodePersonOpenCursorV1,
+  encodePersonReviewsCursorV1,
   type PersonListCursorBindingV1,
   type PersonListPositionsV1,
   type PersonOpenCursorBindingV1,
   type PersonOpenPositionV1,
+  type PersonReviewsCursorBindingV1,
 } from "../src/composition/person-list-cursor-v1.js";
 
 const ORGANIZATION = "org_person_list";
@@ -162,5 +165,52 @@ describe("person list and open cursors", () => {
     for (const position of Object.values(positions)) expect(Object.keys(position).every((key) => ["state", "added_at", "id"].includes(key))).toBe(true);
     const framed = Buffer.from(encodePersonListCursorV1(list(), WORST), "base64url");
     expect(framed.subarray(33).toString("utf8").split("\0")).toEqual([TIME, NOTE, TIME, DOCUMENT, TIME, MEETING]);
+  });
+});
+
+describe("reviews list cursors", () => {
+  const PRINCIPAL = "prn_33333333-3333-4333-8333-333333333333";
+  const APPROVAL = `apr_${"e".repeat(64)}`;
+  const reviewer = (changes: Partial<PersonReviewsCursorBindingV1> = {}): PersonReviewsCursorBindingV1 =>
+    ({ organization_id: ORGANIZATION, principal_id: PRINCIPAL, membership_id: MEMBERSHIP, ...changes });
+  /** The binding digest, restated so a change to what a reviews cursor binds fails here. */
+  const reviewsDigest = (binding: PersonReviewsCursorBindingV1): Buffer => Buffer.from(canonicalSha256({
+    schema_version: 1, kind: "echo-person-reviews-cursor-v1", operation: "reviews",
+    organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id,
+  }).slice(7), "hex");
+  const frame = (fields: readonly string[]) => frameCursorV1(4, reviewsDigest(reviewer()), fields);
+
+  it("round-trips a proposal's place in either part of the list, and carries nothing but that place", () => {
+    for (const rank of [0, 1] as const) {
+      const place = { rank, created_at: TIME, approval_id: APPROVAL };
+      const cursor = encodePersonReviewsCursorV1(reviewer(), place);
+      expect(cursor).toMatch(/^[A-Za-z0-9_-]{1,512}$/);
+      expect(decodePersonReviewsCursorV1(cursor, reviewer())).toEqual(place);
+    }
+    const framed = Buffer.from(encodePersonReviewsCursorV1(reviewer(), { rank: 1, created_at: TIME, approval_id: APPROVAL }), "base64url");
+    expect(framed.subarray(33).toString("utf8").split("\0")).toEqual(["1", TIME, APPROVAL]);
+  });
+
+  it("refuses a cursor replayed for another reviewer or under another list", () => {
+    const cursor = encodePersonReviewsCursorV1(reviewer(), { rank: 0, created_at: TIME, approval_id: APPROVAL });
+    refused(() => decodePersonReviewsCursorV1(cursor, reviewer({ membership_id: OTHER_MEMBERSHIP })));
+    refused(() => decodePersonReviewsCursorV1(cursor, reviewer({ principal_id: "prn_44444444-4444-4444-8444-444444444444" })));
+    refused(() => decodePersonReviewsCursorV1(cursor, reviewer({ organization_id: "org_other" })));
+    refused(() => decodePersonReviewsCursorV1(encodePersonListCursorV1(list(), WORST), reviewer()));
+    refused(() => decodePersonListCursorV1(cursor, list()));
+    // The same place framed as the list's version under the reviews binding.
+    refused(() => decodePersonReviewsCursorV1(frameCursorV1(2, reviewsDigest(reviewer()), ["0", TIME, APPROVAL]), reviewer()));
+  });
+
+  it("refuses a malformed place and anything that is not a cursor", () => {
+    expect(decodePersonReviewsCursorV1(frame(["0", TIME, APPROVAL]), reviewer())).toEqual({ rank: 0, created_at: TIME, approval_id: APPROVAL });
+    for (const fields of [
+      ["2", TIME, APPROVAL], ["", TIME, APPROVAL], ["00", TIME, APPROVAL], ["0", "2026-09-21T21:30:00Z", APPROVAL], ["0", "", APPROVAL],
+      ["0", TIME, APPROVAL.toUpperCase()], ["0", TIME, NOTE], ["0", TIME, ""], ["0", TIME], ["0", TIME, APPROVAL, ""],
+    ]) refused(() => decodePersonReviewsCursorV1(frame(fields), reviewer()));
+    const cursor = frame(["0", TIME, APPROVAL]);
+    for (const garbage of ["", "not a cursor", "AAAA", `${cursor}=`, cursor.slice(0, -1)]) refused(() => decodePersonReviewsCursorV1(garbage, reviewer()));
+    refused(() => encodePersonReviewsCursorV1(reviewer(), { rank: 0, created_at: "2026-09-21", approval_id: APPROVAL }));
+    refused(() => encodePersonReviewsCursorV1(reviewer(), { rank: 0, created_at: TIME, approval_id: NOTE }));
   });
 });

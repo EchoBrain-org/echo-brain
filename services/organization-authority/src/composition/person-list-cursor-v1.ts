@@ -5,15 +5,17 @@ import { frameCursorV1, unframeCursorV1 } from "../adapters/persistence/sqlite/p
 import { isCanonicalUtcMillisTimestampV1 } from "../application/canonical-utc-timestamp-v1.js";
 
 /**
- * Person list and open cursors (ADR-0024). Untrusted keysets, not MACs: a
- * forged position only filters rows the caller may read, and a cursor holds
- * nothing but positions the caller already received in this walk. The binding
- * digest refuses replay under another scope, person, membership, organization,
- * ref or operation.
+ * Person list and open cursors (ADR-0024), and the reviews list's. Untrusted
+ * keysets, not MACs: a forged position only filters rows the caller may read,
+ * and a cursor holds nothing but positions the caller already received in this
+ * walk. The binding digest refuses replay under another scope, person,
+ * membership, organization, ref or operation.
  */
 
 const LIST_VERSION = 2;
 const OPEN_VERSION = 3;
+const REVIEWS_VERSION = 4;
+const APPROVAL = /^apr_[0-9a-f]{64}$/;
 const NUMBER = /^(0|[1-9][0-9]{0,7})$/;
 const IDS = {
   note: /^(?:ctx|cap)_[0-9a-f]{64}$/,
@@ -32,6 +34,11 @@ export type PersonListPositionsV1 = Readonly<Record<PersonListSourceV1, PersonLi
 export type PersonOpenPositionV1 =
   | Readonly<{ kind: "document"; from_ordinal: number }>
   | Readonly<{ kind: "imported_meeting" | "note"; offset: number }>;
+/**
+ * A proposal's place in its reviewer's list, as the approval core orders it (its ApprovalProposalPlaceV1): undecided ones
+ * lead (rank 0), each part newest first, then by approval id. Restated here, so the list's cursors import no review code.
+ */
+export type PersonReviewsPositionV1 = Readonly<{ rank: 0 | 1; created_at: string; approval_id: string }>;
 
 export interface PersonListCursorBindingV1 {
   readonly scope: PersonListScopeV1;
@@ -41,6 +48,12 @@ export interface PersonListCursorBindingV1 {
 export interface PersonOpenCursorBindingV1 {
   readonly ref: PersonItemRefV1;
   readonly organization_id: string;
+  readonly membership_id: string;
+}
+/** The reviewer a reviews list is read for: the three ids its query filters by. */
+export interface PersonReviewsCursorBindingV1 {
+  readonly organization_id: string;
+  readonly principal_id: string;
   readonly membership_id: string;
 }
 
@@ -137,4 +150,32 @@ export function encodePersonOpenCursorV1(binding: PersonOpenCursorBindingV1, pos
 
 export function decodePersonOpenCursorV1(cursor: string, binding: PersonOpenCursorBindingV1): PersonOpenPositionV1 {
   return openPosition(binding.ref, unframeCursorV1(cursor, OPEN_VERSION, openBinding(binding)));
+}
+
+function reviewsBinding(binding: PersonReviewsCursorBindingV1): Buffer {
+  return digest({
+    schema_version: 1, kind: "echo-person-reviews-cursor-v1", operation: "reviews",
+    organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id,
+  });
+}
+
+function reviewsPosition(fields: readonly string[]): PersonReviewsPositionV1 {
+  const [rank, created_at, approval_id] = fields;
+  if (fields.length !== 3 || (rank !== "0" && rank !== "1") || !isCanonicalUtcMillisTimestampV1(created_at) || !APPROVAL.test(approval_id!)) invalid();
+  return Object.freeze({ rank: rank === "0" ? 0 : 1, created_at, approval_id: approval_id! });
+}
+
+/**
+ * The place of the last row a reviews page gave (the `reviews` operation of `/v1/person/reviews`): the next page is read
+ * after it. It holds that row's rank and approval id and the time its proposal was made, which a row does not show: all
+ * the reviewer's own, and only what the list orders on.
+ */
+export function encodePersonReviewsCursorV1(binding: PersonReviewsCursorBindingV1, position: PersonReviewsPositionV1): string {
+  const fields = [String(position.rank), position.created_at, position.approval_id];
+  reviewsPosition(fields);
+  return frameCursorV1(REVIEWS_VERSION, reviewsBinding(binding), fields);
+}
+
+export function decodePersonReviewsCursorV1(cursor: string, binding: PersonReviewsCursorBindingV1): PersonReviewsPositionV1 {
+  return reviewsPosition(unframeCursorV1(cursor, REVIEWS_VERSION, reviewsBinding(binding)));
 }

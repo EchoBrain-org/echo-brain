@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
-  PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
+  PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonReviewResultsV1, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -25,7 +25,8 @@ import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIn
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
 import { publishedApprovalOfRecordV1 } from '../adapters/persistence/sqlite/published-approval-records-v1.js';
-import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalPlaceV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { decodePersonReviewsCursorV1, encodePersonReviewsCursorV1 } from './person-list-cursor-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -108,6 +109,36 @@ const TOO_LONG: ReadonlyMap<string, { readonly held: string; readonly again: str
   ['input_too_long', { held: 'is held: it is longer than the extraction model\'s context window, so one extraction call cannot read it',
     again: 'Another attempt would be refused the same way; an operator can still authorize one.' }],
 ]);
+/** A value's size as a response carries it and its bound measures it: its JSON in UTF-8. */
+const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+/**
+ * What the rows of one `reviews` page may take: the bound the response is held to (the tool transport's, ADR-0055), less
+ * the page's own keys and the longest cursor (512 characters, the cursor framing's maximum). The route fills a page up to
+ * this, so the bound can no longer refuse a list for being long.
+ */
+const REVIEW_PAGE_ROWS_MAX_BYTES = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes({ reviews: [], next_cursor: '' }) - 512;
+/** `text` whole when its JSON is at most `bytes` long; else its longest start that is, with the ellipsis that says it was cut, and never half a surrogate pair. */
+function cutToJsonBytes(text: string, bytes: number): string {
+  if (jsonBytes(text) <= bytes) return text;
+  let kept = 0;
+  for (let low = 0, high = text.length; low <= high;) {
+    const middle = (low + high) >> 1;
+    if (jsonBytes(`${text.slice(0, middle)}…`) <= bytes) { kept = middle; low = middle + 1; } else high = middle - 1;
+  }
+  if (/[\uD800-\uDBFF]/.test(text.charAt(kept - 1)) && /[\uDC00-\uDFFF]/.test(text.charAt(kept))) kept -= 1;
+  return `${text.slice(0, kept)}…`;
+}
+/**
+ * A review row too large for a page of its own, made to fit one: its title and its first line are cut, to half the room
+ * each. Every other field stays, and the row stays on the list: a pending proposal that is not listed cannot be decided.
+ * Only the list's row is cut; `review_open` still answers from the whole text. The other fields are ids and counts: they
+ * would fill a page only with tens of thousands of projects on one proposal, and the response's own check would say so.
+ */
+function fitReviewRow(row: PersonMeetingReviewV2): PersonMeetingReviewV2 {
+  const room = REVIEW_PAGE_ROWS_MAX_BYTES - jsonBytes({ ...row, title: '', first_line: row.first_line === null ? null : '' });
+  const each = Math.floor(room / (row.first_line === null ? 1 : 2));
+  return { ...row, title: cutToJsonBytes(row.title, each), first_line: row.first_line === null ? null : cutToJsonBytes(row.first_line, each) };
+}
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -360,6 +391,25 @@ export function createPersonMeetingRuntimeV1(options: {
       records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids, ...(record.private === true ? { private: true as const } : {}) })) };
   }
   /**
+   * One page of a reviewer's list, from the start or from just after a cursor's place: rows in the list's order for as long
+   * as they fit the response, so a list of any length is answered and none fails for its size (ADR-0055). `next_cursor` is
+   * there only when a row is left: it names the last row given, and the next page is read after that row.
+   */
+  function reviewPage(core: ApprovalCoreV1, reviewer: MeetingIntakePersonV1, after: ApprovalProposalPlaceV1 | undefined): PersonReviewResultsV1['reviews'] {
+    const reviews: PersonMeetingReviewV2[] = [];
+    // The JSON bytes of the rows taken, commas included, and the place of the last one.
+    let bytes = 0, last: ApprovalProposalPlaceV1 | undefined;
+    for (const { place, view } of core.proposalsAfter(reviewer, after)) {
+      let row = reviewView(view), size = jsonBytes(row);
+      // A row that does not fit after the rows before it (its comma counted) starts the next page.
+      if (last !== undefined && bytes + 1 + size > REVIEW_PAGE_ROWS_MAX_BYTES) return { reviews, next_cursor: encodePersonReviewsCursorV1(reviewer, last) };
+      // So only a page's first row can be too large here: one that not even a page of its own holds whole.
+      if (size > REVIEW_PAGE_ROWS_MAX_BYTES) { row = fitReviewRow(row); size = jsonBytes(row); }
+      bytes += size + (last === undefined ? 0 : 1); reviews.push(row); last = place;
+    }
+    return { reviews };
+  }
+  /**
    * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion
    * the reviewer can read now ([] = Only me) and an action's owner is the meeting's proposal, editable; decided, each shows
    * its route (null = not kept; `private` when kept for the reviewer alone inside its projects) and its confirmed owner. A
@@ -380,7 +430,15 @@ export function createPersonMeetingRuntimeV1(options: {
   async function reviewResult(input: PersonReviewOperationV1, token: string, person: MeetingIntakePersonV1, current: () => void): Promise<unknown> {
     // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
     const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
-    if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
+    if (input.operation === 'reviews') {
+      if (reviewer === null) return { reviews: [] };
+      let after: ApprovalProposalPlaceV1 | undefined;
+      // A cursor names a place in this reviewer's own list and nothing else. One that does not read as that is refused
+      // with its reason, never guessed at.
+      try { after = input.cursor === undefined ? undefined : decodePersonReviewsCursorV1(input.cursor, reviewer); }
+      catch { throw new AuthorityOperationError('invalid_request', 'Review cursor is not one this list gave'); }
+      return reviewPage(await approvals(), reviewer, after);
+    }
     if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
     const approvalCore = await approvals();
     // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a

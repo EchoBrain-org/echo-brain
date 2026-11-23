@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { validatePersonReviewResultV1, type PersonMeetingOperationV2, type PersonMeetingResultsV2, type PersonOpenRefV1, type PersonReviewOperationV1, type PersonReviewResultsV1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, validatePersonReviewResultV1, type PersonMeetingOperationV2, type PersonMeetingResultsV2, type PersonOpenRefV1, type PersonReviewOperationV1, type PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { createGranolaMcpV1 } from '@echo-brain/provider-granola/granola-mcp-v1';
 import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
@@ -40,6 +40,7 @@ import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../s
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
 import { validateApprovalDecisionRequestV1, type AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
+import { encodePersonListCursorV1, encodePersonReviewsCursorV1, PERSON_LIST_START_V1 } from '../src/composition/person-list-cursor-v1.js';
 import { authorization, addMembership } from './fixtures/project-context-sqlite.js';
 import { meeting as original, decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -1537,6 +1538,177 @@ describe('personal meeting intake uses the shared processing path', () => {
     const core = await runtime.approvals();
     expect(await runtime.approvals()).toBe(core);
     expect(await f.create().approvals()).not.toBe(core);
+  });
+});
+
+// ADR-0055: a list that outgrows its response pages, it never fails. The transport bound is one response's, so a reviewer's
+// list is answered a page at a time in its own order: undecided first, then newest.
+describe('the reviews list pages at its transport bound', () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  type Runtime = ReturnType<Fixture['create']>;
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  /** Imports and processes `count` more meetings, from the `from`-th on: each a proposal titled 'Test meeting' and then `title`. */
+  async function propose(f: Fixture, runtime: Runtime, count: number, title: string, from = 0) {
+    f.revise(title);
+    for (let index = from; index < from + count; index++) {
+      await f.call(runtime, { operation: 'import', meeting_id: `00000000-0000-4000-8000-${String(100_000 + index).padStart(12, '0')}`, project_id: null, retain: true });
+      await f.processUntilIdle(runtime);
+    }
+  }
+  /** Proposals made in one instant: only their approval ids order them, so a page always ends between two of the same time. */
+  async function proposeAt(time: string, f: Fixture, runtime: Runtime, count: number, title: string, from = 0) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try { vi.setSystemTime(new Date(time)); await propose(f, runtime, count, title, from); } finally { vi.useRealTimers(); }
+  }
+  const reject = (f: Fixture, runtime: Runtime, approval_id: string) => f.reviewCall(runtime, { operation: 'review', approval_id, command_id: `reject-${approval_id.slice(4, 36)}`,
+    snapshot_sha256: f.db.prepare('SELECT approved_snapshot_sha256 FROM authority_live_approval_outbox_v2 WHERE approval_id=?').pluck().get(approval_id) as string,
+    action: 'reject', routes: [], owners: [] });
+  /** Every page from the start (or from `cursor`) to the last, each read with the cursor the page before it gave. */
+  async function walk(f: Fixture, runtime: Runtime, cursor?: string) {
+    const pages: PersonReviewResultsV1['reviews'][] = [];
+    do {
+      const page: PersonReviewResultsV1['reviews'] = await f.reviewCall(runtime, { operation: 'reviews', ...(cursor === undefined ? {} : { cursor }) });
+      pages.push(page); cursor = page.next_cursor;
+    } while (cursor !== undefined);
+    return pages;
+  }
+
+  it("answers a reviewer whose proposals are past the bound in pages, each within it, with every proposal once and in the list's order", async () => {
+    const f = await fixture(), runtime = f.create();
+    // 24 rows of 100 KB: ten fit one response, eleven do not.
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 12, 'T'.repeat(100_000));
+    await proposeAt('2026-11-01T10:00:01.000Z', f, runtime, 12, 'T'.repeat(100_000), 12);
+    const core = await runtime.approvals();
+    // Every third one is decided: a decided one follows every undecided one, whenever it was made.
+    for (const [index, view] of core.proposals(f.person).entries()) if (index % 3 === 0) await reject(f, runtime, view.approval_id);
+    // The one read with no bound, which the pages must add up to.
+    const whole = core.proposals(f.person).map(view => ({ approval_id: view.approval_id, status: view.status }));
+    expect(whole.map(row => row.status)).toEqual([...Array.from({ length: 16 }, () => 'pending'), ...Array.from({ length: 8 }, () => 'rejected')]);
+
+    const pages = await walk(f, runtime);
+    const rows = pages.flatMap(page => page.reviews);
+    expect(bytes({ reviews: rows })).toBeGreaterThan(2 * PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    // Each page is a whole valid response within the bound, and as full as the bound lets it be.
+    for (const page of pages) {
+      expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+      expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    }
+    expect(pages.map(page => page.reviews.length)).toEqual([10, 10, 4]);
+    // The first page has a cursor and holds undecided proposals only; the last page has no cursor key at all.
+    expect(pages[0]!.next_cursor).toMatch(/^[A-Za-z0-9_-]{1,512}$/);
+    expect(pages[0]!.reviews.every(row => row.status === 'pending')).toBe(true);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews', 'next_cursor'], ['reviews']]);
+    // Every proposal exactly once, in the order one unbounded read gives.
+    expect(rows.map(row => ({ approval_id: row.approval_id, status: row.status }))).toEqual(whole);
+    expect(new Set(rows.map(row => row.approval_id)).size).toBe(24);
+    // The cursor is this reviewer's: nobody else can read on with it.
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: pages[0]!.next_cursor! }, 'other')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+
+  it('never loses a proposal decided between two page reads: it comes again where the list has it now', async () => {
+    const f = await fixture(), runtime = f.create();
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 14, 'T'.repeat(100_000));
+    const whole = (await runtime.approvals()).proposals(f.person).map(view => view.approval_id);
+    const first = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(first.reviews.map(row => row.approval_id)).toEqual(whole.slice(0, 10));
+    // One the first page already gave, and one it has not reached, are decided before the next page is read.
+    const [seen, unseen] = [whole[2]!, whole[11]!];
+    await reject(f, runtime, seen); await reject(f, runtime, unseen);
+    const rest = (await walk(f, runtime, first.next_cursor)).flatMap(page => page.reviews);
+    // The undecided ones left, then the two decided ones: nothing is skipped, and only the one already given comes twice.
+    expect(rest.map(row => [row.approval_id, row.status])).toEqual([[whole[10], 'pending'], [whole[12], 'pending'], [whole[13], 'pending'],
+      ...[seen, unseen].sort().map(approval_id => [approval_id, 'rejected'])]);
+    expect(new Set([...first.reviews, ...rest].map(row => row.approval_id))).toEqual(new Set(whole));
+  });
+
+  it('answers a short list in one page with no cursor key, as it did before the list paged', async () => {
+    const f = await fixture(), runtime = f.create();
+    const { pending } = await f.pendingReview(runtime);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(page).toEqual({ reviews: [pending] });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(Object.keys(await f.reviewCall(runtime, { operation: 'reviews' }, 'other'))).toEqual(['reviews']);
+  });
+
+  it('refuses a cursor it did not write for this reviewer and this list, as an invalid request that says why', async () => {
+    const f = await fixture(), runtime = f.create();
+    const { pending } = await f.pendingReview(runtime);
+    const refused = { code: 'invalid_request', message: 'Review cursor is not one this list gave' };
+    for (const cursor of ['not a cursor!', 'not-a-cursor', 'AAAA', 'c'.repeat(512)]) await expect(f.reviewCall(runtime, { operation: 'reviews', cursor })).rejects.toMatchObject(refused);
+    // A place before every row of the list: read with the reviewer's own cursor, it gives the list.
+    const place = { rank: 0 as const, created_at: '9999-12-31T23:59:59.999Z', approval_id: `apr_${'0'.repeat(64)}` };
+    expect(await f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(f.person, place) })).toEqual({ reviews: [pending] });
+    // The same place under another reviewer's cursor, and another list's cursor, are not this list's.
+    const other = { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-000000000011', membership_id: 'mem_00000000-0000-4000-8000-000000000012' };
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(other, place) })).rejects.toMatchObject(refused);
+    expect(await f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(other, place) }, 'other')).toEqual({ reviews: [] });
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonListCursorV1({ scope: { kind: 'only_me' }, organization_id: f.person.organization_id, membership_id: f.person.membership_id },
+      PERSON_LIST_START_V1) })).rejects.toMatchObject(refused);
+    // A cursor that is no text at all is no review request.
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: 5 } as never)).rejects.toMatchObject({ code: 'invalid_request', message: 'Invalid review request' });
+  });
+
+  it('keeps a proposal whose row alone is past the bound on the list, its title cut to fit a page', async () => {
+    const f = await fixture(), runtime = f.create();
+    // Characters of every JSON width: four bytes, two (escaped) and one. The whole title is past one response by itself.
+    const title = `Test meeting${'😀"\\T'.repeat(130_000)}`;
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 1, title.slice('Test meeting'.length));
+    await proposeAt('2026-11-01T10:00:01.000Z', f, runtime, 1, '', 1);
+    const core = await runtime.approvals();
+    const [small, large] = core.proposals(f.person);
+    expect([small!.title, large!.title]).toEqual(['Test meeting', title]);
+    expect(bytes(title)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+
+    const pages = await walk(f, runtime);
+    for (const page of pages) {
+      expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+      expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    }
+    // Both proposals are listed, once each: the large one is never dropped. It does not fit after the small one, so it
+    // starts the next page, and there it is cut.
+    expect(pages.map(page => page.reviews.map(row => row.approval_id))).toEqual([[small!.approval_id], [large!.approval_id]]);
+    // Its title is the start of the whole one, cut between characters and marked as cut. It keeps the half of a page a
+    // title may take beside a first line; the rest of the row is whole.
+    const cut = pages[1]!.reviews[0]!;
+    expect(cut.title.endsWith('…')).toBe(true);
+    expect(title.startsWith(cut.title.slice(0, -1))).toBe(true);
+    expect(bytes(cut.title)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 / 2 - 1024);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(cut.title)).toBe(false);
+    expect(cut).toMatchObject({ status: 'pending', first_line: 'Ship the cohort onboarding.', action_count: 0 });
+    // Only the list's row is cut: the proposal an opened review reads keeps its whole title.
+    expect(core.proposal(large!.approval_id)!.title).toBe(title);
+  });
+
+  it('cuts the first line with the title when the two together are past the bound, and the row fills its page', async () => {
+    const line = 'L'.repeat(600_000), title = `Test meeting${'T'.repeat(600_000)}`;
+    // An extraction whose one decision is as long as the title: neither is past a page alone, the two together are.
+    const processor: DecisionProcessorBundleV1 = { processor_adapter_id: 'llm', assert_admission_commitments() {},
+      current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }),
+      create_processor(admission) {
+        const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
+        return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+          async extract(meeting) {
+            return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+              signals: decisions.signals.map(signal => ({ ...signal, text: line, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) };
+          } };
+      } };
+    const f = await fixture(), runtime = f.create(undefined, { processor });
+    await propose(f, runtime, 1, title.slice('Test meeting'.length));
+    const [view] = (await runtime.approvals()).proposals(f.person);
+    expect(view!.title).toBe(title);
+
+    const [page, ...more] = await walk(f, runtime);
+    expect(more).toEqual([]);
+    expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+    // Each text keeps half the room of a page: together they fill it, and never pass it.
+    expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(page)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 1024);
+    const [cut] = page!.reviews;
+    expect(cut).toMatchObject({ approval_id: view!.approval_id, status: 'pending' });
+    for (const [kept, whole] of [[cut!.title, title], [cut!.first_line!, line]] as const) {
+      expect(kept.endsWith('…')).toBe(true);
+      expect(whole.startsWith(kept.slice(0, -1))).toBe(true);
+    }
   });
 });
 
