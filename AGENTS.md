@@ -11,6 +11,29 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
 
 <!-- END ECHO -->
 
+# Post-merge local sync (all coding agents)
+
+After every PR merge, sync the primary checkout's `main`: run
+`git pull --ff-only origin main` there and check that `HEAD` matches
+`origin/main` before reporting the merge complete or starting staging. If your
+session cannot reach the primary checkout, say so in your report. Never reset or
+discard local work to sync. If local edits block the pull, stash them under a
+named message, pull, then apply the stash back and drop it; keep the stash only
+when it does not apply cleanly, and name it in your report. If local `main` has
+diverged, report it instead of forcing a reset. Feature worktrees stay on their
+own branches.
+
+# Full checks (all coding agents)
+
+While working, run focused tests and the relevant static checks. Run the full
+`npm run check` once, on the finished change, and wait for its result before
+pushing; for a change to documentation only, `npm run check:docs` is enough.
+When several agents build one change, they run focused checks and the agent
+integrating their work runs the full check. Before starting a full check or
+another heavy suite, look for one already running on this machine, in any
+session or worktree, and wait for it instead of running two at once or stopping
+it.
+
 # AWS Guidance
 
 - Do not use `aws login` for this repository and do not sign in as the AWS
