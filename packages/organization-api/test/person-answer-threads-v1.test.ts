@@ -22,61 +22,42 @@ const previous = (overrides: Record<string, unknown> = {}) => ({ purpose: 'follo
 const thread = (overrides: Record<string, unknown> = {}) => ({ questions: ['When does Apollo launch?', 'did that change?'], asked_at: '2026-11-16T18:00:00.000Z', ...overrides });
 const ask = (extra: Record<string, unknown> = {}) => ({ schema_version: 3, question: 'did that change?', ...extra });
 
-describe('the asker\'s other threads on the Ask request (ADR-0056)', () => {
-  it('carries them exactly as sent, with or without a previous turn, and leaves a request without them unchanged', () => {
-    const alone = ask({ threads: [thread(), thread({ questions: ['Who owns the billing migration?'], asked_at: '2026-11-17T18:00:00.000Z' })] });
-    expect(validatePersonAnswerRequestV3(alone)).toEqual(alone);
-    const following = ask({ previous: previous(), threads: [thread()], project_id: 'prj_00000000-0000-4000-8000-000000000001' });
-    expect(validatePersonAnswerRequestV3(following)).toEqual(following);
-    expect(Object.isFrozen(validatePersonAnswerRequestV3(alone).threads![0]!.questions)).toBe(true);
-    expect(validatePersonAnswerRequestV3(ask({ previous: previous() }))).toEqual(ask({ previous: previous() }));
-    expect(validatePersonAnswerThreadsV1([thread()])).toEqual([thread()]);
-    // No other thread yet: the list still goes, empty, so the answer may say the question starts a new one.
-    expect(validatePersonAnswerRequestV3(ask({ previous: previous(), threads: [] }))).toEqual(ask({ previous: previous(), threads: [] }));
-    expect(validatePersonAnswerRequestV3(ask({ threads: [] })).threads).toEqual([]);
-  });
-
-  it('fails a request wrong in two places on the field it always failed on first', () => {
-    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Q?', project_id: 'bad', previous: {} })).toThrow('Ask request project_id');
-  });
-
-  it('counts neither threads nor questions: the request\'s transport bound is the only limit', () => {
+describe('the asker\'s other threads and the thread\'s earlier turns on the Ask request (T1)', () => {
+  it('carries them exactly as sent and frozen, with no count of threads, questions or turns, and leaves a request without them as it was', () => {
     const many = Array.from({ length: 400 }, (_, index) => thread({ questions: Array.from({ length: 30 }, (_, at) => `Question ${index}.${at}?`) }));
-    expect(validatePersonAnswerRequestV3(ask({ threads: many })).threads).toHaveLength(400);
-    const huge = [thread({ questions: ['é'.repeat(PERSON_ANSWER_REQUEST_MAX_BYTES_V3)] })];
-    expect(() => validatePersonAnswerRequestV3(ask({ threads: huge }))).toThrow('Ask request exceeds JSON byte bound');
-  });
-
-  it('refuses anything else: a thread with no question, a bad question or time, another key, or an Ask again', () => {
-    for (const threads of [
-      [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
-      [thread({ asked_at: '2026-11-16T18:00:00Z' })], [{ ...thread(), title: 'Apollo' }], [(({ asked_at: _asked, ...rest }) => rest)(thread())],
-      [null], {}, 'threads', null,
-    ]) expect(() => validatePersonAnswerRequestV3(ask({ threads })), JSON.stringify(threads)).toThrow();
-    const again = { schema_version: 3, question: turn().question, previous: previous({ purpose: 'ask_again' }), threads: [thread()] };
-    expect(() => validatePersonAnswerRequestV3(again)).toThrow('Ask again carries no threads');
-  });
-});
-
-describe('the earlier turns of the thread a follow-up continues (ADR-0056)', () => {
-  it('carries them oldest first under the previous turn\'s own rules', () => {
     const older = [turn({ question: 'When does Apollo launch?', asked_at: '2026-10-20T17:05:00.000Z' }), turn({ question: 'who decided that?', statements: [], citations: [] })];
-    const sent = ask({ previous: previous({ earlier: older }) });
-    expect(validatePersonAnswerRequestV3(sent)).toEqual(sent);
-    expect(Object.isFrozen(validatePersonAnswerRequestV3(sent).previous!.earlier![0])).toBe(true);
-    // No count of turns.
-    const long = Array.from({ length: 300 }, (_, index) => turn({ question: `Question ${index}?` }));
-    expect(validatePersonAnswerRequestV3(ask({ previous: previous({ earlier: long }) })).previous!.earlier).toHaveLength(300);
+    for (const request of [
+      ask({ threads: [thread(), thread({ questions: ['Who owns the billing migration?'], asked_at: '2026-11-17T18:00:00.000Z' })] }),
+      ask({ previous: previous(), threads: [thread()], project_id: 'prj_00000000-0000-4000-8000-000000000001' }),
+      // No other thread yet: the list still goes, empty, so the answer may say the question starts a new one.
+      ask({ previous: previous(), threads: [] }), ask({ threads: [] }), ask({ threads: many }),
+      ask({ previous: previous({ earlier: older }) }),
+      ask({ previous: previous({ earlier: Array.from({ length: 300 }, (_, index) => turn({ question: `Question ${index}?` })) }) }),
+      ask({ previous: previous() }),
+    ]) expect(validatePersonAnswerRequestV3(request)).toEqual(request);
+    const sent = validatePersonAnswerRequestV3(ask({ previous: previous({ earlier: older }), threads: [thread()] }));
+    expect([Object.isFrozen(sent.threads![0]!.questions), Object.isFrozen(sent.previous!.earlier![0])]).toEqual([true, true]);
+    expect(validatePersonAnswerThreadsV1([thread()])).toEqual([thread()]);
   });
 
-  it('refuses none, a turn that breaks a previous turn\'s rule, a purpose on one, and an Ask again that carries any', () => {
-    for (const earlier of [
-      [], [turn({ question: ' padded ' })], [turn({ asked_at: '2026-10-24' })], [{ ...turn(), purpose: 'follow_up' }], [{ ...turn(), earlier: [turn()] }],
-      [turn({ statements: [{ text: 'Out of range.', citation_indexes: [1] }] })], [turn({ citations: [ticket, ticket] })],
-      [turn({ statements: [{ text: 'Extra.', citation_indexes: [0], private: false }] })], [null], {}, null,
-    ]) expect(() => validatePersonAnswerRequestV3(ask({ previous: previous({ earlier }) })), JSON.stringify(earlier)).toThrow();
-    const again = { schema_version: 3, question: turn().question, previous: previous({ purpose: 'ask_again', earlier: [turn()] }) };
-    expect(() => validatePersonAnswerRequestV3(again)).toThrow('Ask again carries no earlier turns');
+  it('refuses a thread or earlier turn that breaks its rules, either beside an Ask again, and a body past the transport bound', () => {
+    const again = (extra: Record<string, unknown>) => ({ schema_version: 3, question: turn().question, previous: previous({ purpose: 'ask_again', ...extra }) });
+    for (const [request, reason] of [
+      ...[
+        [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
+        [thread({ asked_at: '2026-11-16T18:00:00Z' })], [{ ...thread(), title: 'Apollo' }], [(({ asked_at: _asked, ...rest }) => rest)(thread())], [null], {}, 'threads', null,
+      ].map(threads => [ask({ threads }), undefined] as const),
+      ...[
+        [], [turn({ question: ' padded ' })], [turn({ asked_at: '2026-10-24' })], [{ ...turn(), purpose: 'follow_up' }], [{ ...turn(), earlier: [turn()] }],
+        [turn({ statements: [{ text: 'Out of range.', citation_indexes: [1] }] })], [turn({ citations: [ticket, ticket] })],
+        [turn({ statements: [{ text: 'Extra.', citation_indexes: [0], private: false }] })], [null], {}, null,
+      ].map(earlier => [ask({ previous: previous({ earlier }) }), undefined] as const),
+      [{ ...again({}), threads: [thread()] }, 'Ask again carries no threads'],
+      [again({ earlier: [turn()] }), 'Ask again carries no earlier turns'],
+      [ask({ threads: [thread({ questions: ['é'.repeat(PERSON_ANSWER_REQUEST_MAX_BYTES_V3)] })] }), 'Ask request exceeds JSON byte bound'],
+      // Wrong in two places, a request fails on the field it always failed on first.
+      [{ schema_version: 3, question: 'Q?', project_id: 'bad', previous: {} }, 'Ask request project_id'],
+    ] as const) expect(() => validatePersonAnswerRequestV3(request), JSON.stringify(request).slice(0, 200)).toThrow(reason);
   });
 });
 
@@ -90,40 +71,30 @@ const elsewhere = (threads: readonly number[], extra: Record<string, unknown> = 
   question: 'did that change?', thread: { kind: 'other', threads }, ...extra,
 });
 const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
+const without = (value: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
 
-describe('where an answer says the question belongs (ADR-0056)', () => {
-  it('places an ordinary answer in a new thread, or names other threads on a clarify that offers no choices', () => {
-    expect(validatePersonAnswerResponseV8(answered({ thread: { kind: 'new' } })).thread).toEqual({ kind: 'new' });
-    expect(validatePersonAnswerResponseV8(elsewhere([2])).thread).toEqual({ kind: 'other', threads: [2] });
-    expect(validatePersonAnswerResponseV8(elsewhere([0, 3, 1])).thread).toEqual({ kind: 'other', threads: [0, 3, 1] });
-    expect(Object.isFrozen(validatePersonAnswerResponseV8(elsewhere([2])).thread)).toBe(true);
+describe('where an answer says the question belongs (T2)', () => {
+  it('takes a new subject on an answer, other threads on a clarify without choices, and a merge beside the open thread or the one other thread', () => {
     // An answer that says nothing of threads is as before: it continues the open thread.
-    expect(validatePersonAnswerResponseV8(answered())).toEqual(answered());
+    const asking = { ...without(elsewhere([2]), 'thread'), choices };
+    for (const value of [answered(), answered({ thread: { kind: 'new' } }), elsewhere([2]), elsewhere([0, 3, 1]), answered({ merge: [1, 4] }), elsewhere([2], { merge: [0] }), asking]) {
+      expect(validatePersonAnswerResponseV8(value)).toEqual(value);
+    }
+    expect(Object.isFrozen(validatePersonAnswerResponseV8(elsewhere([2])).thread)).toBe(true);
   });
 
-  it('names threads on the same subject beside the open thread or the one other thread, never beside a new one or several', () => {
-    expect(validatePersonAnswerResponseV8(answered({ merge: [1, 4] })).merge).toEqual([1, 4]);
-    expect(validatePersonAnswerResponseV8(elsewhere([2], { merge: [0] })).merge).toEqual([0]);
-    const asking = (({ thread: _thread, ...rest }) => ({ ...rest, choices }))(elsewhere([2]));
-    expect(validatePersonAnswerResponseV8(asking).choices).toHaveLength(1);
+  it('refuses a placement or merge that does not fit its outcome, or is not one', () => {
     for (const value of [
-      // An answer that offers choices names no merge: the answer to the choice does.
-      { ...asking, merge: [0] },
-      answered({ thread: { kind: 'new' }, merge: [1] }), elsewhere([2, 3], { merge: [0] }), elsewhere([2], { merge: [2] }),
-      answered({ merge: [] }), answered({ merge: [1, 1] }), answered({ merge: [-1] }), answered({ merge: [1.5] }), answered({ merge: '1' }),
-    ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();
-  });
-
-  it('refuses a placement that does not fit its outcome, or is not one', () => {
-    for (const value of [
-      // Other threads are a clarify, with no choices; a new subject is an answer.
+      // Other threads are a clarify, with no choices; a new subject is an answer; a clarify names choices or other threads.
       answered({ thread: { kind: 'other', threads: [1] } }), elsewhere([1], { choices }), elsewhere([1], { thread: { kind: 'new' } }),
-      // A clarify names choices or other threads.
-      (({ thread: _thread, ...rest }) => rest)(elsewhere([1])), (({ question: _question, ...rest }) => rest)(elsewhere([1])),
+      without(elsewhere([1]), 'thread'), without(elsewhere([1]), 'question'),
       elsewhere([]), elsewhere([1, 1]), elsewhere([-1]), elsewhere([1], { thread: { kind: 'other' } }), elsewhere([1], { thread: { kind: 'other', threads: [1], extra: 1 } }),
       answered({ thread: { kind: 'open' } }), answered({ thread: { kind: 'new', threads: [1] } }), answered({ thread: 'new' }), answered({ thread: null }),
+      // A merge never beside choices (the answer to the choice names it), a new subject, several threads, or the thread itself.
+      { ...without(elsewhere([2]), 'thread'), choices, merge: [0] }, answered({ thread: { kind: 'new' }, merge: [1] }), elsewhere([2, 3], { merge: [0] }), elsewhere([2], { merge: [2] }),
+      answered({ merge: [] }), answered({ merge: [1, 1] }), answered({ merge: [-1] }), answered({ merge: [1.5] }), answered({ merge: '1' }),
       // An answer that says anything of threads names its question, and is never an Ask again's.
-      (({ question: _question, ...rest }) => rest)(answered({ thread: { kind: 'new' } })), (({ question: _question, ...rest }) => rest)(answered({ merge: [1] })),
+      without(answered({ thread: { kind: 'new' } }), 'question'), without(answered({ merge: [1] }), 'question'),
       answered({ thread: { kind: 'new' }, since: { statements: [] } }), answered({ merge: [1], since: { statements: [] } }),
     ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();
   });
