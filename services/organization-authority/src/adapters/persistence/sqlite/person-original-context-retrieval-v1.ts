@@ -182,10 +182,17 @@ function queryTerms(query: string): readonly string[] {
 }
 
 /**
- * A packet's heading: the title, whole up to the size a label has in transit and cut there at a character boundary.
- * A limit that stays (ADR-0055): a packet is a stored 3,072-byte format whose heading and text share its bytes, so a
- * title of any length would leave the text little room or none, and a label has a 1,024-byte transport bound. Nothing
- * is lost to the cut: `packets` packs a cut title whole with the text.
+ * A packet's heading: the packet title in NFC (`packets` normalizes it), whole when that is at most 1,024 bytes and
+ * otherwise cut there at a character boundary. A limit that stays (ADR-0055): a packet is a stored 3,072-byte format
+ * whose heading and text share its bytes, so a title of any length would leave the text little room or none. The
+ * 1,024 is the room a packet gives its heading, so its text always has at least 2,047 bytes. It reuses
+ * `PERSON_EVIDENCE_LABEL_MAX_BYTES_V1` but is not the size of a citation label, which `presentationLabel` keeps to 200
+ * characters. Nothing is lost to the cut: `packets` packs a cut title whole with the text.
+ *
+ * A source packs exactly as it did before the cut existed when its heading is its whole packet title, and only then. A
+ * title of 1,024 bytes or less can still be cut: its NFC form can be longer (512 copies of U+0344 are 1,024 bytes, and
+ * 2,048 in NFC), and an imported meeting's packet title begins with the 31 bytes of "Imported meeting (unapproved): ",
+ * which leaves the meeting's own title 993.
  */
 function packetHeading(title: string): string {
   if (Buffer.byteLength(title, "utf8") <= PERSON_EVIDENCE_LABEL_MAX_BYTES_V1) return title;
@@ -268,8 +275,12 @@ function presentationLabel(value: string): string {
   return codepoints.length <= 200 ? label : `${codepoints.slice(0, 197).join("")}…`;
 }
 
-/** One canonical packet commitment, shared by search, desk inventory and citation opening. */
-function originalPacketAtomV1(row: SourceRow | DocumentRow, packet: { readonly index: number; readonly text: string }): ReleasedSourceContextAtomV1 {
+/**
+ * One canonical packet commitment, shared by search, desk inventory and citation opening. `label` is `presentationLabel`
+ * of the row's title. Its caller works that out once for all the row's packets: it reads the whole title, and a title
+ * can be any length.
+ */
+function originalPacketAtomV1(row: SourceRow | DocumentRow, packet: { readonly index: number; readonly text: string }, label: string): ReleasedSourceContextAtomV1 {
   const document = "document_id" in row;
   const anchor = document
     ? { kind: "document", document_id: row.document_id, ordinal: row.ordinal, anchor_kind: row.anchor_kind, anchor_start: row.anchor_start, segment: packet.index, text: packet.text }
@@ -278,7 +289,7 @@ function originalPacketAtomV1(row: SourceRow | DocumentRow, packet: { readonly i
     kind: "source_revision" as const, source_id: row.source_id, revision_id: row.revision_id,
     source_sha256: row.source_sha256, representation_sha256: row.representation_sha256,
     anchor_sha256: canonicalSha256(anchor), ...(document ? { document_id: row.document_id } : {}),
-    label: presentationLabel(row.title), text: packet.text,
+    label, text: packet.text,
   });
 }
 
@@ -520,13 +531,19 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       left.row.source_id.localeCompare(right.row.source_id) ||
       ("ordinal" in left.row ? left.row.ordinal : 0) - ("ordinal" in right.row ? right.row.ordinal : 0) ||
       left.packet.index - right.packet.index);
-    return ranked.slice(0, limit).map(candidate => {
-      const scan = candidate.row;
+    // A scanned row is read, verified and labelled once, however many of its packets are returned.
+    const verify = (scan: Candidate["row"]) => {
       const row = "document_id" in scan ? this.hydrateDocumentScanRow(actor, scope, scan) : this.textBySource(actor, scope, scan.source_id, scan.revision_id);
       if (row === undefined) denied();
       this.assertRowRevision(row);
-      const atom = originalPacketAtomV1(row, candidate.packet);
-      return { atom, item: () => this.deskItem(row, atom, true) };
+      return { row, label: presentationLabel(row.title) };
+    };
+    const verified = new Map<Candidate["row"], ReturnType<typeof verify>>();
+    return ranked.slice(0, limit).map(candidate => {
+      const current = verified.get(candidate.row) ?? verify(candidate.row);
+      verified.set(candidate.row, current);
+      const atom = originalPacketAtomV1(current.row, candidate.packet, current.label);
+      return { atom, item: () => this.deskItem(current.row, atom, true) };
     });
   }
 
@@ -587,7 +604,7 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
   private deskAtom(row: SourceRow | DocumentRow): ReleasedSourceContextAtomV1 {
     const packet = firstPacket(packetTitle(row), row.text);
     this.assertRowRevision(row);
-    return originalPacketAtomV1(row, packet);
+    return originalPacketAtomV1(row, packet, presentationLabel(row.title));
   }
 
   /** A released packet's row must still match its immutable source revision. */
@@ -774,18 +791,20 @@ export class SqlitePersonOriginalContextRetrievalV1 implements PersonOriginalCon
       const row = this.textByCitation(actor, scope, citation);
       if (row === undefined) return undefined;
       this.assertTextSourceRevision(row);
-      return packets(packetTitle(row), row.text).map((text, index) => ({ row, atom: originalPacketAtomV1(row, { index, text }) }));
+      const label = presentationLabel(row.title);
+      return packets(packetTitle(row), row.text).map((text, index) => ({ row, atom: originalPacketAtomV1(row, { index, text }, label) }));
     }
     const meta = this.documentSourceMeta(actor, scope, citation.source_id, citation.revision_id, citation.document_id, citation.representation_sha256);
     if (meta === undefined) return undefined;
     this.assertIntegrity(meta);
     this.assertDocumentSourceRevision(meta as DocumentRow);
     const chunks = this.representationChunks(meta as DocumentRow);
+    const label = presentationLabel(meta.title);
     const units: { readonly row: DocumentRow; readonly atom: ReleasedSourceContextAtomV1 }[] = [];
     for (const chunk of this.database.prepare("SELECT ordinal,anchor_kind,anchor_start,text,extractor FROM authority_person_document_text_v1 WHERE document_id=? AND extractor=? ORDER BY ordinal").iterate(citation.document_id, meta.extractor) as Iterable<Pick<DocumentRow, "ordinal" | "anchor_kind" | "anchor_start" | "text" | "extractor">>) {
       const row = Object.freeze({ ...meta, ...chunk }) as DocumentRow;
       this.assertDocumentChunk(row, chunks);
-      for (const [index, text] of packets(row.title, row.text).entries()) units.push({ row, atom: originalPacketAtomV1(row, { index, text }) });
+      for (const [index, text] of packets(row.title, row.text).entries()) units.push({ row, atom: originalPacketAtomV1(row, { index, text }, label) });
     }
     return units;
   }

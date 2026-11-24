@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, validatePersonAnswerCitationV8, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, type MeetingDocument } from "@echo-brain/organization-processing/core";
@@ -968,5 +968,48 @@ describe("Person original context: a note title of any length", () => {
     expect(opened).toHaveLength(114);
     expect(opened.slice(0, -1).every(item => Buffer.byteLength(item.text!) === 3_072)).toBe(true);
     expect(packed(opened)).toBe(`${title}\n${text}`);
+  });
+
+  it("lists, opens and searches a note under a 300 KB title without working out its label, or reading the note again, once for each packet", async () => {
+    const f = fixture();
+    // As the desktop saves a pasted blob with no line break in it: the title is the note's whole first line.
+    const title = `blobhead ${"blob ".repeat(60_000)}blobtail`;
+    const text = `${title}\nits second line`;
+    await f.admitTeamNote(title, text);
+    const meter = meteredReads(f.database, Number.POSITIVE_INFINITY);
+    const retrieval = new SqlitePersonOriginalContextRetrievalV1(meter.database, { authenticateAccess: () => authorization(MEMBER) }, OWNER.organization_id);
+    /** What a read releases, and how many strings as long as the title it normalized: a count, so the clock decides nothing. */
+    const counted = (read: () => Release) => {
+      const normalize = String.prototype.normalize;
+      let normalizations = 0;
+      const spy = vi.spyOn(String.prototype, "normalize").mockImplementation(function (this: string, form?: string) {
+        if (this.length > 100_000) normalizations += 1;
+        return normalize.call(this, form);
+      });
+      try {
+        const release = read();
+        return { release, normalizations };
+      } finally { spy.mockRestore(); }
+    };
+    const listed = counted(() => retrieval.deskSearch({ access_token: "member", scope: global }));
+    const opened = counted(() => retrieval.deskOpen({ access_token: "member", scope: global, citation: listed.release.items[0]!.citation }));
+    meter.reset();
+    const search = () => retrieval.deskSearch({ access_token: "member", scope: global, query: "blobhead" });
+    const found = counted(search);
+    // The list holds the note's first packet. There is one packet for each 1,791 bytes of the 300,033 packed, and each
+    // begins with the heading, so a word of the heading finds them all.
+    expect([listed, opened, found].map(read => read.release.items.length)).toEqual([1, 168, 168]);
+    expect(new Set([listed, opened, found].flatMap(read => read.release.items.map(item => item.label)))).toEqual(new Set([`${title.slice(0, 197)}…`]));
+    // Packing the note normalizes its title and its text, and its label normalizes the title once more. Each read does
+    // that twice: for what it hands over, and for the check every release gets before it leaves. A label worked out for
+    // each packet made the counts 173, 340 and 340.
+    expect({ list: listed.normalizations, open: opened.normalizations, search: found.normalizations }).toEqual({ list: 6, open: 6, search: 6 });
+    // The search reads the note from the database to scan it, to verify what it found and to check its release: about
+    // five times the bytes of its title and text. Read again for each packet it returned, that was 339 times.
+    expect(meter.bytes()).toBeLessThan((Buffer.byteLength(title) + Buffer.byteLength(text)) * 8);
+    // Verified once is still verified: the search is refused when the note's stored text no longer matches its source.
+    f.database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
+    f.database.prepare("UPDATE authority_person_updates_v2 SET text=?").run(`${text} forged`);
+    expect(search).toThrow(expect.objectContaining({ code: "unavailable" }));
   });
 });
