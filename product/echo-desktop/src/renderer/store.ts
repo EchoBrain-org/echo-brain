@@ -4331,110 +4331,86 @@ function openTurn(id: string): void {
 
 /**
  * The sidebar's Ask: back to Ask where you left it, on the thread you asked
- * in most recently, at its place, with its answer at the bottom. Ask shows
+ * in most recently, at its home, with its answer at the bottom. Ask shows
  * that thread; the person is not in it until they pick it or ask in it, so a
  * question typed first is placed among all their threads (ask). Open already,
- * Ask stays as it is. False with nothing asked yet, for the bar to take the
+ * Ask stays as it is. Says whether Ask shows a thread: false with nothing
+ * asked yet, or when the jump to it opened nothing, for the bar to take the
  * cursor instead.
  */
-export function returnToAsk(): boolean {
+export async function returnToAsk(): Promise<boolean> {
   const latest = state.timeline.turns.at(-1);
   if (!latest || !expect()) return false;
-  if (!state.ask) void openThread(threadIdOf(latest), null, false);
-  return true;
+  return state.ask !== null || openThread(threadIdOf(latest), null, false);
 }
 
-/**
- * The row of the thread Ask already shows, picked in the list: the person is in that thread from here (OpenThread), as
- * by any other way of picking it, and nothing else of Ask changes. Refused while Ask is busy, as every row is.
- */
-export function enterThread(): void {
-  const view = state.ask;
-  if (!view?.thread || view.thread.entered || askBusy() || threadShown()?.id !== view.thread.id) return;
-  set({ ask: { ...view, thread: { ...view.thread, entered: true } } });
-}
-
-/** Which jump is the latest: one still reading its project when a later one starts is dropped. */
+/** Which jump is the latest: every jump takes a new one, so one still reading its project when a later one comes is dropped. */
 let jumpSeq = 0;
 
 /**
- * How a jump ended: Ask shows the thread; or its home is a project the person cannot ask in now, said only to a jump made
- * to ask there, which then moves nothing; or it was dropped: refused, overtaken, or its read failed and said why.
+ * How a jump ended: Ask shows the thread; or its home is a project the person is known to have lost, said only to a jump
+ * made to ask there, which then moves nothing; or it was dropped: refused, overtaken, or its project could not be read
+ * right now, which it says.
  */
 type Jumped = 'shown' | 'unreachable' | 'dropped';
 
 /**
- * Whether the person has moved since a jump started, from the page (`route`) and Ask (`asked`, its seq, undefined for
- * closed) they were on then: a page was opened, or Ask was opened, closed, moved to another thread or asked in. A
- * project's page that only read its header again is the same page.
- */
-function movedSince(route: Route, asked: number | undefined): boolean {
-  const now = state.route;
-  const samePage = now === route || (now.page === 'project' && route.page === 'project' && now.project.project_id === route.project.project_id);
-  return !samePage || state.ask?.seq !== asked;
-}
-
-/**
- * A jump (ADR-0056): Ask moves to a thread's place and opens the thread, at
- * the turn `at` when a suggestion chose one. The place is the thread's home:
- * Home for no project; the project's page otherwise, so the bar's chip names
- * it. A page that is no project's stays for a thread with no project; on the
- * thread's own project's page a widened bar narrows back; otherwise Home or
- * the project opens first, so a project's page is never left under a thread
- * that does not live in it, whatever its bar asks.
- * A project the sidebar has not loaded (one on a later page) is read by its
- * id first, as following the open project does; a read that fails says why
- * and opens nothing. A project that is not one of the person's active ones
- * cannot be asked in. A jump made to look (`toAsk` false) then shows the
- * thread at Home, where a question typed continues none (R9). One made to ask
- * in the thread (`toAsk`) moves nothing and says so (`unreachable`): no
- * question of that thread is ever asked outside its home, and the person is
- * not left on a page they did not choose.
+ * A jump (ADR-0056): Ask moves to a thread's home and opens the thread there,
+ * at the turn `at` when a suggestion chose one. Home for a thread with no
+ * project: any other page under Ask (a project's, Tools, People) gives way to
+ * Home. The project's page otherwise, so the bar's chip names it: on that page
+ * already, a widened bar narrows back. Every way of picking a thread comes
+ * here, its own row while Ask shows it included, and takes over from any jump
+ * still on its way.
+ * A project not among the person's active ones as the sidebar has them is read
+ * by its id first. One the read says is gone, archived or no longer theirs
+ * cannot be asked in: a jump made to look (`toAsk` false) shows the thread at
+ * Home, where a question typed continues none (R9); one made to ask in the
+ * thread (`toAsk`) moves nothing and says so (`unreachable`), so no question of
+ * that thread is ever asked outside its home. A read that fails says why and
+ * opens nothing: the project may well be there.
  * `picked`: the person chose this thread (its row, a "Which one?" button, one
  * of its questions), so they are in it; false when Ask only shows the thread
  * they last used.
  *
  * Refused while Ask is busy (askBusy), as every Ask action is: an answer
- * always lands in the thread that shows, and no thread is opened while its
- * turns are moving. The read is the one wait: when it comes back the jump
- * goes on only if nothing moved meanwhile (the account, the window in front,
- * the page and Ask the person was on (movedSince), Ask open or closed, the
- * thread still there, no later jump, no move begun).
+ * always lands in the thread that shows, and no thread is opened while turns
+ * are moving. The read is the one wait: it goes on only if nothing came
+ * meanwhile (another account, another app in front, a move of the person's
+ * (navSeq), a later jump, Ask busy) and the thread is still there, living
+ * where it did.
  */
 async function jump(id: string, at: string | null, picked: boolean, toAsk: boolean): Promise<Jumped> {
+  const mine = ++jumpSeq;
   const account = expect();
   const thread = threadOf(id);
   if (!account || !thread || askBusy()) return 'dropped';
-  const mine = ++jumpSeq;
-  const { route: page, ask: view } = state;
   const { home } = thread;
-  let project = home.kind === 'project' ? state.projects.items.find(item => item.project_id === home.project_id) : undefined;
-  if (home.kind === 'project' && !project && state.projects.next !== null) {
+  let project = home.kind === 'project' ? state.projects.items.find(item => item.project_id === home.project_id && item.status === 'active') : undefined;
+  if (home.kind === 'project' && !project) {
+    const nav = navSeq;
     const result = await rpc('projects.read', { expect: account, project_id: home.project_id });
-    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || movedSince(page, view?.seq) || askBusy() || !threadOf(id)) return 'dropped';
+    const now = threadOf(id);
+    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || nav !== navSeq || askBusy() || !now || !sameScope(now.home, home)) return 'dropped';
     if (!result.ok && !PROJECT_GONE.includes(result.failure.code)) {
       accountLost(result.failure);
       set({ toast: message(result.failure) });
       return 'dropped';
     }
-    project = result.ok ? result.value : undefined;
+    project = result.ok && result.value.status === 'active' ? result.value : undefined;
   }
-  if (project?.status !== 'active') project = undefined;
   if (toAsk && home.kind === 'project' && !project) return 'unreachable';
-  // The page under Ask is the thread's place, as well as the bar's scope: a project's page with its bar widened asks all
-  // context, and is still not where a thread with no project lives.
-  const on = state.route.page === 'project' ? state.route.project.project_id : null;
   if (project) {
-    if (on !== project.project_id) void openProject(project);
+    if (state.route.page !== 'project' || state.route.project.project_id !== project.project_id) void openProject(project);
     else if (!sameScope(state.barScope, home)) set({ barScope: home });
-  } else if (on !== null || !sameScope(state.barScope, { kind: 'global' })) goHome();
+  } else if (state.route.page !== 'home' || state.barScope.kind !== 'global') goHome();
   showThread(id, at, picked);
   return 'shown';
 }
 
 /**
- * A thread opened to look at (jump): its row in the list, a suggestion, the
- * sidebar's Ask. Says whether Ask now shows the thread.
+ * A thread opened to look at (jump): its row in the list (the one Ask shows
+ * too), a suggestion, the sidebar's Ask. Says whether Ask now shows the thread.
  */
 export async function openThread(id: string, at: string | null = null, picked = true): Promise<boolean> {
   return (await jump(id, at, picked, false)) === 'shown';

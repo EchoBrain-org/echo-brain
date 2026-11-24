@@ -11,7 +11,7 @@ import {
 } from '../../src/renderer/timeline.js';
 import { paragraphs } from '../fixtures/authority.js';
 import {
-  ACCOUNT, byTestId, click, fail, fileOf, flush, Held, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles,
+  ACCOUNT, byTestId, click, fail, fileOf, flush, Held, keysetPage, numbered, ok, plainHooks, project, render, rpcFor, startStore, storeLifecycle, text, timelineFiles,
 } from './harness.js';
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
@@ -100,6 +100,7 @@ beforeEach(() => {
     'ask.run': params => script?.(params) ?? ok(answerOf(String(params.question), params.scope as AskScope)),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     'ask.record': () => fail('not_found'),
+    'open.ref': () => fail('not_found'),
     'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
   }, () => ({ active, archived }));
   rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
@@ -602,6 +603,25 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(kept().filter(each => each.thread === tests[0]!.id).map(each => each.text)).toEqual(['Which tests fail?']);
   });
 
+  it('reads the project of a thread picked while the person\'s project list is still loading: one still theirs is asked in, never taken for lost', async () => {
+    const { tests } = seeded();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    // The project list has not come back yet.
+    const listing = held.hold('projects.list');
+    const store = await startStore();
+    expect(store.getState().projects.items).toEqual([]);
+    await store.ask('are they fixed?');
+    await flush();
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(calls('projects.read')).toEqual([expect.objectContaining({ project_id: apollo.project_id })]);
+    expect(store.getState().toast).toBeNull();
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { question: 'Which tests fail?' } });
+    listing(ok(keysetPage(active, undefined)));
+    await flush();
+  });
+
   it('keeps the thread\'s button when its project could not be read: the page says why, nothing is asked, and the pick can be made again', async () => {
     const { tests } = seeded();
     // Apollo is the person's oldest project: on a page of them the sidebar has not read.
@@ -759,7 +779,7 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
   it('back in Ask from the sidebar, a bare question carries no earlier turn and every thread, the one shown included, and shows alone until it is placed', async () => {
     const { billing, pilot } = seeded();
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     // Ask shows the thread asked in last. The person has neither picked it nor asked in it: they are not in it.
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
@@ -870,16 +890,17 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
     store.cancelAsk();
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
     await back();
-    // Its own row in the list, when it is the thread shown; refused, like every row, while a question is on its way.
+    // Its own row in the list, when it is the thread shown, a jump like any row's; refused, like every row, while a
+    // question is on its way.
     const onItsWay = held.hold('ask.run');
     void store.ask('Something else?');
     await flush();
-    store.enterThread();
+    expect(await store.openThread(pilot[0]!.id)).toBe(false);
     expect(store.getState().ask?.thread).toEqual({ id: pilot[0]!.id, entered: false });
     store.cancelAsk();
     onItsWay(fail('unavailable', { retryable: true }));
     await flush();
-    store.enterThread();
+    expect(await store.openThread(pilot[0]!.id)).toBe(true);
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
     await back();
     // Another thread's row in the list.
@@ -937,7 +958,7 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
     seed(...tests, ...pilot);
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.threadShown()?.id).toBe(pilot[0]!.id);
     store.closeAsk();
@@ -975,15 +996,15 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     const rows = byTestId(list(), 'thread-row');
     expect(rows.map(row => text((row.props.children as unknown[])[0]))).toEqual(['When does the pilot start?', 'Who owns billing?', 'Which tests fail?']);
     expect(rows.map(row => row.props['aria-current'])).toEqual(['true', undefined, undefined]);
-    // The open thread's own row picks that thread: shown by the sidebar's Ask the person was not in it, and now is, with
-    // nothing else of Ask changed. A second pick changes nothing at all.
+    // The open thread's own row picks that thread, as a jump to it: shown by the sidebar's Ask the person was not in it,
+    // and now is, the thread shown afresh where it lives.
     const shown = store.getState().ask!;
     expect(shown.thread).toEqual({ id: pilot[0]!.id, entered: false });
     click(rows[0]);
-    expect(store.getState().ask).toEqual({ ...shown, thread: { id: pilot[0]!.id, entered: true } });
-    const entered = store.getState().ask;
-    click(byTestId(list(), 'thread-row')[0]);
-    expect(store.getState().ask).toBe(entered);
+    await flush();
+    expect(store.getState().ask).toMatchObject({ thread: { id: pilot[0]!.id, entered: true }, asked: [], opened: null, merged: null });
+    expect(store.getState().ask!.seq).not.toBe(shown.seq);
+    expect(store.getState().route).toEqual({ page: 'home' });
     // It has no Merge; every other row of its home has one, and Apollo's none (R9).
     const merges = byTestId(list(), 'thread-merge');
     expect(merges.map(button => button.props['aria-label'])).toEqual(['Merge into this thread']);
@@ -1043,12 +1064,24 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     await store.openThread(blocked[0]!.id);
     expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: zephyr.project_id } });
     expect(store.getState().barScope).toEqual(inZephyr);
-    // A page that is no project's stays under a thread with no project.
+    // Any page but Home gives way to Home under a thread with no project: Tools too.
     store.openTools();
-    const tools = store.getState().route;
+    expect(store.getState().route).toEqual({ page: 'tools' });
     await store.openThread(pilot[0]!.id);
-    expect(store.getState().route).toBe(tools);
+    expect(store.getState().route).toEqual({ page: 'home' });
     expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+    // On Home already, Home stays as it is.
+    const home = store.getState().route;
+    await store.openThread(pilot[0]!.id);
+    expect(store.getState().route).toBe(home);
+    // The open thread's own row, picked with the bar widened on its project's page, narrows the bar back, as any jump does.
+    await store.openThread(tests[0]!.id);
+    store.widenScope();
+    const apolloPage = store.getState().route;
+    await store.openThread(tests[0]!.id);
+    expect(store.getState().route).toBe(apolloPage);
+    expect(store.getState().barScope).toEqual(inApollo);
+    expect(store.getState().ask?.thread).toEqual({ id: tests[0]!.id, entered: true });
   });
 
   it('reads a project the sidebar has not loaded before it jumps, and drops the jump when Ask moved on meanwhile', async () => {
@@ -1062,14 +1095,17 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     store.returnToAsk();
     await flush();
     expect(store.threadShown()?.id).toBe(billing[0]!.id);
-    // The read is on its way when the person picks another thread: the later jump stands, and the earlier is dropped.
-    const reading = held.hold('projects.read');
-    const jump = store.openThread(far[0]!.id);
-    await store.openThread(pilot[0]!.id);
-    reading(ok(later));
-    expect(await jump).toBe(false);
-    expect(store.threadShown()?.id).toBe(pilot[0]!.id);
-    expect(store.getState().route).toEqual({ page: 'home' });
+    // The read is on its way when the person picks the thread Ask shows, from its own row: that later jump stands, and
+    // the earlier is dropped. So with another thread's row.
+    for (const picked of [billing, pilot]) {
+      const reading = held.hold('projects.read');
+      const jump = store.openThread(far[0]!.id);
+      await store.openThread(picked[0]!.id);
+      reading(ok(later));
+      expect(await jump).toBe(false);
+      expect(store.threadShown()?.id).toBe(picked[0]!.id);
+      expect(store.getState().route).toEqual({ page: 'home' });
+    }
     // Closed meanwhile: it does not open Ask again.
     const again = held.hold('projects.read');
     const second = store.openThread(far[0]!.id);
@@ -1089,6 +1125,30 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
       expect(store.getState().ask).toBeNull();
       expect(store.getState().route).toBe(route);
     }
+    // A question asked meanwhile, though answered before the read is back: the jump does not take the person from it.
+    store.goHome();
+    const asking = held.hold('projects.read');
+    const fourth = store.openThread(far[0]!.id);
+    await store.ask('Something new?');
+    await flush();
+    const answered = store.getState().ask;
+    expect(answered?.asking).toBeNull();
+    asking(ok(later));
+    expect(await fourth).toBe(false);
+    expect(store.getState().ask).toBe(answered);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    // Nor from a note opened over the page it is on.
+    store.closeAsk();
+    await store.openProject(active[0]!);
+    const reading = held.hold('projects.read');
+    const fifth = store.openThread(far[0]!.id);
+    void store.openListItem({ ref: { kind: 'note', id: 'note-1' }, title: 'A note', added_at: NOW.toISOString(), visibility: 'only-me', projects: [] });
+    reading(ok(later));
+    expect(await fifth).toBe(false);
+    expect(store.getState().ask).toBeNull();
+    expect(store.getState().reader?.ref).toEqual({ kind: 'note', id: 'note-1' });
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: active[0]!.project_id } });
+    store.closeReader();
     store.goHome();
     // Left alone, it reads the project and moves there.
     store.returnToAsk();
@@ -1098,6 +1158,43 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     expect(store.threadShown()?.id).toBe(far[0]!.id);
     // A thread that is gone opens nothing.
     expect(await store.openThread('00000000-0000-4000-8000-00000000ffff')).toBe(false);
+  });
+
+  it('drops a jump whose thread was merged away, or lives somewhere else, by the time its project is read', async () => {
+    active = numbered(12);
+    const later = active[11]!;
+    const there = { kind: 'project', project_id: later.project_id } as const;
+    const far = threadIn(there, ['What is left there?', 3 * DAY]);
+    const near = threadIn(there, ['Who reviews it there?', 2 * DAY]);
+    seed(...far, ...near);
+    const store = await startStore();
+    expect(await store.openThread(near[0]!.id)).toBe(true);
+    // On the project's other thread, the person merges the one the jump is reading for into it.
+    const reading = held.hold('projects.read');
+    const jump = store.openThread(far[0]!.id);
+    store.mergeThread(far[0]!.id);
+    await flush();
+    expect(filed()['What is left there?']).toBe(near[0]!.id);
+    reading(ok(later));
+    expect(await jump).toBe(false);
+    expect(store.threadShown()?.id).toBe(near[0]!.id);
+    // The file read again (signed out and in as the same person) says the thread lives at Home now: the jump that read
+    // its old project does not open that project's page for it.
+    timelineFiles.set(fileOf(ACCOUNT), kept().map(each => ({ ...each, thread: each.id === near[0]!.id ? near[0]!.id : each.thread, scope: each.id === near[0]!.id ? GLOBAL : each.scope })));
+    store.closeAsk();
+    store.goHome();
+    const again = held.hold('projects.read');
+    const second = store.openThread(near[0]!.id);
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    expect(store.threads().find(thread => thread.id === near[0]!.id)?.home).toEqual(GLOBAL);
+    again(ok(later));
+    expect(await second).toBe(false);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().ask).toBeNull();
   });
 });
 
