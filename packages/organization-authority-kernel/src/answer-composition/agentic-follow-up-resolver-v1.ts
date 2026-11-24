@@ -75,12 +75,15 @@ const SAME: AgenticFollowUpResolutionV1 = Object.freeze({ resolution: "same" });
  * Where a question belongs among the asker's threads (ADR-0056): exactly one case, with nothing optional.
  *
  * - `open`: the open thread (the request's `previous`), with what the question refers to there.
- * - `new`: a subject none of the threads is about. Research runs on the question as asked.
+ * - `new`: a subject none of the threads is about. Research runs on the question as asked. Only for a request that
+ *   carried `threads`, empty or not: a request with a previous turn and no `threads` is answered in its thread, and one
+ *   with no previous turn is resolved only when it carried them.
  * - `other`: other threads, as indexes into the request's `threads`, each once and at least one. One index means the
  *   question belongs to that thread; several mean it could belong to any of them. No research runs.
  *
  * `merge` holds indexes of other threads plainly on the subject of the thread the question belongs to: the open thread,
- * or the one `other` thread named. It is empty when `other` names several, and never names the thread in `threads`.
+ * or the one `other` thread named. It is empty when `other` names several and when the open thread's resolution asks
+ * which thing is meant (`clarify`), and it never names the thread in `threads`.
  */
 export type AgenticThreadPlacementV1 =
   | { readonly thread: "open"; readonly resolution: AgenticFollowUpResolutionV1; readonly merge: readonly number[] }
@@ -197,7 +200,7 @@ export const THREAD_RESOLVER_PROMPT = [
   "You are given:",
   "- today: today's date.",
   "- open: the thread the person has open, when they have one. Its \"turns\" are its questions, oldest first, each with the day it was asked (asked_on) and its answer's sentences; the last turn is the one the person has just read. Sentences are numbered across the whole thread, each with the numbers of the sources it cited. Its \"sources\" are numbered as one list for the whole thread, each with its kind and label.",
-  "- threads: the person's other threads, numbered from 1, each with the questions the person asked in it, oldest first, and the day it was last asked in (last_asked_on). Their answers are not shown.",
+  "- threads: the person's other threads, which may be none, numbered from 1, each with the questions the person asked in it, oldest first, and the day it was last asked in (last_asked_on). Their answers are not shown.",
   "- question: the person's new question, as they typed it.",
   "",
   "Return \"thread\", the one place the question belongs:",
@@ -210,15 +213,16 @@ export const THREAD_RESOLVER_PROMPT = [
   "- \"resolved\": the new question refers to something in the open thread (\"it\", \"that ticket\", \"the second one\", \"her ticket\", \"that meeting\") and exactly one thing fits. Give \"question\": the new question rewritten as one full question that stands on its own, naming that thing the way the thread names it (a ticket key, a title, a person's name) and keeping everything else the person asked. Give \"about\": the numbers of the sources that are that thing or that the sentences naming it cite; [] when only a question names it.",
   "- \"clarify\": two or more things could fit. Give \"choices\": one for each thing that could fit, each a short \"label\" naming the thing and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
   "",
-  "With \"open\", or with \"other\" naming one thread, you may also return \"merge\": the numbers of other threads that are plainly about the same thing as the thread the question belongs to.",
+  "With an \"open\" reply whose resolution is \"same\" or \"resolved\", or with \"other\" naming one thread, you may also return \"merge\": the numbers of other threads that are plainly about the same thing as the thread the question belongs to.",
   "",
   "Rules:",
+  "- Say one thing. \"resolution\", \"question\", \"about\" and \"choices\" belong only to an \"open\" reply, and \"threads\" only to an \"other\" reply. A reply that names one place and adds what belongs to another has not said where the question belongs.",
   "- Never guess a thread. When the question could belong to more than one of the other threads, name every one of them in \"threads\", and never pick the one that seems likelier: the person is then asked which one.",
   "- The open thread comes first. When the question continues it or refers to something in it, the thread is \"open\", even when another thread is about the same thing.",
   "- A question belongs to a thread only when it is about the same thing as that thread: the same named project, ticket, part, quote, decision, meeting or event. Sharing a team, a program, a vendor or a kind of problem does not make it belong.",
   "- \"new\" is only for a subject none of the threads is about. A question that names a thing no thread is about is \"new\", however much it resembles their questions.",
   "- A question that refers to something (\"it\", \"that\", \"the other one\") which neither the open thread nor any other thread gives stays in the open thread as \"same\"; with no open thread it is \"new\". Never make up what it refers to.",
-  "- \"merge\" only when two threads are plainly about the same thing: the same named project, ticket, decision or event, asked about in both. Threads that are merely related (the same program, team, vendor or kind of problem) are never merged. Leave \"merge\" out when unsure, with \"new\", and when \"threads\" names more than one thread; never put a thread in both \"threads\" and \"merge\".",
+  "- \"merge\" only when two threads are plainly about the same thing: the same named project, ticket, decision or event, asked about in both. Threads that are merely related (the same program, team, vendor or kind of problem) are never merged. Leave \"merge\" out when unsure, with \"new\", with \"clarify\", and when \"threads\" names more than one thread; never put a thread in both \"threads\" and \"merge\".",
   "- Other threads that are plainly about the same thing count as one thread: when the question belongs to them, name the one with the lowest number in \"threads\" and the rest in \"merge\".",
   "- In the open thread, resolve only when exactly one thing fits. Read what the question refers to from the last turn first, and look to an older turn only when nothing in the last turn fits. When two or more things in the turn you are reading could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
   "- A thing fits when it is of the kind the question names and the question's words can mean it: \"that ticket\" fits only tickets, \"that meeting\" only meetings, \"that person\" only people; \"it\" or \"that\" can fit anything the thread names.",
@@ -232,7 +236,7 @@ export const THREAD_RESOLVER_PROMPT = [
   "{\"thread\":\"other\",\"threads\":[2]}",
   "{\"thread\":\"other\",\"threads\":[1,3]}",
   "{\"thread\":\"new\"}",
-  "Only an \"open\" reply, or an \"other\" reply that names one thread, may add \"merge\", as in {\"thread\":\"other\",\"threads\":[2],\"merge\":[4]}.",
+  "Only an \"open\" reply that is \"same\" or \"resolved\", or an \"other\" reply that names one thread, may add \"merge\", as in {\"thread\":\"open\",\"resolution\":\"same\",\"merge\":[3]} or {\"thread\":\"other\",\"threads\":[2],\"merge\":[4]}.",
 ].join("\n");
 
 /**
@@ -342,20 +346,35 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
 
 /**
  * What the thread resolver was shown, which is all its reply may name: whether a thread is open, how many sources that
- * thread has, and how many other threads there are.
+ * thread has, and the asker's other threads.
+ *
+ * `others` says whether the request carried `threads` at all, which is not the same as carrying none: a request that
+ * carried the list, even empty, is being placed, so its answer may say the question starts a new thread; one that
+ * carried only the older turns of its thread is answered in that thread.
  */
 interface ThreadShownV1 {
   readonly open: boolean;
   readonly sources: number;
-  readonly threads: number;
+  readonly others: { readonly carried: true; readonly count: number } | { readonly carried: false };
+}
+
+/** The fields of a reply that say what a question refers to in the open thread: only an `open` reply has them. */
+const RESOLUTION_FIELDS = ["resolution", "question", "about", "choices"] as const;
+/** Whether a reply's field says anything: all but a missing or null value, an empty list and a blank string. */
+function says(value: unknown): boolean {
+  return value !== undefined && value !== null && !(Array.isArray(value) && value.length === 0) && !(typeof value === "string" && value.trim().length === 0);
 }
 
 /**
  * The thread resolver's reply (ADR-0056), read strictly into one placement. `open` needs an open thread and carries a
  * resolution read by the follow-up resolver's own rules (`parseFollowUpResolutionV1`), its `about` numbers addressing
  * the thread's sources as one list. `other` needs the number of at least one thread shown, counted from 1 and kept as
- * indexes. `open` and `new` name no other thread. Anything else is sent back for the one repair with the rule it broke;
- * only `merge` is never a reason to send a reply back (`mergeOf`).
+ * indexes.
+ *
+ * A reply says one thing. One that names a place and also says something that belongs to another place (`open` or
+ * `new` naming threads; `new` or `other` with a resolution, a question, sources or choices) has not said where the
+ * question belongs, and is never read as either: it goes back for the one repair with the rule it broke, as does
+ * anything else unusable. Only `merge` is never a reason to send a reply back (`mergeOf`).
  */
 export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): AgenticThreadPlacementV1 {
   const body = object(value);
@@ -364,27 +383,39 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
   const thread = PLACES.find(known => known === named);
   if (thread === undefined) throw new AgenticAskOutputErrorV1("\"thread\" must be \"open\", \"new\" or \"other\"");
   respelled(body.thread, thread);
-  const others: readonly unknown[] = Array.isArray(body.threads) ? body.threads : [];
-  // A reply that says one place and names another has not said where the question belongs.
-  if (thread !== "other" && others.length > 0) {
+  if (thread !== "other" && says(body.threads)) {
     throw new AgenticAskOutputErrorV1(`"${thread}" names no other thread: when the question belongs to another thread, the thread is "other"`);
   }
+  if (thread !== "open") {
+    const said = RESOLUTION_FIELDS.filter(field => says(body[field]));
+    if (said.length > 0) {
+      throw new AgenticAskOutputErrorV1(`"${thread}" says nothing of the open thread, and the reply also gave ${said.map(field => `"${field}"`).join(", ")}: only an "open" reply has a resolution, a question, sources or choices`);
+    }
+  }
+  // How many other threads the reply may name: none when the request carried no list, or an empty one.
+  const count = shown.others.carried ? shown.others.count : 0;
   switch (thread) {
-    case "open":
+    case "open": {
       if (!shown.open) throw new AgenticAskOutputErrorV1("the person has no thread open, so the thread is \"new\" or \"other\"");
-      return inOpenThread(parseFollowUpResolutionV1(body, shown.sources), mergeOf(body.merge, shown.threads));
+      const resolution = parseFollowUpResolutionV1(body, shown.sources);
+      // An answer that asks which thing is meant names no thread to merge: the question is asked again once one is
+      // chosen, and that answer does. Any entry beside choices is dropped and counted.
+      return inOpenThread(resolution, mergeOf(body.merge, resolution.resolution === "clarify" ? 0 : count));
+    }
     case "new":
       // A new subject has nothing merged with it: any entry is dropped and counted.
       mergeOf(body.merge, 0);
-      // Only an answer to a request that carried other threads can say the question starts a new one (the contract's
-      // rule). With none, a new subject is answered as asked in the open thread, which is what `same` says.
-      return shown.open && shown.threads === 0 ? inOpenThread(SAME) : NEW_THREAD;
+      // Only a request that carried `threads`, empty or not, is being placed: its answer may say the question starts
+      // a new thread. One that carried only the older turns of its thread is answered there as asked, which is what
+      // `same` says.
+      return shown.open && !shown.others.carried ? inOpenThread(SAME) : NEW_THREAD;
     case "other": {
-      const none = `the person has no other thread, so the thread is ${shown.open ? "\"open\"" : "\"new\""}`;
-      const threads = shownIndexes(others, shown.threads, shown.threads === 0 ? none : `"threads" holds thread numbers from 1 to ${shown.threads}`);
-      if (threads.length === 0) throw new AgenticAskOutputErrorV1(shown.threads === 0 ? none : "\"other\" needs \"threads\": the number of every thread the question could belong to");
+      const elsewhere = [...(shown.open ? ["\"open\""] : []), ...(shown.others.carried || !shown.open ? ["\"new\""] : [])].join(" or ");
+      const none = `the person has no other thread, so the thread is ${elsewhere}`;
+      const threads = shownIndexes(Array.isArray(body.threads) ? body.threads : [], count, count === 0 ? none : `"threads" holds thread numbers from 1 to ${count}`);
+      if (threads.length === 0) throw new AgenticAskOutputErrorV1(count === 0 ? none : "\"other\" needs \"threads\": the number of every thread the question could belong to");
       // Only the one thread a question belongs to has others merged with it; one that could belong to several has none.
-      return Object.freeze({ thread, threads, merge: threads.length === 1 ? mergeOf(body.merge, shown.threads, threads[0]) : mergeOf(body.merge, 0) });
+      return Object.freeze({ thread, threads, merge: threads.length === 1 ? mergeOf(body.merge, count, threads[0]) : mergeOf(body.merge, 0) });
     }
     default: return unhandledCaseV1(thread);
   }
@@ -407,7 +438,10 @@ interface AgenticFollowUpResolverInputV1 {
 interface AgenticThreadResolverInputV1 extends Omit<AgenticFollowUpResolverInputV1, "previous"> {
   /** The open thread: its latest turn, with its older turns. Absent when the person has no thread open. */
   readonly previous?: PersonAnswerPreviousV1;
-  /** The asker's other threads, as the request carried them. Absent when it carried none. */
+  /**
+   * The asker's other threads, as the request carried them: possibly an empty list. Absent when the request carried no
+   * `threads` at all, which is a different thing: such a request is answered in its own thread, never placed elsewhere.
+   */
   readonly threads?: readonly PersonAnswerThreadV1[];
 }
 
@@ -526,7 +560,11 @@ export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1
     return followed.fallback ? fallbackPlacement(previous) : Object.freeze({ placement: inOpenThread(followed.resolution), fallback: false });
   }
   const open = previous === undefined ? undefined : threadCitations(previous);
-  const shown: ThreadShownV1 = { open: open !== undefined, sources: open?.citations.length ?? 0, threads: threads?.length ?? 0 };
+  const shown: ThreadShownV1 = {
+    open: open !== undefined, sources: open?.citations.length ?? 0,
+    // Whether the request carried the list is kept apart from how many threads it holds: an empty list still asks for the question to be placed.
+    others: threads === undefined ? { carried: false } : { carried: true, count: threads.length },
+  };
   return orFallback<AgenticThreadResolvedV1>(input, fallbackPlacement(previous), async () => Object.freeze({
     placement: await input.gate.withRepair(RESOLVE_CALL, THREAD_RESOLVER_PROMPT, threadResolverInput(input, open), threadPlacementSchema,
       value => parseThreadPlacementV1(value, shown)),

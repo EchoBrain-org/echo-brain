@@ -201,6 +201,44 @@ describe("a new subject (ADR-0056)", () => {
     expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("the person has no thread open");
     expect(corrections).toMatchObject({ model_repair_rejected: 1, resolver_fallback: 1 });
   });
+
+  it("starts a new thread from inside the person's only thread: a request that carried an empty list of threads is placed", async () => {
+    const { earlier: _earlier, ...single } = PREVIOUS;
+    // With older turns or without: the list, even empty, is what asks for the question to be placed.
+    for (const previous of [PREVIOUS, single, undefined]) {
+      const run = scripted({ resolver: [{ thread: "new" }], ...researched(QUESTION) });
+      const port = desk();
+      const { ask, audits } = askV8(port, run);
+      const response = await ask.answer({ question: QUESTION, threads: [], ...(previous === undefined ? {} : { previous }) });
+      expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+      expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" } });
+      expect(response).not.toHaveProperty("merge");
+      // One call, the thread resolver's, shown no other thread; then research as asked, from nothing of the open thread.
+      expect(run.of("resolver").map(input => input.system_prompt)).toEqual([THREAD_RESOLVER_PROMPT]);
+      expect(JSON.parse(run.of("resolver")[0]!.user_prompt).threads).toEqual([]);
+      expect(port.openCitation).not.toHaveBeenCalled();
+      expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
+    }
+  });
+
+  it("never reads a reply that says two things as either: it takes the repair, and then the question stays where it was asked", async () => {
+    // Another thread and a clarify with choices at once. Read as the thread, a client could jump there with no click.
+    const choices = [{ label: "THERM-482", question: RESOLVED }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
+    const contradictory = { thread: "other", threads: [1], resolution: "clarify", choices };
+    const run = scripted({ resolver: [contradictory, contradictory], ...researched(QUESTION) });
+    const port = desk();
+    const { ask, audits } = askV8(port, run);
+    const { value: response, corrections } = await observed(() => ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS }));
+    expect(response).toMatchObject({ outcome: "answered", question: QUESTION });
+    for (const key of ["thread", "merge", "choices"]) expect(response).not.toHaveProperty(key);
+    expect(run.of("resolver")).toHaveLength(2);
+    expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("only an \"open\" reply has a resolution, a question, sources or choices");
+    expect(corrections).toMatchObject({ model_repair_rejected: 1, resolver_fallback: 1 });
+    expect(audits).toEqual([expect.objectContaining({ outcome: "answered", repairs: 1 })]);
+    // A repair that says one thing is read as it stands.
+    const repaired = scripted({ resolver: [contradictory, { thread: "other", threads: [1] }] });
+    expect(await askV8(desk(), repaired).ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS })).toMatchObject({ outcome: "clarify", thread: { kind: "other", threads: [0] } });
+  });
 });
 
 describe("a question that continues the open thread (ADR-0056)", () => {

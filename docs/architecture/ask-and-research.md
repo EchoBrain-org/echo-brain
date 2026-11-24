@@ -40,7 +40,8 @@ flowchart LR
   ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); no header asks
   for it, and `x-echo-answer-layout`, which older clients send, is not read. A follow-up carries
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). An Ask may also carry
-  the asker's other threads, and a follow-up the older turns of its thread
+  the list of the asker's other threads, which may be empty and asks for the question to be
+  placed among them, and a follow-up the older turns of its thread
   ([ADR-0056](../decisions/ADR-0056-ask-threads.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
   retired; a request that names it is refused.
