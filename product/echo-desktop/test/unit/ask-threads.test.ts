@@ -990,6 +990,19 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     again(ok(later));
     expect(await second).toBe(false);
     expect(store.getState().ask).toBeNull();
+    // Started with Ask closed (the sidebar's Ask, a suggestion), and the person opened another page meanwhile: the jump
+    // does not take them from it, whether that page is another project, or Home opened again.
+    for (const leave of [() => void store.openProject(active[0]!), () => store.goHome(), () => store.openTools()]) {
+      const reading = held.hold('projects.read');
+      const third = store.openThread(far[0]!.id);
+      leave();
+      const route = store.getState().route;
+      reading(ok(later));
+      expect(await third).toBe(false);
+      expect(store.getState().ask).toBeNull();
+      expect(store.getState().route).toBe(route);
+    }
+    store.goHome();
     // Left alone, it reads the project and moves there.
     store.returnToAsk();
     await flush();

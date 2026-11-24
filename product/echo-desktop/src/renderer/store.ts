@@ -4273,6 +4273,17 @@ let jumpSeq = 0;
 type Jumped = 'shown' | 'unreachable' | 'dropped';
 
 /**
+ * Whether the person has moved since a jump started, from the page (`route`) and Ask (`asked`, its seq, undefined for
+ * closed) they were on then: a page was opened, or Ask was opened, closed, moved to another thread or asked in. A
+ * project's page that only read its header again is the same page.
+ */
+function movedSince(route: Route, asked: number | undefined): boolean {
+  const now = state.route;
+  const samePage = now === route || (now.page === 'project' && route.page === 'project' && now.project.project_id === route.project.project_id);
+  return !samePage || state.ask?.seq !== asked;
+}
+
+/**
  * A jump (ADR-0056): Ask moves to a thread's place and opens the thread, at
  * the turn `at` when a suggestion chose one. The place is the thread's home:
  * Home for no project; the project's page otherwise, so the bar's chip names
@@ -4293,19 +4304,20 @@ type Jumped = 'shown' | 'unreachable' | 'dropped';
  * Refused while a question is on its way, as every Ask action is: an answer
  * always lands in the thread that shows. The read is the one wait: when it
  * comes back the jump goes on only if nothing moved meanwhile (the account,
- * the window in front, Ask as it was, the thread still there, no later jump).
+ * the window in front, the page and Ask the person was on (movedSince), Ask
+ * open or closed, the thread still there, no later jump).
  */
 async function jump(id: string, at: string | null, picked: boolean, toAsk: boolean): Promise<Jumped> {
   const account = expect();
   const thread = threadOf(id);
   if (!account || !thread || state.ask?.asking) return 'dropped';
   const mine = ++jumpSeq;
-  const before = state.ask?.seq;
+  const { route: page, ask: view } = state;
   const { home } = thread;
   let project = home.kind === 'project' ? state.projects.items.find(item => item.project_id === home.project_id) : undefined;
   if (home.kind === 'project' && !project && state.projects.next !== null) {
     const result = await rpc('projects.read', { expect: account, project_id: home.project_id });
-    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || state.ask?.seq !== before || !threadOf(id)) return 'dropped';
+    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || movedSince(page, view?.seq) || !threadOf(id)) return 'dropped';
     if (!result.ok && !PROJECT_GONE.includes(result.failure.code)) {
       accountLost(result.failure);
       set({ toast: message(result.failure) });
