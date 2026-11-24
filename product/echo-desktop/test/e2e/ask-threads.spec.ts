@@ -564,13 +564,44 @@ test('the thread list closes when Ask shows another thread under it, and opens a
   await expect(list.getByTestId('thread-row')).toHaveCount(1);
   // While the question is on its way no row moves Ask.
   await expect(list.getByTestId('thread-row')).toBeDisabled();
-  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone.
+  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone. The
+  // keyboard was in it: the caret is back in the bar, not lost to the page.
+  await expect(list.getByTestId('thread-find')).toBeFocused();
   writeFileSync(release, '');
   await expect(name).toHaveText('Who owns billing?');
   await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
   await name.click();
   await expect(list.getByTestId('thread-find')).toHaveValue('');
   await expect(list.getByTestId('thread-row')).toHaveCount(2);
+});
+
+test('Capture opened by its shortcut over the thread list keeps its own Escape and the keyboard', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  const list = page.getByTestId('thread-list');
+  await page.getByTestId('thread-name').click();
+  await expect(list.getByTestId('thread-find')).toBeFocused();
+  // An Escape lands where the keyboard still is as Capture comes up over Ask, before Capture takes the keyboard.
+  const landed = page.evaluate(() => new Promise<string | null>((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector('[data-testid="compose"]')) return;
+      observer.disconnect();
+      const target = document.activeElement as HTMLElement | null;
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      resolve(target?.getAttribute('data-testid') ?? null);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }));
+  // What ⌘⇧E has main send the page.
+  await run.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.send('event', { name: 'capture.open', payload: {} }); });
+  expect(await landed).toBe('thread-find');
+  // The list did not take it: it was Capture's, which closed, leaving Ask as it was.
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  await expect(page.getByTestId('thread-name')).toHaveText('Who owns billing?');
 });
 
 test('an answer that does not say where a question asked with the threads belongs is refused, and nothing of it is kept', async () => {

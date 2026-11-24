@@ -16,7 +16,7 @@ import {
   activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
   chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
-  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
+  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
   toggleTurn, turnOf, undoMerge, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
@@ -625,7 +625,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
           {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
-            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
+            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
       )}
@@ -791,11 +791,16 @@ function ThreadHead({ state }: { state: State }) {
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
   // The list is of what Ask showed when it opened. A question started, or another thread shown under it (an answer that
-  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find.
+  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find. With the
+  // keyboard in it, the caret goes back to the bar, never to the page.
   const shown = threadShown(state)?.id ?? null;
   const asking = Boolean(state.ask?.asking);
-  useLayoutEffect(() => { setOpen(false); }, [shown]);
-  useLayoutEffect(() => { if (asking) setOpen(false); }, [asking]);
+  const closeOnItsOwn = () => {
+    if (document.getElementById(THREAD_LIST_ID)?.contains(document.activeElement)) document.getElementById('ask-field')?.focus();
+    setOpen(false);
+  };
+  useLayoutEffect(closeOnItsOwn, [shown]);
+  useLayoutEffect(() => { if (asking) closeOnItsOwn(); }, [asking]);
   useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
@@ -803,9 +808,10 @@ function ThreadHead({ state }: { state: State }) {
     return () => document.removeEventListener('mousedown', away);
   }, [open]);
   // Escape here closes the list and goes no further: the window's Escape would close Ask. Only an Escape pressed in the
-  // name or the list is the list's; one pressed anywhere else on the page is never taken from it.
+  // name or the list is the list's, and only while nothing is up over the page: Capture or a sheet that came up over it
+  // keeps its own Escape and the keyboard. One pressed anywhere else on the page is never taken from it.
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!open || event.key !== 'Escape') return;
+    if (!open || event.key !== 'Escape' || sheetUp(state)) return;
     event.preventDefault();
     event.stopPropagation();
     setOpen(false);
@@ -1009,7 +1015,7 @@ export function AskView({ state }: { state: State }) {
           <div class="error" data-testid="ask-error">{message(failed.failure)}</div>
           {failed.failure.retryable && (
             <div class="actions">
-              <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>Try again</button>
+              <button type="button" class="link-button" data-testid="ask-retry" disabled={askBusy(state)} onClick={retryAsk}>Try again</button>
             </div>
           )}
         </div>

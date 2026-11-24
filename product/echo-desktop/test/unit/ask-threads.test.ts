@@ -1534,6 +1534,43 @@ describe('merging threads, and Undo', () => {
     expect(kept().at(-1)).toMatchObject({ text: 'and the budget?', thread: pilot[0]!.id });
   });
 
+  it('stills Try again and Ask across everything you can see while turns move, as every control that starts a question', async () => {
+    // Apollo's thread ends on a question it had nothing on; two more of Apollo's threads to merge.
+    const notFound: Partial<TimelineTurn> = { scope: inApollo, answer: { scope: inApollo, sources: [], parts: [], outcome: 'not_found' } };
+    const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+    const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+    const budget = turn('Is there a budget?', 3 * DAY, notFound);
+    seed(...tests, ...flaky, budget);
+    const store = await startStore();
+    await store.openThread(budget.id);
+    await flush();
+    const disabled = async (id: string) => byTestId(await page(store), id).map(node => node.props.disabled);
+    expect(await disabled('ask-everywhere')).toEqual([false]);
+    let confirm = gated();
+    store.mergeThread(tests[0]!.id);
+    await flush();
+    expect(await disabled('ask-everywhere')).toEqual([true]);
+    confirm();
+    await flush();
+    expect(await disabled('ask-everywhere')).toEqual([false]);
+    // A question that failed, then a merge on its way: Try again is still until it is answered.
+    const failing = held.hold('ask.run');
+    void store.ask('and since when?');
+    await flush();
+    failing(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(await disabled('ask-retry')).toEqual([false]);
+    confirm = gated();
+    store.mergeThread(flaky[0]!.id);
+    await flush();
+    expect(await disabled('ask-retry')).toEqual([true]);
+    store.retryAsk();
+    expect(asked()).toHaveLength(1);
+    confirm();
+    await flush();
+    expect(await disabled('ask-retry')).toEqual([false]);
+  });
+
   it('ends a move with the timeline: signed out while it is on its way, its reply says nothing and Ask is not left busy', async () => {
     const { billing } = seeded();
     const store = await opened();
@@ -1808,6 +1845,24 @@ describe('a question a model wrote goes only while every turn that could have in
     store.chooseClarified(choices[1]!);
     await flush();
     expect(asked().at(-1)).toMatchObject({ question: 'What does the sponsor still have to approve?' });
+  });
+
+  it('checks a long thread in one check of every turn the question could have drawn on, the earliest included', async () => {
+    const asked300 = threadIn(GLOBAL, ...Array.from({ length: 300 }, (_, at) => [`question ${at}?`, (300 - at) * HOUR] as const));
+    // The last turn's full question is the resolver's.
+    const last = { ...asked300.at(-1)!, question: 'Resolved: question 299, about THERM-482?' };
+    seed(...asked300.slice(0, -1), last);
+    // Only the first turn's ticket is no longer readable.
+    checks = items => ok({ items: items.map(item => ({ state: item.asked_at === asked300[0]!.asked_at && item.citation.ticket_id === '20482' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    await store.openThread(asked300[0]!.id);
+    await flush();
+    store.askAgain(last.id);
+    await flush();
+    expect(asked()[0]).toMatchObject({ question: 'question 299?', previous: { purpose: 'ask_again', question: 'question 299?' } });
+    expect(JSON.stringify(asked()[0])).not.toContain('Resolved');
+    // Every turn once: both sources of each of the 300.
+    expect(calls('ask.check').at(-1)!.items).toHaveLength(600);
   });
 
   it('counts the turns before a turn it followed in another thread: an answer that started a thread was still written with the thread it was asked in', async () => {

@@ -715,6 +715,11 @@ export function sheetShown(current: State = state): Sheet | null {
   return sheet?.kind === 'new-project' && sheet.hidden ? null : sheet;
 }
 
+/** Something is up over the page that owns the keyboard, its Escape and its focus: Capture, a sheet, a project settings dialog. */
+export function sheetUp(current: State = state): boolean {
+  return Boolean((current.compose && !current.compose.hidden) || sheetShown(current) || projectSettingsModal(current));
+}
+
 /** A toast that says something went well goes by itself; one that warns stays until the next page. */
 export function clearToast(shown: number): void {
   if (state.toastShown === shown) set({ toast: null });
@@ -3858,10 +3863,24 @@ interface Derived {
   readonly found: Readonly<Record<string, TurnChecks>> | null;
 }
 
-/** The turns of a turn's thread asked before it, oldest first: those a merge brought in included. */
-function askedBefore(turn: TimelineTurn): readonly TimelineTurn[] {
-  const turns = threadOf(threadIdOf(turn))?.turns ?? [];
-  return turns.slice(0, Math.max(turns.findIndex(each => each.id === turn.id), 0));
+/**
+ * The turns that could have informed a question built along `links` (questionOf): each link, and every turn its thread
+ * asked before it, those a merge brought in included. Each thread is read once, as far as its furthest link, so the
+ * work grows with the threads' length and never with its square.
+ */
+function informedBy(links: readonly TimelineTurn[]): TimelineTurn[] {
+  const reach = new Map<string, { turns: readonly TimelineTurn[]; at: ReadonlyMap<string, number>; upTo: number }>();
+  for (const link of links) {
+    const id = threadIdOf(link);
+    let thread = reach.get(id);
+    if (!thread) {
+      const turns = threadOf(id)?.turns ?? [];
+      thread = { turns, at: new Map(turns.map((each, at) => [each.id, at])), upTo: 0 };
+      reach.set(id, thread);
+    }
+    thread.upTo = Math.max(thread.upTo, thread.at.get(link.id) ?? 0);
+  }
+  return [...new Set([...links, ...[...reach.values()].flatMap(({ turns, upTo }) => turns.slice(0, upTo))])];
 }
 
 /**
@@ -3879,12 +3898,15 @@ function askedBefore(turn: TimelineTurn): readonly TimelineTurn[] {
  * later than that, its requests having taken so long, is as none, and the request goes with questions only.
  */
 async function questionOf(turn: TimelineTurn): Promise<Derived> {
+  const byId = new Map(state.timeline.turns.map(each => [each.id, each]));
   const chain: TimelineTurn[] = [];
-  for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !chain.includes(link);) {
+  const walked = new Set<string>();
+  for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !walked.has(link.id);) {
     chain.push(link);
-    link = link.follows === null ? undefined : turnOf(link.follows);
+    walked.add(link.id);
+    link = link.follows === null ? undefined : byId.get(link.follows);
   }
-  const informed = [...new Set((chain.length > 0 ? chain : [turn]).flatMap(link => [link, ...askedBefore(link)]))];
+  const informed = informedBy(chain.length > 0 ? chain : [turn]);
   const went = Date.now();
   const checked = await checkTurns(informed);
   const found = Date.now() - went < CHECK_FRESH_MS ? checked : null;
