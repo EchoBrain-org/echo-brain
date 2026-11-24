@@ -93,13 +93,12 @@ describe("thread resolution: reading a reply into one placement (ADR-0056)", () 
     expect(parseThreadPlacementV1({ thread: "open", resolution: "same" }, SHOWN)).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });
     expect(parseThreadPlacementV1({ ...OPEN_RESOLVED, about: [1, 3] }, SHOWN))
       .toEqual({ thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0, 2] }, merge: [] });
-    const choices = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
-    expect(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices }, SHOWN)).toEqual({ thread: "open", resolution: { resolution: "clarify", choices }, merge: [] });
+    expect(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES }, SHOWN)).toEqual({ thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] });
     // The follow-up resolver's own refusals reach the repair unchanged.
     expect(() => parseThreadPlacementV1({ ...OPEN_RESOLVED, about: [4] }, SHOWN)).toThrow("\"about\" holds source numbers from 1 to 3");
     expect(() => parseThreadPlacementV1({ thread: "open" }, SHOWN)).toThrow("\"resolution\" must be \"same\", \"resolved\" or \"clarify\"");
     expect(() => parseThreadPlacementV1({ thread: "open", resolution: "resolved", about: [1] }, SHOWN)).toThrow(/full question/u);
-    expect(() => parseThreadPlacementV1({ thread: "open", resolution: "same", choices }, SHOWN)).toThrow(/offers no choices/u);
+    expect(() => parseThreadPlacementV1({ thread: "open", resolution: "same", choices: CHOICES }, SHOWN)).toThrow(/offers no choices/u);
   });
 
   it("reads new, and other with thread numbers as shown (from 1), kept as indexes into the request's threads", () => {
@@ -483,8 +482,7 @@ describe("the open thread's citations as one list, and what an answer says of th
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);
     expect(agenticElsewhereResponseV1({ kind: "global" }, QUESTION, { thread: "other", threads: [0, 2], merge: [] })).not.toHaveProperty("merge");
     // A clarify between things in the open thread is what it was: it names no thread, and the contract refuses a merge beside choices.
-    const choices = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
-    const clarified = agenticClarifyResponseV1({ kind: "global" }, QUESTION, choices);
+    const clarified = agenticClarifyResponseV1({ kind: "global" }, QUESTION, CHOICES);
     for (const key of ["thread", "merge"]) expect(clarified).not.toHaveProperty(key);
     expect(() => validatePersonAnswerResponseV8({ ...clarified, merge: [0] })).toThrow("Ask response merge is inconsistent");
   });

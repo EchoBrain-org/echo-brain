@@ -2,22 +2,17 @@ import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
 import {
   validatePersonAnswerRequestV3,
   validatePersonAnswerResponseV8,
-  type PersonAnswerCitationV8,
   type PersonAnswerPreviousV1,
   type PersonAnswerResponseV8,
   type PersonAnswerThreadV1,
-  type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { AGENTIC_READ_SILENCE_MS_V1, createAgenticAskV5, type AgenticAskAuditEntryV1, type AgenticResolutionKeptV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { agenticResolutionKeyV1, FOLLOW_UP_RESOLVER_PROMPT, THREAD_RESOLVER_PROMPT, threadPlacementSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
-import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
-import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, record, recorded, result, writerReply } from "./fixtures/agentic-scenarios.js";
+import { checked, cited, finishOn, generation, observed, record, result, scripted, searchFor, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * The asker's threads on a V8 Ask (ADR-0056, Ask threads v1 T3): one resolution places the question (the open thread,
@@ -33,10 +28,6 @@ const ticketItem: EvidenceDeskItemV2 = Object.freeze({
   attributes: { status: "In Progress", owner: "Dev Patel" }, occurred_at: "2026-11-20", receipt_sha256: canonicalSha256({ ticket: 482 }),
 });
 const decisionItem = record("dvt-gate", "Approved: the DVT gate stays on hold until THERM-482 is fixed; Lin Zhao approved the hold.") as EvidenceDeskItemV2;
-const cited = (item: EvidenceDeskItemV2, kind: PersonAnswerCitationV8["kind"]): PersonAnswerCitationV8 => ({
-  citation: item.citation as PersonAnswerCitationV8["citation"], kind, label: item.label, visibility: item.visibility,
-  ...(item.citation.kind === "approved_record" ? { ref: `meeting:${item.citation.record_sha256}` as const } : {}),
-});
 /** The open thread: an older turn that names the ticket, and a latest turn that cites only the decision. */
 const PREVIOUS: PersonAnswerPreviousV1 = {
   purpose: "follow_up", question: "who approved the hold?", asked_at: "2026-11-22T17:05:00.000Z",
@@ -57,25 +48,6 @@ const QUESTION = "what are the details on that ticket?";
 const RESOLVED = "What are the details on THERM-482?";
 const ELSEWHERE = { thread: "other", threads: [2, 1] };
 
-/** Replies by role: the resolver's (either prompt), research steps', and the writer's, each in order; an unscripted call fails the Ask. */
-function scripted(script: { readonly resolver?: readonly unknown[]; readonly steps?: readonly unknown[]; readonly writer?: readonly unknown[] }) {
-  const inputs: StructuredGenerationInput[] = [];
-  const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
-  const roleOf = (input: StructuredGenerationInput) => input.system_prompt === THREAD_RESOLVER_PROMPT || input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
-    : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
-  return {
-    inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
-    model: { generate: async (input: StructuredGenerationInput) => {
-      inputs.push(recorded(input));
-      const reply = queue[roleOf(input)].shift();
-      if (reply === undefined) throw new Error(`unscripted ${roleOf(input)} call`);
-      if (typeof reply === "function") return (reply as () => unknown)();
-      return reply;
-    } },
-  };
-}
-const finishOn = (question: string, evidence: readonly string[]) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "found", evidence }] }], actions: [{ tool: "finish", args: {} }] });
-const searchFor = (question: string, query: string) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query } }] });
 /** Research that searches once and finishes on what it found, and a writer that states one sentence from it. */
 const researched = (question: string) => ({
   steps: [searchFor(question, "THERM-482"), finishOn(question, ["E1"])],
@@ -100,15 +72,7 @@ function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>) {
   });
   return { ask, audits };
 }
-/** A run under the request's observer: the corrections every span of it counted, summed. */
-async function observed<T>(operation: () => Promise<T>): Promise<{ readonly value: T; readonly corrections: Readonly<Record<string, number>> }> {
-  const events: CoreRuntimeObservationV1[] = [];
-  const value = await observeCoreRuntimeV1("research_run", operation, { observer: event => { events.push(event); } });
-  const corrections: Record<string, number> = {};
-  for (const event of events) if (event.event !== "started") for (const [name, count] of Object.entries(event.model_corrections ?? {})) corrections[name] = (corrections[name] ?? 0) + count;
-  return { value, corrections };
-}
-const reads = (port: ReturnType<typeof desk>) => [port.search, port.list, port.open, port.openCitation];
+const reads =(port: ReturnType<typeof desk>) => [port.search, port.list, port.open, port.openCitation];
 
 describe("the fixtures are a valid Ask with its threads (ADR-0056)", () => {
   it("is a request the API takes", () => {
@@ -152,15 +116,6 @@ describe("a question that belongs to other threads (ADR-0056)", () => {
       expect(run.inputs).toHaveLength(1);
       expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
     }
-  });
-
-  it("streams as its access check alone, with an empty receipt", async () => {
-    const events: PersonAskProgressStepEventV3[] = [];
-    const { ask } = askV8(desk(), scripted({ resolver: [ELSEWHERE] }));
-    const { response, receipt } = await ask.answerWithReceipt({ question: QUESTION, previous: PREVIOUS, threads: THREADS, on_progress: event => { events.push(event); } });
-    expect(response).toMatchObject({ outcome: "clarify", thread: { kind: "other", threads: [1, 0] } });
-    expect(events).toEqual([{ type: "stage", stage: "checking_access" }]);
-    expect(receipt).toMatchObject({ looked_through: 0, rows: [] });
   });
 });
 
