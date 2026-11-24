@@ -111,14 +111,23 @@ copy that a unit test proves equivalent.
   labels on turns in that same file: each turn names its thread by the id of
   the thread's first turn, and a turn saved before the label belongs to the
   thread of the turn it followed in the same place. Ask shows one thread, and
-  the list under the thread's name is the way to another: a row jumps to a
-  thread at its place (Home, or its project's page), and Merge relabels a
-  thread's turns into the open one with `timeline.put`. Every turn of a
-  thread was asked in its home: a thread is asked in only there, and only
-  threads of one home merge. Turns move one move at a time: until a merge's
-  or an Undo's saves have settled nothing else asks, jumps, merges or undoes,
-  and when a save fails or never answers the page reads `timeline.read` again
-  and shows what the file holds. A person is in a
+  the list under the thread's name is the way to another: a row, the open
+  thread's own included, jumps to a thread at its home (Home, or its
+  project's page), and Merge relabels a thread's turns into the open one.
+  Every turn of a thread was asked in its home: a thread is asked in only
+  there, and only threads of one home, every turn of them asked there,
+  merge. A merge or its Undo is one compare-and-set `timeline.move`: groups
+  of turns with the thread the page has them in, which the host, reading the
+  file strictly, moves in one write only while the file has every named turn
+  there, answering where it has each; nothing shows moved before that
+  answer, and until it comes nothing else asks, jumps, merges or undoes. A
+  move the host refused moves nothing and the page says so (and shows where
+  the file has the turns, when they had moved); one with no answer to go by
+  (none in time, or none at all) changes nothing on the page, takes away any
+  Undo, and says ECHO could not confirm it, since only reading the file
+  again, as a restart does, says what it holds. `timeline.put` keeps the
+  thread the file has a turn in, so a turn saved whole never takes a move
+  back. A person is in a
   thread once they have asked in it or picked it since Ask opened, its own row
   in the list included; the
   sidebar's Ask only shows the thread they last used. In a thread, `ask.run`
@@ -127,11 +136,12 @@ copy that a unit test proves equivalent.
   every thread the question may be placed in, the one shown included. The
   answer says when the question belongs to another thread or starts one, and
   the host refuses one that leaves out what an Ask with threads is owed: its
-  question, and with no previous turn, where it belongs. A turn's full
-  question, which a model may have written, is sent again only while a fresh
-  check finds every turn that could have informed it readable: the turns it
-  followed and every turn asked before it in its thread. Otherwise the typed
-  words go.
+  question, and with no previous turn, where it belongs. Each turn records
+  what its request carried (`carried`), and its full question, which a model
+  may have written, is sent again only while a fresh check finds every turn
+  that could have informed it still kept and readable: the turns it followed
+  and every turn each of those carried, wherever they are filed now.
+  Otherwise the typed words go.
 
 ## Updates
 

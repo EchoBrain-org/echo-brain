@@ -443,11 +443,12 @@ export function homeTurns(thread: Pick<Thread, 'home' | 'turns'> | undefined, sc
 }
 
 /**
- * Whether `thread` may merge into `into` (R9): another thread, living where it does. The one rule for every merge, by
- * hand or ECHO's own, and for the row that offers it.
+ * Whether `thread` may merge into `into` (R9): another thread, living where it does, every turn of it asked there, so
+ * one an older file holds mixed never carries a turn of another scope across. The one rule for every merge, by hand or
+ * ECHO's own, and for the row that offers it.
  */
 export function mergeable(thread: Thread, into: Thread | undefined): boolean {
-  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home);
+  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home) && thread.turns.every(turn => sameScope(turn.scope, into.home));
 }
 
 /** Threads, the one asked in most recently first. */
@@ -465,17 +466,24 @@ export function otherThreads(threads: readonly Thread[], scope: AskScope, contin
 }
 
 /**
- * The older turns of a thread a follow-up carries (R6): those `turns` (the thread as Ask shows it) has before `before`,
- * the turn it continues, oldest first. Each goes by the person's own words, so one without any is left out, with its
- * sentences `found` (the check this follow-up made, by turn) has readable, as the previous turn's go: only its question
- * with nothing found of it.
+ * The older turns of a thread a follow-up carries (R6), oldest first: those `turns` (the thread's turns where it lives,
+ * as kept) has before `before`, the turn it continues, each question once as Ask shows them (visibleTurns), with the
+ * person's own words. Folded with `before` among them, so a turn it asks again, or whose question it repeats, folds away
+ * behind it, then without it. Found among all the turns kept, never among those shown, `before` is not lost when a later
+ * turn repeats its question (one a merge brought in) and folds it away.
+ */
+export function earlierTurns(turns: readonly TimelineTurn[], before: TimelineTurn): TimelineTurn[] {
+  const at = turns.findIndex(turn => turn.id === before.id);
+  return visibleTurns(turns.slice(0, at + 1)).filter(turn => turn.id !== before.id && sentWords(turn) !== undefined);
+}
+
+/**
+ * Those older turns as `previous.earlier` carries them (R6): each by the person's own words, with its sentences `found`
+ * (the check this follow-up made, by turn) has readable, as the previous turn's go: only its question with nothing
+ * found of it.
  */
 export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, found: Readonly<Record<string, TurnChecks>> | null): AskEarlierTurn[] {
-  const at = turns.findIndex(turn => turn.id === before.id);
-  return turns.slice(0, Math.max(at, 0)).flatMap(turn => {
-    const question = sentWords(turn);
-    return question === undefined ? [] : [carried(turn, question, readableStatements(turn, found?.[turn.id] ?? null))];
-  });
+  return earlierTurns(turns, before).map(turn => carried(turn, sentWords(turn)!, readableStatements(turn, found?.[turn.id] ?? null)));
 }
 
 /** What an Ask carries beside its question: the previous turn with its thread's older turns, and the threads it may be placed in, with which threads those are. */

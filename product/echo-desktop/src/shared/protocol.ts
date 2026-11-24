@@ -438,14 +438,40 @@ export interface TimelineTurn {
    * and belongs to the thread of the turn it followed in the same place (threadIdOf) until it is next saved.
    */
   readonly thread?: string;
+  /**
+   * What its full question may have been written from (ADR-0056, R10), recorded when it lands: the turns, by id, that the
+   * request asking it carried (the previous turn and the thread's older turns that went), and for a choice of "Which
+   * one?" those the request offering it carried too. A question built from this turn goes only while each of these, for
+   * it and for each turn back along `follows`, is still kept and checks readable (questionOf). A turn saved before threads,
+   * with no `thread` either, carried no more than the turns along `follows`, and is marked `[]` once it is named; one
+   * that names its thread without this record came from a build before it, and nothing a model wrote along it goes.
+   */
+  readonly carried?: readonly string[];
+}
+
+/**
+ * One group of a move between threads (ADR-0056): turns, by id, the page believes the file has in thread `from` (null:
+ * in none, saved before threads), all going to thread `to`. Threads are named by a turn's id.
+ */
+export interface TimelineMove {
+  readonly from: string | null;
+  readonly to: string;
+  readonly turns: readonly string[];
+}
+
+/** A turn's thread as the file holds it: null for none. */
+export interface TimelineLabel {
+  readonly turn: string;
+  readonly thread: string | null;
 }
 
 /**
  * Transport: the most a put may send, one turn, whose answer is at most the
  * API's PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 (1 MiB) with its sources' citations
- * kept beside them, so four times the answer's bound. Every other call keeps
- * the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed renderer imports
- * this file; a test holds it above the API's bound.
+ * kept beside them, so four times the answer's bound; a move between threads
+ * takes the same, its ids naming a thread of any length the file holds. Every
+ * other call keeps the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed
+ * renderer imports this file; a test holds it above the API's bound.
  */
 export const MAX_TIMELINE_PUT_BYTES = 4 * 1024 * 1024;
 
@@ -762,8 +788,17 @@ export interface HostMethods {
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
-  /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
+  /**
+   * Keeps one turn: a new one at the end, or one already kept in its place, in the thread the file has it in when it has
+   * it in one (only a move relabels a turn); then the oldest past the bounds go.
+   */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
+  /**
+   * Moves turns between threads in one write (ADR-0056), compare-and-set and all or nothing: only when the file holds every
+   * named turn, each in its group's `from`; then sets only each one's thread. Answers whether it moved them, and the
+   * threads the file has the named turns it holds in now; a turn it does not hold is left out.
+   */
+  'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { moved: boolean; turns: TimelineLabel[] } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -871,7 +906,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.move': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -894,6 +929,13 @@ export function isWriteCall(method: string, params: unknown): boolean {
   if (!WRITE_METHODS.has(method)) return false;
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
+}
+/**
+ * Whether a call may change what is kept: the Authority's (isWriteCall), or this computer's own Ask timeline. One no
+ * host answered says whether it was made (hostGoneFailure), so a move of turns no host took is known not to have happened.
+ */
+export function mayChange(method: string, params: unknown): boolean {
+  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.move';
 }
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
@@ -1066,11 +1108,12 @@ export function changesLogLine(params: unknown): string | null {
 
 /**
  * The most a call's parameters may take at the broker: a timeline put and
- * Copy answer each carry one whole answer, every other call (an Ask, a note)
- * the Authority's Person request bound, MAX_REQUEST_BYTES.
+ * Copy answer each carry one whole answer, and a timeline move takes as much,
+ * every other call (an Ask, a note) the Authority's Person request bound,
+ * MAX_REQUEST_BYTES.
  */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
+  return method === 'timeline.put' || method === 'timeline.move' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

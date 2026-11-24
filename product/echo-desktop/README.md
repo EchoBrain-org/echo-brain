@@ -74,8 +74,10 @@ keeps it. The Authority never stores it. Ask opens over the page on one
 thread (ADR-0056, proposed): the turns that carry the same thread label, under
 the thread's name, which opens the list of every thread by home (a project, or
 none) to jump to one or merge one of the same home into the open thread. A
-merge this computer could not save is not shown as made: the timeline is read
-again and the page says so. You are in a thread
+merge, or its Undo, shows only once this computer has kept it, in one write;
+one it refused moves nothing and the page says so, and one it cannot confirm
+changes nothing on the page and says so, showing correctly after ECHO
+restarts. You are in a thread
 once you have asked in it or picked it since Ask opened, its own row in the
 list included; the sidebar's Ask
 only shows the one you last used. In a thread, a typed question continues it.

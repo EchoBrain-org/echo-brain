@@ -15,7 +15,7 @@ import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  askCarries, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, earlierOf, followedTurn, foundUnreadable, freshChecks, freshStates,
+  askCarries, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, earlierOf, earlierTurns, followedTurn, foundUnreadable, freshChecks, freshStates,
   homeTurns, knownStates, mergeable, otherThreads, turnReadable, previousOf, sameScope, shownInFull, showsOf, threadGroups, threadIds, threadsOf, undoable, unreadableAfter, visibleTurns, turnGroups,
   type CheckPlan, type MovedTurn, type Suggestion, type Thread, type ThreadGroup, type TurnCheck, type TurnChecks,
 } from './timeline.js';
@@ -65,16 +65,16 @@ type AskHow =
    * The person's own words. `follows`: the turn of the thread they are in that it continues, where the answer lands; null
    * for none, and the answer then starts a thread. `placed`: whether it is to be placed (ADR-0056), and so carries the
    * threads it may belong to, a list that goes even when empty; false once a jump or the person has said where it goes
-   * (asked again in a thread, or as a new question), so nothing moves it again. `merge`: the threads, by id, that the
-   * answer which sent the question to this thread said are on its subject. They join the thread when this question's
-   * answer lands in it and not before, so a question that is cancelled or fails has moved nothing, and Try again still
-   * knows them.
+   * (asked again in a thread, or as a new question), so nothing moves it again.
    */
-  | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean; readonly merge: readonly string[] }
+  | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean }
   /** A turn's question again: in its scope, carrying the turn (Ask again), or everywhere, carrying nothing (Ask everywhere). */
   | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
-  /** A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`. */
-  | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null };
+  /**
+   * A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`,
+   * from what the request offering it carried (`carried`, by turn: AskClarify).
+   */
+  | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null; readonly carried: readonly string[] };
 
 /** The question on its way, and what it has done so far (ADR-0039). */
 export interface AskAsking extends AskQuestion {
@@ -83,22 +83,24 @@ export interface AskAsking extends AskQuestion {
 
 /**
  * "Which one?", in one of its two kinds. Never kept.
- * `choices`: a follow-up that could mean several things, the choices, the turn it continued and its typed words.
+ * `choices`: a follow-up that could mean several things, the choices, the turn it continued, its typed words, and what
+ * its request carried (`carried`, by turn): the choices may have been written from any of those turns (R10).
  * `threads` (ADR-0056): a question (the person's typed words) that belongs to other threads, named by id, with those the
  * answer said are on the subject of the one named (`merge`, only beside one). A thread named that is gone by the time
  * the page shows them has no button (clarifyThreads), and one picked whose home cannot be asked in is taken off the list
  * (chooseThread).
  */
 export type AskClarify = AskQuestion & (
-  | { readonly kind: 'choices'; readonly choices: readonly AskChoice[]; readonly follows: string | null; readonly typed: string | null }
+  | { readonly kind: 'choices'; readonly choices: readonly AskChoice[]; readonly follows: string | null; readonly typed: string | null; readonly carried: readonly string[] }
   | { readonly kind: 'threads'; readonly threads: readonly string[]; readonly merge: readonly string[] }
 );
 
 /**
  * The merge the line under the thread's name tells of (ADR-0056), with what Undo needs: the thread merged into, each
- * turn moved with the thread it was in, and the merged threads' names. In memory only, and only while Undo would take
- * back exactly that merge (mergedLine): it goes with the next question, jump or close, when a save of the merge did
- * not go through (moveTurns), and whenever the timeline is replaced (timelineReplaced).
+ * turn moved with the thread it was in, and the merged threads' names. In memory only, set once the file confirmed the
+ * merge (mergeInto), and only while Undo would take back exactly that merge (mergedLine): it goes with the next
+ * question, jump or close, with an Undo that went through or whose outcome is not known (undoMerge), and whenever the
+ * timeline is replaced (timelineReplaced). An Undo the file refused leaves it, to be tried again.
  */
 export interface AskMerged {
   readonly into: string;
@@ -124,7 +126,10 @@ export interface AskTook {
  * the timeline.
  */
 export interface AskState {
-  /** The question on its way; a reply for any other is dropped. Every thread opened and question asked takes a new one. */
+  /**
+   * The question on its way; a reply for any other is dropped. Every thread opened and question asked takes a new one, and
+   * so does every move between threads (moveTurns), so a question still being prepared is not asked in a changed thread.
+   */
   seq: number;
   /**
    * The open thread and whether the person is in it, or null for none: a question asked from a page, until its answer
@@ -176,9 +181,9 @@ interface TimelineState {
    */
   checks: Readonly<Record<string, TurnCheck>>;
   /**
-   * Turns are moving between threads (ADR-0056): a merge, or its Undo, whose saves have not all settled (moveTurns). One
-   * move at a time, and while it lasts no question, jump, merge or Undo starts (askBusy), so nothing is built on turns the
-   * file may not hold. It ends when every save went through, or, when one did not, once the file has been read again; and
+   * Turns are moving between threads (ADR-0056): a merge, or its Undo, whose one move the host has not answered yet
+   * (moveTurns). One move at a time, and while it lasts no question, jump, merge or Undo starts (askBusy), so nothing is
+   * built on turns while the file may be changing them. It ends when the move's reply comes, or does not in time, and
    * with the timeline itself (signed out, another account).
    */
   moving: boolean;
@@ -695,6 +700,11 @@ let state: State = {
 };
 const listeners = new Set<() => void>();
 let seq = 0;
+/**
+ * Which move of the person's is the latest (navigated): a wait begun before one (a jump reading its project, the words
+ * asked again after a merge) goes on only if none came meanwhile.
+ */
+let navSeq = 0;
 /** The active request's host cancellation id. It never leaves the desktop IPC. */
 let activeAskCancelId: string | null = null;
 
@@ -712,9 +722,35 @@ export function sheetShown(current: State = state): Sheet | null {
   return sheet?.kind === 'new-project' && sheet.hidden ? null : sheet;
 }
 
+/** Something is up over the page that owns the keyboard, its Escape and its focus: Capture, a sheet, a project settings dialog. */
+export function sheetUp(current: State = state): boolean {
+  return Boolean((current.compose && !current.compose.hidden) || sheetShown(current) || projectSettingsModal(current));
+}
+
 /** A toast that says something went well goes by itself; one that warns stays until the next page. */
 export function clearToast(shown: number): void {
   if (state.toastShown === shown) set({ toast: null });
+}
+
+/**
+ * Whether `patch`, set over `before`, is a move of the person's (navSeq): Ask closed, which every page change does too,
+ * or a question started there; or another page, reader item, follow-up view or item page in front, opened or closed;
+ * or Home, on screen, zoomed to another altitude, or into or out of a kind's list. A merge, an Undo and the bar widened
+ * count too (mergeThread, undoMerge, widenScope).
+ */
+function navigated(before: State, patch: Partial<State>): boolean {
+  if ('ask' in patch && (patch.ask === null || (patch.ask?.asking && !before.ask?.asking))) return true;
+  const page = (current: State) => (current.route.page === 'project' ? current.route.project.project_id : current.route.page);
+  const item = (current: State) => (current.reader ? `${current.reader.ref.kind} ${current.reader.ref.id}` : null);
+  // Home's zoom as it shows, nothing over it: its altitude, a kind's list, and what the altitude is on. Not a project or
+  // person it only remembers, which a refresh of your projects may let go while Home shows the same.
+  const zoom = (current: State) => {
+    const { level, category, project_id, membership_id } = current.altitude;
+    const shown = current.route.page === 'home' && current.ask === null && current.reader === null && followUpShown(current) === null;
+    return shown ? `${level} ${category} ${level === 'project' ? project_id : level === 'person' ? membership_id : null}` : null;
+  };
+  return page(before) !== page(state) || item(before) !== item(state) || before.followUps?.views.at(-1)?.seq !== state.followUps?.views.at(-1)?.seq
+    || (zoom(before) !== null && zoom(state) !== null && zoom(before) !== zoom(state));
 }
 
 function set(patch: Partial<State>): void {
@@ -724,7 +760,9 @@ function set(patch: Partial<State>): void {
     activeAskCancelId = null;
     void rpc('ask.cancel', { cancel_id: cancelId });
   }
+  const before = state;
   state = { ...state, ...patch, ...(patch.toast ? { toastShown: state.toastShown + 1 } : {}) };
+  if (navigated(before, patch)) navSeq += 1;
   // A modal owns keyboard focus. Dismiss only the transient project menu,
   // retaining settings drafts and writes while unmounting its global handlers.
   if (state.projectSettings?.menu && (sheetShown() || (state.compose && !state.compose.hidden))) {
@@ -3545,7 +3583,14 @@ export function toggleEmployeeMenu(email: string): void {
  * question typed then is asked outside a project's thread, since a thread is asked in only where it lives (ask).
  */
 export function widenScope(): void {
+  // The person's own move: a jump or a pick still waiting gives way to it (navSeq), rather than narrow the bar back.
+  navSeq += 1;
   set({ barScope: { kind: 'global' } });
+}
+
+/** Typed words a question will not be asked with after all, back in the bar, unless the person has typed there since. */
+function wordsBack(question: string): void {
+  if (state.barText.trim() === '') set({ barText: question });
 }
 
 /** What a project's turns are called: the project by its name, as the sidebar has it. */
@@ -3559,7 +3604,7 @@ export function scopeName(scope: ProjectScope, current: State = state): string {
 
 /** Which read of the timeline is the latest: a reply for an earlier one, or another account's, is dropped. */
 let timelineSeq = 0;
-/** Which move of turns between threads is on its way (moveTurns): forgetting the timeline takes a new one, so its saves' replies are dropped. */
+/** Which move of turns between threads is the latest (moveTurns): forgetting the timeline takes a new one, so its reply is dropped. */
 let moveSeq = 0;
 /** Which timeline, as last read, the checks on their way are for: forgetting it, or reading it again, drops their replies. */
 let checkSeq = 0;
@@ -3612,12 +3657,11 @@ export function checksOf(turn: TimelineTurn, current: State = state): TurnChecks
 }
 
 /**
- * The account's timeline, read at sign-in and when the account changes, and
- * again when a move between threads could not all be saved (moveTurns), with
+ * The account's timeline, read at sign-in and when the account changes, with
  * nothing of the last check. A read that fails is made once more, unless the
  * account is gone; one that fails again leaves it as it was. A turn kept
  * meanwhile (an Ask answered first) stays, after those read. The merged line
- * goes with the turns it told of (timelineReplaced).
+ * and a question that failed go with the turns they were of (timelineReplaced).
  */
 async function loadTimeline(): Promise<void> {
   const account = expect();
@@ -3641,7 +3685,7 @@ async function loadTimeline(): Promise<void> {
 
 /**
  * Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the
- * host's. A move between threads on its way ends here: its saves' replies are for a timeline that is gone.
+ * host's. A move between threads on its way ends here: its reply is for a timeline that is gone.
  */
 function forgetTimeline(): void {
   timelineSeq += 1;
@@ -3654,11 +3698,22 @@ function forgetTimeline(): void {
 
 /**
  * The timeline is replaced by another: read again from its file, or forgotten. The merged line told of turns as they
- * were, and its Undo would move turns the new timeline may hold elsewhere, so it goes.
+ * were, and its Undo would move turns the new timeline may hold elsewhere, so it goes. A question that failed stays
+ * while Try again would still ask it as it shows: it continued no turn, or the turn it was built from is still kept in
+ * the thread it was asked in (stillAsks); otherwise it would be asked in another thread than the one it shows in, and goes.
  */
 function timelineReplaced(timeline: State['timeline']): void {
   setTimeline(timeline);
-  if (state.ask?.merged) set({ ask: { ...state.ask, merged: null } });
+  const view = state.ask;
+  const failed = view?.failed && stillAsks(view.failed) ? view.failed : null;
+  if (view && (view.merged || failed !== view.failed)) set({ ask: { ...view, merged: null, failed } });
+}
+
+/** Whether a question that failed would be asked again as it shows: built from no turn, or from one still kept in the thread it was asked in. */
+function stillAsks(failed: NonNullable<AskState['failed']>): boolean {
+  const built = 'turn' in failed.how ? failed.how.turn : failed.how.follows;
+  const turn = built === null ? undefined : turnOf(built);
+  return built === null || (turn !== undefined && (failed.thread === null || threadIdOf(turn) === failed.thread));
 }
 
 /** No check is good any more, none on its way counts, and none is waited on to go stale: the next Ask checks afresh. */
@@ -3687,22 +3742,27 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
 export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
 
 /**
- * Keeps a turn, here and in the account's file: in place of the turn with its
- * id, or at the end, named with its thread (ADR-0056) from now on. A put that
- * fails is not retried, and `notKept` says so: by default that the turn shows
- * only until the timeline is read again.
+ * Keeps turns, here and in the account's file: each in place of the turn with
+ * its id, or at the end, named with its thread (ADR-0056) from now on; the
+ * file keeps the thread it has a turn in, which only a move changes. One
+ * change of the timeline here, and one put a turn. A put that fails is not
+ * retried, and the page says the turn shows only until the timeline is read
+ * again.
  */
-function keepTurn(given: TimelineTurn, notKept: () => void = () => set({ toast: TURN_NOT_SAVED })): void {
+function keepTurns(given: readonly TimelineTurn[]): void {
   const account = expect();
-  if (!account) return;
-  // A turn saved before threads is named with the thread it belongs to when it is next saved, never rewritten for that alone.
-  const turn: TimelineTurn = given.thread === undefined ? { ...given, thread: threadIdOf(given) } : given;
+  if (!account || given.length === 0) return;
+  // A turn saved before threads is named with the thread it belongs to when it is next saved, never rewritten for that
+  // alone; one with no record of what it carried either carried no more than its chain, and is marked so (`carried`).
+  const named = given.map((turn): TimelineTurn => (turn.thread !== undefined ? turn
+    : { ...turn, thread: threadIdOf(turn), ...(turn.carried === undefined ? { carried: [] } : {}) }));
+  const byId = new Map(named.map(turn => [turn.id, turn]));
   const turns = state.timeline.turns;
-  const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  setTimeline({ ...state.timeline, turns: kept });
+  const known = new Set(turns.map(turn => turn.id));
+  setTimeline({ ...state.timeline, turns: [...turns.map(turn => byId.get(turn.id) ?? turn), ...named.filter(turn => !known.has(turn.id))] });
   // Said only while the same account is signed in: another's page never hears of it.
-  const lost = () => { if (sameAccount(account)) notKept(); };
-  void rpc('timeline.put', { expect: account, turn }).then(result => { if (!result.ok) lost(); }, lost);
+  const lost = () => { if (sameAccount(account)) set({ toast: TURN_NOT_SAVED }); };
+  for (const turn of named) void rpc('timeline.put', { expect: account, turn }).then(result => { if (!result.ok) lost(); }, lost);
 }
 
 // ---- threads (ADR-0056) --------------------------------------------------------------
@@ -3832,7 +3892,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
 interface Derived {
   /** The earlier question that may go: the turn's own, or the person's typed words; undefined when neither may. */
   readonly question: string | undefined;
-  /** Whether every turn that could have informed the turn's question checked readable (questionOf). */
+  /** Whether every turn that could have informed the turn's question is still kept and checked readable (questionOf). */
   readonly readable: boolean;
   /** What this check found of the turn's own sources, for the sentences `previous` carries; null if it found nothing. */
   readonly checks: TurnChecks | null;
@@ -3840,38 +3900,42 @@ interface Derived {
   readonly found: Readonly<Record<string, TurnChecks>> | null;
 }
 
-/** The turns of a turn's thread asked before it, oldest first: those a merge brought in included. */
-function askedBefore(turn: TimelineTurn): readonly TimelineTurn[] {
-  const turns = threadOf(threadIdOf(turn))?.turns ?? [];
-  return turns.slice(0, Math.max(turns.findIndex(each => each.id === turn.id), 0));
-}
-
 /**
- * The one rule for a question the model may have written (ADR-0047, C5), for every follow-up, Ask again, Ask everywhere
- * and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's question may have been
- * written from the sources of every turn that rode on the request that asked it: its own, those of each turn back along
- * `follows`, and those of every turn asked before one of these in its thread (ADR-0056), since a thread's older turns
- * ride behind the turn a follow-up continues, a turn a merge brought in among them. It goes only when a check made by
- * this very call (never the five-minute one) finds every one of those turns with at least one source, each readable; a
- * chain with a turn missing, or saved before `follows` was kept, fails. A first question in the person's own words needs
- * no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost between
- * this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
- * The one check covers the thread's older turns a follow-up carries too, so every sentence that goes was found readable
- * just now. What a check says is good for five minutes from when it went (C5), here as everywhere: one that comes back
- * later than that, its requests having taken so long, is as none, and the request goes with questions only.
+ * The one rule for a question the model may have written (ADR-0047, C5, R10), for every follow-up, Ask again, Ask
+ * everywhere and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's full question
+ * may have been written from what the request asking it carried, which the turn recorded when it landed (`carried`),
+ * and from the turns back along `follows`, whose own questions rode on it, with what each of them carried; a choice
+ * also from what the request that offered it carried (`offered`). It goes only when a check made by this very call
+ * (never the five-minute one) finds every one of those turns still kept, with at least one source, each readable. A
+ * chain with a turn missing, or saved before `follows` was kept, fails, and so does a carried turn no longer kept; a
+ * turn saved before `carried` was kept carried no more than its chain. Where a turn is filed now says nothing of it. A
+ * first question in the person's own words needs no check. Otherwise only the person's typed words go, and none for a
+ * turn that never kept them. Access lost between this check and the send is the Authority's to catch: it checks the
+ * turn's citations again when the request comes. The one check also covers the older turns a follow-up carries
+ * (`riding`), so every sentence that goes was found readable just now. What a check says is good for five minutes
+ * from when it went (C5), here as everywhere: one that comes back later than that, its requests having taken so long,
+ * is as none, and the request goes with questions only.
  */
-async function questionOf(turn: TimelineTurn): Promise<Derived> {
+async function questionOf(turn: TimelineTurn, riding: readonly TimelineTurn[] = [], offered: readonly string[] = []): Promise<Derived> {
+  const byId = new Map(state.timeline.turns.map(each => [each.id, each]));
   const chain: TimelineTurn[] = [];
-  for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !chain.includes(link);) {
+  const walked = new Set<string>();
+  for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !walked.has(link.id);) {
     chain.push(link);
-    link = link.follows === null ? undefined : turnOf(link.follows);
+    walked.add(link.id);
+    link = link.follows === null ? undefined : byId.get(link.follows);
   }
-  const informed = [...new Set((chain.length > 0 ? chain : [turn]).flatMap(link => [link, ...askedBefore(link)]))];
+  const carried = new Set([...offered, ...chain.flatMap(link => link.carried ?? [])]);
+  const informed = [...new Set([...(chain.length > 0 ? chain : [turn]), ...[...carried].flatMap(id => byId.get(id) ?? [])])];
+  // A turn that names its thread but recorded nothing of what its request carried was saved by a build of threads before
+  // that record: what it was written from is not known, so nothing a model wrote along it goes.
+  const unknown = chain.some(link => link.thread !== undefined && link.carried === undefined);
   const went = Date.now();
-  const checked = await checkTurns(informed);
+  const checked = await checkTurns([...new Set([...informed, ...riding])]);
   const found = Date.now() - went < CHECK_FRESH_MS ? checked : null;
-  // Whole only when the chain ends at a turn that followed none.
-  const readable = found !== null && chain.at(-1)?.follows === null && informed.every(each => turnReadable(each, found[each.id]));
+  // Whole only when the chain ends at a turn that followed none, and every turn carried along it is still kept.
+  const readable = found !== null && !unknown && chain.at(-1)?.follows === null && [...carried].every(id => byId.has(id))
+    && informed.every(each => turnReadable(each, found[each.id]));
   const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
   const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
   return { question, readable, checks: found?.[turn.id] ?? null, found };
@@ -3888,14 +3952,14 @@ export function askAgainOffered(turn: TimelineTurn): boolean {
  * stays hidden past the five minutes a check is good for, and after a restart.
  */
 function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): void {
-  for (const [id, states] of checked) {
-    const turn = turnOf(id);
-    if (!turn) continue;
-    const next = unreadableAfter(turn.unreadable, states);
-    if (next.join() === (turn.unreadable ?? []).join()) continue;
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  keepTurns(checked.flatMap(([id, states]) => {
+    const turn = byId.get(id);
+    const next = turn && unreadableAfter(turn.unreadable, states);
+    if (!turn || !next || next.join() === (turn.unreadable ?? []).join()) return [];
     const { unreadable: _kept, ...rest } = turn;
-    keepTurn(next.length > 0 ? { ...rest, unreadable: next } : rest);
-  }
+    return [next.length > 0 ? { ...rest, unreadable: next } : rest];
+  }));
 }
 
 /**
@@ -3951,7 +4015,7 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
   const continued = open && open.asked.length === open.openedAt ? open.opened : null;
   // A thread is asked in only where it lives, and continues only a turn asked there (R9).
   const follows = followedTurn(homeTurns(threadIn(), scope), continued)?.id ?? null;
-  return askAs({ kind: 'typed', question: question.trim(), follows, placed: true, merge: [] }, scope);
+  return askAs({ kind: 'typed', question: question.trim(), follows, placed: true }, scope);
 }
 
 /**
@@ -3974,10 +4038,8 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
  * another scope.
  *
  * An answer that says the question belongs to other threads answers nothing: Ask moves to the one thread named when
- * that stays in the place asked, and asks the same words there; anything else waits for the person ("Which one?"). The
- * words asked again continue that thread's own latest turn, and the threads the answer said are on its subject
- * (`how.merge`) join it only once that question's answer has landed there: a turn never follows one that an Undo of
- * the merge would take out of its thread, and a question that is cancelled or fails has moved nothing.
+ * that stays in the place asked, and asks the same words there (askThere); anything else waits for the person ("Which
+ * one?"). The threads an answer says are on the subject of the thread it lands in join that thread (mergeInto).
  *
  * Every wait re-checks before it goes on: the Ask is still the one on its way (`seq`, which a cancel, a jump, closing
  * Ask and every page change replace), and the account is the one that asked.
@@ -3996,7 +4058,7 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   if (how.kind !== 'typed') {
     if (!from && how.kind !== 'choice') return;
     const before = state.ask?.seq;
-    derived = from ? await questionOf(from) : null;
+    derived = from ? await questionOf(from, [], how.kind === 'choice' ? how.carried : []) : null;
     // Asked meanwhile, Ask closed or moved to another thread, or another account: this one is not asked.
     if (state.ask?.seq !== before || askBusy() || !sameAccount(account)) return;
     typed = how.kind === 'choice' ? how.typed : from?.typed ?? null;
@@ -4023,10 +4085,12 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
       ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
-  // The thread the person's own question continues, as Ask shows it: its turns before the one continued ride behind it.
-  const thread = how.kind === 'typed' && from ? visibleTurns(homeTurns(threadOf(within), scope)) : [];
+  // The thread the person's own question continues, where it lives, as kept: its turns before the one continued ride
+  // behind it, each question once (earlierTurns), checked with it in the one check.
+  const home = how.kind === 'typed' && from ? homeTurns(threadOf(within), scope) : [];
+  const older = how.kind === 'typed' && from ? earlierTurns(home, from) : [];
   if (how.kind === 'typed' && from) {
-    derived = await questionOf(from);
+    derived = await questionOf(from, older);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
       if (activeAskCancelId === cancelId) activeAskCancelId = null;
       notAsking(mine);
@@ -4039,8 +4103,13 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   // A question to be placed carries the threads it may be placed in: every one but the thread it continues, so all of them
   // when it continues none. A follow-up none of whose turn may go is not placed: it stays in the thread it was typed in.
   const placed = how.kind === 'typed' && how.placed && (from === null || previous !== null);
-  const carries = askCarries(askText(text), scope, previous, how.kind === 'typed' && from ? earlierOf(thread, from, derived?.found ?? null) : [],
+  const carries = askCarries(askText(text), scope, previous, how.kind === 'typed' && from ? earlierOf(home, from, derived?.found ?? null) : [],
     placed ? otherThreads(threads(), scope, within) : null);
+  // What its answer's question may be written from (R10), recorded where it lands (`carried`): the turns this request
+  // carried, the previous one and the older ones that fit (askCarries leaves out the oldest), and for a choice what the
+  // request offering it carried. The other threads go by the person's own words only (R2).
+  const went = carries.previous === undefined || !from ? [] : [from.id, ...older.slice(older.length - (carries.previous.earlier?.length ?? 0)).map(each => each.id)];
+  const carried = [...new Set([...(how.kind === 'choice' ? how.carried : []), ...went])];
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId,
     ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
@@ -4064,9 +4133,12 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
     const [only] = belongs;
     if (only !== undefined && answer.thread.threads.length === 1 && sameScope(only.home, scope)) {
       // One thread, living where the question was asked: Ask moves to it without a click, which never changes a scope
-      // (R5), and asks the same words again there as a plain follow-up that nothing can place elsewhere.
+      // (R5), and asks the same words again there as a plain follow-up that nothing can place elsewhere. It goes to the
+      // thread's home as a pick of it would: Home, from any other page, for one with no project; a project's question
+      // was asked from that project's page, which is its home already.
+      if (only.home.kind === 'global') goToHome(only.home, undefined);
       showThread(only.id, null, true, current.forQuestion);
-      void askAs({ kind: 'typed', question: text, follows: followedTurn(homeTurns(only, scope), null)?.id ?? null, placed: false, merge: same }, scope);
+      void askThere(only, text, same, scope);
       return;
     }
     set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'threads', threads: belongs.map(other => other.id), merge: same } } });
@@ -4075,7 +4147,7 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   }
   if (answer.outcome === 'clarify') {
     const follows = how.kind === 'typed' || how.kind === 'choice' ? from?.id ?? null : null;
-    set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'choices', choices: answer.choices ?? [], follows, typed } } });
+    set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'choices', choices: answer.choices ?? [], follows, typed, carried } } });
     startSources();
     return;
   }
@@ -4089,9 +4161,9 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   const turn: TimelineTurn = {
     id, asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept, citations_complete: true,
     ...(typed === null ? {} : { typed }), follows: from?.id ?? null,
-    ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed,
+    ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed, carried,
   };
-  keepTurn(turn);
+  keepTurns([turn]);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - started;
   const shown = took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
@@ -4099,9 +4171,8 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   // the other from its start.
   const here = landed === current.thread?.id ? current : { ...current, latest: null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false };
   set({ ask: { ...here, thread: { id: landed, entered: true }, asking: null, asked: [...here.asked, turn.id], took: shown } });
-  // The threads on its subject join the thread it landed in: those this answer names, and those named when the question
-  // was sent to this thread, which is then the one it landed in.
-  mergeInto(landed, [...(how.kind === 'typed' && landed === within ? how.merge : []), ...sent(merge).map(other => other.id)]);
+  // The threads this answer names on its subject join the thread it landed in.
+  void mergeInto(landed, sent(merge).map(other => other.id));
   startSources(turn.id);
   // Follow-ups it drafted wait, not sent, in your own list (ADR-0053): Home's Send rows list them.
   if (kept.follow_ups) void loadHome(false);
@@ -4179,7 +4250,7 @@ export function askAgain(id: string): void {
 export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'choices' || askBusy()) return;
-  void askAs({ kind: 'choice', question: choice.question, typed: clarify.typed, follows: clarify.follows }, clarify.scope);
+  void askAs({ kind: 'choice', question: choice.question, typed: clarify.typed, follows: clarify.follows, carried: clarify.carried }, clarify.scope);
 }
 
 /** What the person is told when the thread they picked lives in a project they cannot ask in now: the words a thing no longer theirs to use gets everywhere. */
@@ -4206,25 +4277,61 @@ export function clarifyThreads(current: State = state): ThreadChoice[] {
 
 /**
  * A thread of "Which one?" (ADR-0056): Ask jumps to it, moving to its place when it lives elsewhere, and asks the typed
- * words again there, on purpose: as a plain follow-up of that thread's own latest turn, with no other thread riding, so
- * nothing places it again. The threads the answer said are on its subject merge into it, where they share its home, once
- * that question's answer lands there (askAs). The words are asked in
- * the thread's home and nowhere else (R9): when that is a project the person cannot ask in now, nothing is asked and
- * nothing moves; the page says so, and that thread's button goes, leaving the others and "New question". A jump that
- * does not happen otherwise (the thread gone, its project's read failed, Ask left meanwhile) asks nothing.
+ * words again there (askThere), the threads the answer said are on its subject joining it first where they share its
+ * home. The words are asked in the thread's home and nowhere else (R9): when that is a project the person is known to
+ * have lost (gone, archived, or no longer theirs), nothing is asked and nothing moves; the page says so, and that
+ * thread's button goes, leaving the others and "New question". A jump that does not happen otherwise (its project could
+ * not be read right now, the thread gone, the person moved on meanwhile) asks nothing and keeps the button; when it gave
+ * way to the bar widened while the project was read, the words go back to the bar too.
  */
 export async function chooseThread(id: string): Promise<void> {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'threads' || askBusy() || !clarify.threads.includes(id)) return;
+  const bar = state.barScope;
   const jumped = await jump(id, null, true, true);
   const view = state.ask;
   if (jumped === 'unreachable' && view?.clarify === clarify) {
     set({ ask: { ...view, clarify: { ...clarify, threads: clarify.threads.filter(each => each !== id) } }, toast: THREAD_OUT_OF_REACH });
     return;
   }
+  // Still on this "Which one?", the bar no longer asks where it did: the person widened it, and the pick gave way.
+  if (jumped === 'dropped' && view?.clarify === clarify && !sameScope(state.barScope, bar)) {
+    wordsBack(clarify.question);
+    return;
+  }
   const thread = threadOf(id);
   if (jumped !== 'shown' || !thread || view?.thread?.id !== id || askBusy()) return;
-  void askAs({ kind: 'typed', question: clarify.question, follows: followedTurn(homeTurns(thread, thread.home), null)?.id ?? null, placed: false, merge: clarify.merge }, thread.home);
+  await askThere(thread, clarify.question, clarify.merge, thread.home);
+}
+
+/**
+ * The typed words asked again in the thread a jump or a pick of "Which one?" has just shown (ADR-0056), on purpose: as a
+ * plain follow-up of that thread's own latest turn, worked out before anything joins it, with no other thread riding,
+ * so nothing places it again. The threads the answer said are on its subject (`merge`) join the thread first, in one
+ * move (mergeInto); whatever became of it, the words are then asked there, unless the person moved on meanwhile (another
+ * page or view, Ask closed or on another thread, another account), or the bar no longer asks where the thread lives,
+ * when they go back to an empty bar instead.
+ */
+async function askThere(thread: Thread, question: string, merge: readonly string[], scope: AskScope): Promise<void> {
+  const account = expect();
+  if (!account) return;
+  const follows = followedTurn(homeTurns(thread, scope), null)?.id ?? null;
+  const [nav, toasts] = [navSeq, state.toastShown];
+  await mergeInto(thread.id, merge);
+  if (!sameAccount(account) || threadShown()?.id !== thread.id) return;
+  // The bar no longer asks where the thread lives (widened meanwhile, a move of the person's): nothing is asked, and the
+  // words go back to it.
+  if (!sameScope(state.barScope, scope)) {
+    wordsBack(question);
+    return;
+  }
+  if (nav !== navSeq) return;
+  // What the move said of itself (not kept, or not confirmed) stays over the question, which would clear it; and so, made,
+  // does the merge itself ("Merged with …"), whose line and Undo the question ends (R10).
+  const said = state.toastShown === toasts ? mergedLine() : state.toast;
+  const asking = askAs({ kind: 'typed', question, follows, placed: false }, scope);
+  if (said !== null) set({ toast: said });
+  await asking;
 }
 
 /**
@@ -4234,7 +4341,7 @@ export async function chooseThread(id: string): Promise<void> {
 export function askNewQuestion(): void {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'threads' || askBusy()) return;
-  void askAs({ kind: 'typed', question: clarify.question, follows: null, placed: false, merge: [] }, clarify.scope);
+  void askAs({ kind: 'typed', question: clarify.question, follows: null, placed: false }, clarify.scope);
 }
 
 /** Try again, on a question that failed: asked as it was, what it builds from an earlier turn built again (askAs). */
@@ -4296,110 +4403,96 @@ function openTurn(id: string): void {
 
 /**
  * The sidebar's Ask: back to Ask where you left it, on the thread you asked
- * in most recently, at its place, with its answer at the bottom. Ask shows
+ * in most recently, at its home, with its answer at the bottom. Ask shows
  * that thread; the person is not in it until they pick it or ask in it, so a
  * question typed first is placed among all their threads (ask). Open already,
- * Ask stays as it is. False with nothing asked yet, for the bar to take the
+ * Ask stays as it is. Says whether Ask shows a thread: false with nothing
+ * asked yet, or when the jump to it opened nothing, for the bar to take the
  * cursor instead.
  */
-export function returnToAsk(): boolean {
+export async function returnToAsk(): Promise<boolean> {
   const latest = state.timeline.turns.at(-1);
   if (!latest || !expect()) return false;
-  if (!state.ask) void openThread(threadIdOf(latest), null, false);
-  return true;
+  return state.ask !== null || openThread(threadIdOf(latest), null, false);
 }
 
-/**
- * The row of the thread Ask already shows, picked in the list: the person is in that thread from here (OpenThread), as
- * by any other way of picking it, and nothing else of Ask changes. Refused while Ask is busy, as every row is.
- */
-export function enterThread(): void {
-  const view = state.ask;
-  if (!view?.thread || view.thread.entered || askBusy() || threadShown()?.id !== view.thread.id) return;
-  set({ ask: { ...view, thread: { ...view.thread, entered: true } } });
-}
-
-/** Which jump is the latest: one still reading its project when a later one starts is dropped. */
+/** Which jump is the latest: every jump takes a new one, so one still reading its project when a later one comes is dropped. */
 let jumpSeq = 0;
 
 /**
- * How a jump ended: Ask shows the thread; or its home is a project the person cannot ask in now, said only to a jump made
- * to ask there, which then moves nothing; or it was dropped: refused, overtaken, or its read failed and said why.
+ * How a jump ended: Ask shows the thread; or its home is a project the person is known to have lost, said only to a jump
+ * made to ask there, which then moves nothing; or it was dropped: refused, overtaken, or its project could not be read
+ * right now, which it says.
  */
 type Jumped = 'shown' | 'unreachable' | 'dropped';
 
 /**
- * Whether the person has moved since a jump started, from the page (`route`) and Ask (`asked`, its seq, undefined for
- * closed) they were on then: a page was opened, or Ask was opened, closed, moved to another thread or asked in. A
- * project's page that only read its header again is the same page.
- */
-function movedSince(route: Route, asked: number | undefined): boolean {
-  const now = state.route;
-  const samePage = now === route || (now.page === 'project' && route.page === 'project' && now.project.project_id === route.project.project_id);
-  return !samePage || state.ask?.seq !== asked;
-}
-
-/**
- * A jump (ADR-0056): Ask moves to a thread's place and opens the thread, at
- * the turn `at` when a suggestion chose one. The place is the thread's home:
- * Home for no project; the project's page otherwise, so the bar's chip names
- * it. A page that is no project's stays for a thread with no project; on the
- * thread's own project's page a widened bar narrows back; otherwise Home or
- * the project opens first, so a project's page is never left under a thread
- * that does not live in it, whatever its bar asks.
- * A project the sidebar has not loaded (one on a later page) is read by its
- * id first, as following the open project does; a read that fails says why
- * and opens nothing. A project that is not one of the person's active ones
- * cannot be asked in. A jump made to look (`toAsk` false) then shows the
- * thread at Home, where a question typed continues none (R9). One made to ask
- * in the thread (`toAsk`) moves nothing and says so (`unreachable`): no
- * question of that thread is ever asked outside its home, and the person is
- * not left on a page they did not choose.
+ * A jump (ADR-0056): Ask moves to a thread's home and opens the thread there,
+ * at the turn `at` when a suggestion chose one. Home for a thread with no
+ * project: any other page under Ask (a project's, Tools, People) gives way to
+ * Home. The project's page otherwise, so the bar's chip names it: on that page
+ * already, a widened bar narrows back. Every way of picking a thread comes
+ * here, its own row while Ask shows it included, and takes over from any jump
+ * still on its way.
+ * A project not among the person's active ones as the sidebar has them is read
+ * by its id first; so is every project a jump made to ask in the thread
+ * (`toAsk`) goes to, before the page moves or anything joins the thread, since
+ * the sidebar's copy may be out of date. One the read says is gone, archived
+ * or no longer theirs cannot be asked in: a jump made to look shows the thread
+ * at Home, where a question typed continues none (R9); one made to ask moves
+ * nothing and says so (`unreachable`), so no question of that thread is ever
+ * asked outside its home. A read that fails says why and opens nothing: the
+ * project may well be there.
  * `picked`: the person chose this thread (its row, a "Which one?" button, one
  * of its questions), so they are in it; false when Ask only shows the thread
  * they last used.
  *
  * Refused while Ask is busy (askBusy), as every Ask action is: an answer
- * always lands in the thread that shows, and no thread is opened while its
- * turns are moving. The read is the one wait: when it comes back the jump
- * goes on only if nothing moved meanwhile (the account, the window in front,
- * the page and Ask the person was on (movedSince), Ask open or closed, the
- * thread still there, no later jump, no move begun).
+ * always lands in the thread that shows, and no thread is opened while turns
+ * are moving. The read is the one wait: it goes on only if nothing came
+ * meanwhile (another account, another app in front, a move of the person's
+ * (navSeq), a later jump, Ask busy) and the thread is still there, living
+ * where it did.
  */
 async function jump(id: string, at: string | null, picked: boolean, toAsk: boolean): Promise<Jumped> {
+  const mine = ++jumpSeq;
   const account = expect();
   const thread = threadOf(id);
   if (!account || !thread || askBusy()) return 'dropped';
-  const mine = ++jumpSeq;
-  const { route: page, ask: view } = state;
   const { home } = thread;
-  let project = home.kind === 'project' ? state.projects.items.find(item => item.project_id === home.project_id) : undefined;
-  if (home.kind === 'project' && !project && state.projects.next !== null) {
+  let project = home.kind === 'project' && !toAsk ? state.projects.items.find(item => item.project_id === home.project_id && item.status === 'active') : undefined;
+  if (home.kind === 'project' && !project) {
+    const nav = navSeq;
     const result = await rpc('projects.read', { expect: account, project_id: home.project_id });
-    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || movedSince(page, view?.seq) || askBusy() || !threadOf(id)) return 'dropped';
+    const now = threadOf(id);
+    if (!sameAccount(account) || state.concealed || mine !== jumpSeq || nav !== navSeq || askBusy() || !now || !sameScope(now.home, home)) return 'dropped';
     if (!result.ok && !PROJECT_GONE.includes(result.failure.code)) {
       accountLost(result.failure);
       set({ toast: message(result.failure) });
       return 'dropped';
     }
-    project = result.ok ? result.value : undefined;
+    project = result.ok && result.value.status === 'active' ? result.value : undefined;
   }
-  if (project?.status !== 'active') project = undefined;
   if (toAsk && home.kind === 'project' && !project) return 'unreachable';
-  // The page under Ask is the thread's place, as well as the bar's scope: a project's page with its bar widened asks all
-  // context, and is still not where a thread with no project lives.
-  const on = state.route.page === 'project' ? state.route.project.project_id : null;
-  if (project) {
-    if (on !== project.project_id) void openProject(project);
-    else if (!sameScope(state.barScope, home)) set({ barScope: home });
-  } else if (on !== null || !sameScope(state.barScope, { kind: 'global' })) goHome();
+  goToHome(home, project);
   showThread(id, at, picked);
   return 'shown';
 }
 
 /**
- * A thread opened to look at (jump): its row in the list, a suggestion, the
- * sidebar's Ask. Says whether Ask now shows the thread.
+ * The page under Ask goes to a thread's home (`project` its project, when it is one the person can ask in): that
+ * project's page, its bar narrowed back when it was widened there; Home otherwise, from any other page.
+ */
+function goToHome(home: AskScope, project: ProjectSummary | undefined): void {
+  if (project) {
+    if (state.route.page !== 'project' || state.route.project.project_id !== project.project_id) void openProject(project);
+    else if (!sameScope(state.barScope, home)) set({ barScope: home });
+  } else if (state.route.page !== 'home' || state.barScope.kind !== 'global') goHome();
+}
+
+/**
+ * A thread opened to look at (jump): its row in the list (the one Ask shows
+ * too), a suggestion, the sidebar's Ask. Says whether Ask now shows the thread.
  */
 export async function openThread(id: string, at: string | null = null, picked = true): Promise<boolean> {
   return (await jump(id, at, picked, false)) === 'shown';
@@ -4423,8 +4516,12 @@ function showThread(id: string, at: string | null, entered: boolean, forQuestion
   void checkTimeline(turnOf(opened));
 }
 
-/** What the person is told when a merge, or its Undo, could not all be kept on this computer: what was not is back where it was. */
+/** What the person is told when this computer refused a merge, or its Undo: nothing moved. */
 export const THREADS_NOT_SAVED = 'Some questions could not be moved on this computer, so they are where they were.';
+/** What the person is told when ECHO cannot tell whether a merge, or its Undo, was kept: the file says, once it is read again. */
+export const THREADS_UNCONFIRMED = 'ECHO could not confirm this change; it will show correctly after ECHO restarts.';
+/** What the person is told when a merge, or its Undo, found its questions elsewhere than the page had them: nothing moved. */
+export const THREADS_MOVED = 'That change could not be made because the questions had moved; they show where they are now.';
 
 /**
  * Whether Ask is busy: a question is on its way, or turns are moving between threads (TimelineState.moving). The one
@@ -4436,66 +4533,106 @@ export function askBusy(current: State = state): boolean {
 }
 
 /**
- * Moves turns between threads (ADR-0056), one move at a time (askBusy): each
- * is named with its new thread here at once, and saved so in the account's
- * file. Until every save has settled the timeline is `moving`. When all went
- * through, that is the end of it. When one did not, or never answered, what
- * the file holds cannot be known from here, so the file decides: each turn
- * whose save did not go through is put back, the merged line goes with its
- * Undo, the timeline is read again and shows what the file holds, the pane
- * starts over, and the page says so. A move still on its way when the
- * timeline is forgotten (signed out, another account) ended there, and its
- * replies say nothing.
+ * A reply that leaves a move's outcome unknown: none came in time, the host went away holding it, or the file may have
+ * changed all the same. Never one no host took (`not_submitted`): that move was not made.
  */
-async function moveTurns(moves: readonly { readonly turn: string; readonly to: string }[]): Promise<void> {
-  const account = expect();
-  if (!account) return;
-  const to = new Map(moves.map(move => [move.turn, move.to]));
-  const before = state.timeline.turns.filter(turn => to.has(turn.id));
-  if (before.length === 0) return;
-  const mine = ++moveSeq;
-  const moved = new Map(before.map(turn => [turn.id, { ...turn, thread: to.get(turn.id)! }]));
-  setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => moved.get(turn.id) ?? turn), moving: true });
-  const saved = await Promise.all([...moved.values()].map(turn => rpc('timeline.put', { expect: account, turn }).then(result => result.ok, () => false)));
-  if (mine !== moveSeq) return;
-  if (!saved.every(Boolean)) {
-    // Best known until the file is read: a turn whose save did not go through is named as it was before the move.
-    const lost = new Map(before.filter((_, at) => !saved[at]).map(turn => [turn.id, turn.thread]));
-    const named = (turn: TimelineTurn): TimelineTurn => {
-      const { thread: _moved, ...rest } = turn;
-      const was = lost.get(turn.id);
-      return was === undefined ? rest : { ...rest, thread: was };
-    };
-    setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => (lost.has(turn.id) ? named(turn) : turn)) });
-    if (state.ask?.merged) set({ ask: { ...state.ask, merged: null } });
-    await loadTimeline();
-    if (mine !== moveSeq) return;
-    startSources();
-    set({ toast: THREADS_NOT_SAVED });
-  }
-  setTimeline({ ...state.timeline, moving: false });
+function unconfirmed(failure: Failure): boolean {
+  if (failure.mutation_outcome === 'not_submitted') return false;
+  return failure.code === 'timeout' || failure.code === 'host_restarted' || failure.mutation_outcome === 'unknown';
 }
 
 /**
- * Merges threads into `into` (ADR-0056): every turn of each joins it, in
- * time order, and the line under the thread's name says so with Undo. Only
- * while Ask shows `into`, and only threads that live where it does: no merge
- * crosses homes (R9), by hand or ECHO's own, and one that names a thread of
- * another home leaves it where it is. One move at a time: never while turns
- * are still moving. Whether you can still read what the turns that joined
- * cited is checked, as opening their thread would.
+ * A turn in the thread the file has it in (null: none, its thread worked out from what it followed), and otherwise as it
+ * was; one saved before threads, named for the first time, is marked as carrying no more than its chain, as the host
+ * marks it (moveTimeline).
  */
-function mergeInto(into: string, ids: readonly string[]): void {
-  const view = state.ask;
-  const target = threadOf(into);
-  if (!view || view.thread?.id !== into || !target || state.timeline.moving) return;
+function labelled(turn: TimelineTurn, thread: string | null): TimelineTurn {
+  if (thread !== null) return turn.thread === thread ? turn : { ...turn, thread, ...(turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {}) };
+  const { thread: _none, ...rest } = turn;
+  return rest;
+}
+
+/**
+ * Moves turns between threads (ADR-0056), each by id to the thread it goes
+ * to, in one compare-and-set step the file confirms, all or nothing: the host
+ * moves them in one write only while it holds each, in the thread it has here
+ * (`from`), and answers where it has each now. Nothing shows moved before
+ * then. While it lasts the timeline is `moving`, so no question, jump, merge
+ * or Undo starts (askBusy), and a question still being prepared (Ask again's
+ * source check) is dropped with the Ask it was prepared for (`ask.seq`). On
+ * the reply, for the same account and move, the page takes where the file has
+ * each named turn (its `thread` alone, so what a save made of it meanwhile
+ * stays): moved, that is the move. Refused, nothing moved: because the file
+ * does not hold a turn named, the page says so; because one was elsewhere
+ * than the page had it, it says the questions had moved. A failure the host
+ * answered, or a move no host took (main says so), moved nothing either, and
+ * the page says so. With no answer to go by (none in time, the host gone while
+ * it held the move, or none at all) nothing changes here, any Undo goes,
+ * since it would move turns the file may hold elsewhere, and the page says
+ * ECHO could not confirm it: only reading the file again, as a restart does,
+ * says what it holds. Answers the turns moved, 'failed', or null when not
+ * known (or for a timeline forgotten meanwhile).
+ */
+async function moveTurns(moves: readonly { readonly turn: string; readonly to: string }[]): Promise<readonly string[] | 'failed' | null> {
+  const account = expect();
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  const groups = new Map<string, { from: string | null; to: string; turns: string[] }>();
+  let named = 0;
+  for (const { turn, to } of moves) {
+    const from = byId.has(turn) ? byId.get(turn)!.thread ?? null : undefined;
+    if (from === undefined) continue;
+    const group = groups.get(`${from} ${to}`) ?? { from, to, turns: [] };
+    group.turns.push(turn);
+    groups.set(`${from} ${to}`, group);
+    named += 1;
+  }
+  if (!account || groups.size === 0) return null;
+  const mine = ++moveSeq;
+  setTimeline({ ...state.timeline, moving: true });
+  if (state.ask) set({ ask: { ...state.ask, seq: ++seq } });
+  try {
+    const result = await rpc('timeline.move', { expect: account, moves: [...groups.values()] }).catch(() => null);
+    if (mine !== moveSeq || !sameAccount(account)) return null;
+    if (result?.ok) {
+      const { moved, turns } = result.value;
+      const held = new Map(turns.map(each => [each.turn, each.thread]));
+      setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => (held.has(turn.id) ? labelled(turn, held.get(turn.id)!) : turn)) });
+      if (moved) return turns.map(each => each.turn);
+      set({ toast: turns.length < named ? THREADS_NOT_SAVED : THREADS_MOVED });
+      return 'failed';
+    }
+    if (result !== null) accountLost(result.failure);
+    const failed = result !== null && !unconfirmed(result.failure);
+    if (!failed && state.ask?.merged) set({ ask: { ...state.ask, merged: null } });
+    set({ toast: failed ? THREADS_NOT_SAVED : THREADS_UNCONFIRMED });
+    return failed ? 'failed' : null;
+  } finally {
+    if (mine === moveSeq) setTimeline({ ...state.timeline, moving: false });
+  }
+}
+
+/**
+ * Merges threads into `into` (ADR-0056): every turn of each joins it, in time
+ * order, in one move (moveTurns). Only once the file confirms it does the line
+ * under the thread's name say so, with Undo, and are the sources of the turns
+ * that joined checked, as opening their thread would. Only while Ask shows
+ * `into` and is not busy (askBusy), and only threads that live where it does,
+ * every turn asked there: no merge crosses homes (R9), by hand or ECHO's own,
+ * and one that names another thread leaves it where it is (mergeable).
+ */
+async function mergeInto(into: string, ids: readonly string[]): Promise<void> {
+  const target = threadShown();
+  if (target?.id !== into || askBusy()) return;
   const merging = ids.flatMap(id => threadOf(id) ?? []).filter(thread => mergeable(thread, target));
-  if (merging.length === 0) return;
-  const moved = merging.flatMap(thread => thread.turns.map(turn => ({ turn: turn.id, from: thread.id })));
-  set({ ask: { ...view, merged: { into, moved, names: merging.map(thread => thread.name) } } });
-  const turns = merging.flatMap(thread => thread.turns);
-  void moveTurns(moved.map(({ turn }) => ({ turn, to: into })));
-  void checkTurns(turns.filter(turn => freshChecksOf(turn) === undefined && !checking.has(turn.id)));
+  const from = new Map(merging.flatMap(thread => thread.turns.map(turn => [turn.id, thread] as const)));
+  if (from.size === 0) return;
+  const moved = await moveTurns([...from.keys()].map(turn => ({ turn, to: into })));
+  const view = state.ask;
+  if (!Array.isArray(moved) || !view || threadShown()?.id !== into) return;
+  const joined = new Set(moved.map(id => from.get(id)!));
+  set({ ask: { ...view, merged: { into, moved: moved.map(id => ({ turn: id, from: from.get(id)!.id })), names: merging.filter(thread => joined.has(thread)).map(thread => thread.name) } } });
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  void checkTurns(moved.flatMap(id => byId.get(id) ?? []).filter(turn => freshChecksOf(turn) === undefined && !checking.has(turn.id)));
 }
 
 /**
@@ -4506,7 +4643,9 @@ function mergeInto(into: string, ids: readonly string[]): void {
 export function mergeThread(id: string): void {
   const open = threadShown();
   if (!open || askBusy()) return;
-  mergeInto(open.id, [id]);
+  // The person's own move: a jump still waiting gives way to it (navSeq).
+  navSeq += 1;
+  void mergeInto(open.id, [id]);
 }
 
 /**
@@ -4522,25 +4661,23 @@ export function mergedLine(current: State = state): string | null {
 }
 
 /**
- * Undo, on the merged line: each turn the merge moved is saved back in the
- * thread it was in. Dropped, not applied, once the merge is no longer what
- * the line tells of (mergedLine); refused while Ask is busy (askBusy), which
- * it is until the merge's own saves have settled.
+ * Undo, on the merged line: one move takes each turn the merge moved back to
+ * the thread it was in, by its id (a turn saved before threads to the thread
+ * it was worked out to be in). Dropped, not applied, once the merge is no
+ * longer what the line tells of (mergedLine); refused while Ask is busy
+ * (askBusy). Taken back, or not known to be, the line goes with its Undo; one
+ * the file refused leaves both, to be tried again.
  */
-export function undoMerge(): void {
-  const view = state.ask;
-  if (!view?.merged || askBusy()) return;
-  const undo = mergedLine() === null ? [] : view.merged.moved;
-  set({ ask: { ...view, merged: null } });
-  if (undo.length === 0) return;
-  void moveTurns(undo.map(({ turn, from }) => ({ turn, to: from })));
-  // A question that failed waits in the thread it was asked in, built from one of its turns. Were that turn among those
-  // that just left, Try again would ask it in another thread than the one that shows: the failed question goes instead.
-  const failed = state.ask?.failed;
-  const built = failed ? turnOf('turn' in failed.how ? failed.how.turn : failed.how.follows) : undefined;
-  if (failed && built && failed.thread !== null && threadIdOf(built) !== failed.thread) set({ ask: { ...state.ask!, failed: null } });
+export async function undoMerge(): Promise<void> {
+  const merged = state.ask?.merged;
+  if (!merged || askBusy()) return;
+  if (mergedLine() === null) { set({ ask: { ...state.ask!, merged: null } }); return; }
+  // The person's own move: a jump still waiting gives way to it (navSeq).
+  navSeq += 1;
+  const moved = await moveTurns(merged.moved.map(({ turn, from }) => ({ turn, to: from })));
+  if (moved !== 'failed' && state.ask?.merged === merged) set({ ask: { ...state.ask, merged: null } });
   // The pane may be on a turn that just left the thread.
-  startSources();
+  if (Array.isArray(moved) && state.ask) startSources();
 }
 
 /** The thread list (ADR-0056), as its page shows it for what "Find a thread" holds: each home's threads, the open thread's home first. */

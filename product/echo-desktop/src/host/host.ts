@@ -19,7 +19,7 @@ import { askText } from '../shared/query.js';
 import { askArgv, askCheckArgv, askCheckRequest, askContext, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
-import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
+import { deleteOtherTimelines, deleteTimeline, moveTimeline, putTimeline, readTimeline, TimelineWriteUnsure, timelineMoves, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
@@ -94,7 +94,7 @@ const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
-const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put', 'timeline.move']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
@@ -274,7 +274,9 @@ let timelineWork: Promise<unknown> = Promise.resolve();
 /**
  * A call on this computer's own files, for the account the renderer is
  * showing and never another: the Ask timeline (ADR-0047). The client is asked
- * only who is signed in. Each waits for the one before it.
+ * only who is signed in. Each waits for the one before it. A failure says the
+ * file is as it was, but for a write that may have happened all the same
+ * (TimelineWriteUnsure), whose outcome is unknown.
  */
 function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
   const done = timelineWork.then(async (): Promise<Result<T>> => {
@@ -285,7 +287,7 @@ function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Prom
       return ok(work(paths.directory));
     } catch (error) {
       if (__ECHO_TEST_HOOK__) console.error('[timeline] failed:', error);
-      return code('failed');
+      return error instanceof TimelineWriteUnsure ? fail({ code: 'failed', retryable: true, mutation_outcome: 'unknown' }) : code('failed');
     }
   });
   timelineWork = done.catch(() => undefined);
@@ -638,6 +640,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (turn === null) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
       return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
+    }
+    case 'timeline.move': {
+      const { expect, moves: given } = params as Params<'timeline.move'>;
+      const moves = timelineMoves(given);
+      if (moves === null) return code('invalid_request');
+      return onDevice(expect, directory => moveTimeline(directory, expect, moves));
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

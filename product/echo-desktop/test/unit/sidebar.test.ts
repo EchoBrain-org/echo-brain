@@ -3,9 +3,9 @@ import type { State } from '../../src/renderer/store.js';
 import type { UpdateState } from '../../src/shared/protocol.js';
 import { ACCOUNT, byTestId, elements, project, render, text } from './harness.js';
 
-const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome, openCompose, openOrganization } = vi.hoisted(() => ({
+const { loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome, openCompose, openOrganization, sheetUp } = vi.hoisted(() => ({
   loadProjects: vi.fn(), loadArchivedProjects: vi.fn(), installUpdate: vi.fn(), openNewProject: vi.fn(), returnToAsk: vi.fn(), openOnlyMe: vi.fn(), openHome: vi.fn(),
-  openCompose: vi.fn(), openOrganization: vi.fn(),
+  openCompose: vi.fn(), openOrganization: vi.fn(), sheetUp: vi.fn(() => false),
 }));
 vi.mock('../../src/renderer/api.js', () => ({ rpc: vi.fn(), dropFile: vi.fn() }));
 vi.mock('preact/hooks', async original => ({
@@ -15,6 +15,7 @@ vi.mock('preact/hooks', async original => ({
 }));
 vi.mock('../../src/renderer/store.js', async original => ({
   ...await original<typeof import('../../src/renderer/store.js')>(), loadProjects, loadArchivedProjects, installUpdate, openNewProject, returnToAsk, openOnlyMe, openHome, openCompose, openOrganization,
+  sheetUp,
 }));
 
 beforeEach(() => { vi.clearAllMocks(); });
@@ -188,16 +189,31 @@ describe('Ask', () => {
     };
     expect(await projectRow(false)).toBe(true);
     expect(await projectRow(true)).toBe(false);
-    // Nothing asked yet: the cursor goes to the bar instead.
+    // Nothing asked yet, or nothing opened: the cursor goes to the bar instead.
     const focus = vi.fn();
-    vi.stubGlobal('document', { getElementById: vi.fn((id: string) => (id === 'ask-field' ? { focus } : null)) });
+    const page = { getElementById: vi.fn((id: string) => (id === 'ask-field' ? { focus } : null)), activeElement: 'the sidebar\'s Ask' as unknown };
+    vi.stubGlobal('document', page);
     const row = elements(Sidebar({ state: await on({ page: 'home' }, false) })).find(node => node.props['data-testid'] === 'sidebar-ask');
-    returnToAsk.mockReturnValueOnce(true);
+    returnToAsk.mockResolvedValueOnce(true);
     (row?.props.onClick as () => void)();
+    await Promise.resolve();
     expect(focus).not.toHaveBeenCalled();
-    returnToAsk.mockReturnValueOnce(false);
+    returnToAsk.mockResolvedValueOnce(false);
     (row?.props.onClick as () => void)();
+    await Promise.resolve();
     expect(returnToAsk).toHaveBeenCalledTimes(2);
+    expect(focus).toHaveBeenCalledOnce();
+    // Nothing opened, but a sheet (Capture) came up meanwhile, or the keyboard went elsewhere: the cursor stays there.
+    sheetUp.mockReturnValueOnce(true);
+    returnToAsk.mockResolvedValueOnce(false);
+    (row?.props.onClick as () => void)();
+    await Promise.resolve();
+    let answer!: (shown: boolean) => void;
+    returnToAsk.mockReturnValueOnce(new Promise<boolean>((resolve) => { answer = resolve; }));
+    (row?.props.onClick as () => void)();
+    page.activeElement = 'Capture\'s note';
+    answer(false);
+    await Promise.resolve();
     expect(focus).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();
   });

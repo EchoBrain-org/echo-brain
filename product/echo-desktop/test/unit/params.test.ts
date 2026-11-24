@@ -17,9 +17,16 @@ it('sizes each bound a whole answer passes through above the one beneath it', ()
   expect(MAX_COPY_CHARACTERS).toBe(MAX_TIMELINE_PUT_BYTES);
   // The CLI prints every step and the answer: more than a whole Ask stream.
   expect(MAX_OUTPUT_BYTES).toBeGreaterThan(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
-  // A call that carries one whole answer (a timeline put, Copy answer) may take one.
+  // A call that carries one whole answer (a timeline put, Copy answer) may take one, and a move between threads as much:
+  // a thread of thirty thousand turns, its ids each once, fits it with room to spare, and would not fit the Person bound.
   expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);
   expect(paramsLimit('clipboard.writeText')).toBe(MAX_TIMELINE_PUT_BYTES);
+  expect(paramsLimit('timeline.move')).toBe(MAX_TIMELINE_PUT_BYTES);
+  const id = (at: number) => `00000000-0000-4000-8000-${String(at).padStart(12, '0')}`;
+  const thousands = { expect: { authority: 'https://authority.example', membership_id: 'member' }, moves: Array.from({ length: 30 }, (_, group) => ({
+    from: id(group), to: id(99_999), turns: Array.from({ length: 1000 }, (_, at) => id(group * 1000 + at)) })) };
+  expect(plainJsonBytes(thousands, paramsLimit('timeline.move'))).not.toBeNull();
+  expect(plainJsonBytes(thousands, MAX_REQUEST_BYTES)).toBeNull();
 });
 
 it('refuses what a structured clone carries but JSON does not', () => {
