@@ -81,11 +81,7 @@ export interface PersonAnswerRequestV3 {
   readonly project_id?: ProjectIdV1;
   /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
   readonly previous?: PersonAnswerPreviousV1;
-  /**
-   * The asker's other threads (ADR-0056), most recently asked first, possibly none: the asker's own context, never
-   * evidence, and never stored. Present on every question a client that keeps threads wants placed; never beside an
-   * Ask again.
-   */
+  /** The asker's other threads (ADR-0056), most recently asked first, possibly none: sent on every question to be placed. */
   readonly threads?: readonly PersonAnswerThreadV1[];
 }
 
@@ -338,10 +334,7 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   return boundedRequest(request, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
 }
 
-/**
- * The asker's other threads an Ask carries (ADR-0056), checked on their own as a client checks them before sending.
- * The list may be empty, so an answer can still say the question starts a new thread; only the transport bound limits it.
- */
+/** The asker's other threads (ADR-0056), none counted (R7); empty is allowed, so an answer can still say the subject is new. */
 export function validatePersonAnswerThreadsV1(value: unknown): readonly PersonAnswerThreadV1[] {
   return Object.freeze(boundedList(value, 'Ask threads', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerThreadV1 => {
     const input = object(raw, 'Ask thread');
@@ -398,7 +391,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(earlier === undefined ? {} : { earlier }) });
 }
 
-/** What the previous turn and each older turn of its thread (ADR-0056) share, under the same rules: `label` names which. */
+/** Shared by the previous turn and its thread's older turns (ADR-0056); `label` names which. */
 function earlierTurn(input: Record<string, unknown>, label: string): PersonAnswerEarlierTurnV1 {
   const question = fullQuestion(input.question, `${label} question`);
   assertTimestamp(input.asked_at, `${label} asked_at`);
@@ -432,7 +425,7 @@ function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
   return choices;
 }
 
-/** Indexes into the request's threads (ADR-0056): at least one, each once. A client checks them against what it sent. */
+/** Indexes into the request's threads (ADR-0056): no upper bound here, since only the client knows what it sent. */
 function threadIndexes(value: unknown, label: string): readonly number[] {
   const indexes = boundedList(value, label, Number.MAX_SAFE_INTEGER, 1).map((index) => {
     if (!Number.isSafeInteger(index) || (index as number) < 0) fail(`${label} is invalid`);
@@ -442,7 +435,6 @@ function threadIndexes(value: unknown, label: string): readonly number[] {
   return Object.freeze(indexes);
 }
 
-/** Where the question belongs when not in the open thread (ADR-0056): a new subject, or other threads by index. */
 function answerThread(value: unknown): PersonAnswerThreadPlacementV1 {
   const input = object(value, 'Ask response thread');
   const kind = oneOf(input.kind, ['new', 'other'], 'Ask response thread kind');
@@ -505,16 +497,12 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   };
   // A clarify outcome only asks which one: it drafts nothing.
   if (clarify && drafted) fail('Clarify outcome is inconsistent');
-  // A question that belongs to other threads (ADR-0056) is not answered here: that, and nothing else, is a clarify
-  // without choices. A new subject is an ordinary answer.
+  // Other threads (ADR-0056) are exactly a clarify without choices; a new subject is an ordinary answer.
   const elsewhere = result.thread?.kind === 'other' ? result.thread.threads : undefined;
   if ((elsewhere !== undefined) !== (clarify && !previous.includes('choices')) || (result.thread?.kind === 'new' && clarify)) fail('Ask response thread is inconsistent');
-  // An answer that says anything of threads answers a request that carried them, so it names its question; and it is
-  // never an Ask again's, the one answer that says what is different since, which carries none.
+  // An answer about threads names its question, and is never an Ask again's (which carries no threads).
   if (placed.length > 0 && (!previous.includes('question') || previous.includes('since'))) fail('Ask response thread is inconsistent');
-  // A merge names other threads on the subject of the one the question belongs to: the open thread, or the one other
-  // thread named. A new subject has none, and neither has a question that could belong to several. An answer that
-  // offers choices has none either: the question is asked again once one is chosen, and that answer names them.
+  // A merge joins the one thread the question belongs to; beside choices it waits for the answer to the choice.
   if (result.merge !== undefined && (previous.includes('choices') || result.thread?.kind === 'new' || (elsewhere !== undefined && (elsewhere.length !== 1 || result.merge.includes(elsewhere[0]!))))) fail('Ask response merge is inconsistent');
   for (const item of result.parts) {
     if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.gap_details !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
@@ -535,11 +523,9 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
 }
 
 /**
- * What an answer says of the asker's threads, against what its Ask sent (ADR-0056, T2), for a client to check:
- * `threads`, how many it sent (undefined: no list, which is not an empty one), and `previous`, whether it sent a previous
- * turn. `unsent`: it places the question or names a merge by a thread the Ask did not send. `unplaced`: the Ask sent
- * threads and the answer does not name its question or, with no previous turn to continue, where that question belongs
- * (leaving it out means "the previous turn's thread", and there is none). Null when it fits.
+ * T2 (ADR-0056): what an answer may say of the threads its Ask sent (`threads`: how many; undefined, not empty, for no
+ * list). `unsent`: it names a thread not sent. `unplaced`: it omits its question or, with no `previous` to continue,
+ * where the question belongs.
  */
 export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge'>, threads: number | undefined,
   previous: boolean): 'unsent' | 'unplaced' | null {

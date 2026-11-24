@@ -90,16 +90,9 @@ export interface PersonAnswerResponseV8 {
    * with the answer, unsent, in the asker's own list; a client reads it with the runs `item` operation. Never with `clarify`.
    */
   readonly follow_ups?: readonly string[];
-  /**
-   * Only on an answer to a request that carried `threads` (ADR-0056): where the question belongs when not in the open
-   * thread. `other` comes with outcome `clarify` and no `choices`; `new` with an ordinary answer.
-   */
+  /** Only for a request that carried `threads` (ADR-0056): where the question belongs when not in the open thread. */
   readonly thread?: PersonAnswerThreadPlacementV1;
-  /**
-   * Only on an answer to a request that carried `threads` (ADR-0056): indexes of other threads that are plainly on the
-   * subject of the one the question belongs to (the open thread, or the one `other` thread named). Never with `new`,
-   * and never with `choices`.
-   */
+  /** Only for a request that carried `threads` (ADR-0056): indexes of threads plainly on the subject of the one it belongs to. */
   readonly merge?: readonly number[];
 }
 
