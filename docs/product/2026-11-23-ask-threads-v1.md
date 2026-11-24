@@ -100,6 +100,12 @@ and ECHO works out which earlier conversation a question continues.
 - **R6. Every carried sentence is checked.** A sentence of any carried turn
   goes only when every source it cites was found readable in the last five
   minutes, and the Authority checks again before a model reads it.
+- **R10. A model-written question goes only while all it was written from is
+  readable.** With a thread's earlier turns shown to the resolver, a full
+  question it writes can name something from any of them. So the question a
+  model wrote for a turn, and a choice it offered, is sent or asked only when
+  the turns that turn followed and every turn of its thread asked before it
+  check readable now. Otherwise the typed words go, as today.
 - **R7. No counts.** Nothing limits how many threads, questions or earlier
   turns ride on a request but its transport bound. When the body would pass
   it, the desktop leaves out the oldest threads, then the oldest earlier
@@ -314,6 +320,18 @@ question placed among threads. This change does not alter them:
 - "Which one?" between things in one answer may offer a single choice.
 - Prompts, which hold the carried turns and thread questions, reach the
   staging-only trace exporter like every other prompt (INV-PERMISSIONS-015).
+- A suggestion a person picks from the bar is their question from then on,
+  the meeting title in it included: it rides as a thread's question as it
+  already rides as a follow-up's previous question.
+
+On the desktop, by choice in this version:
+
+- A thread none of whose turns kept the person's words is named, on this
+  device only, by its first turn's heading. Nothing of it is sent.
+- A follow-up whose previous turn may not be sent at all is not placed: it
+  stays in the thread it was typed in.
+- Two wordings that resolve to the same full question show, and are sent,
+  once.
 
 ## Not in v1
 
