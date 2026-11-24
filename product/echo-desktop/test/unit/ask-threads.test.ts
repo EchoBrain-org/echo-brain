@@ -898,6 +898,11 @@ describe('merging threads, and Undo', () => {
     // It continues the merged thread's latest turn, with nothing riding that could place it again.
     expect(asked()[1]).toMatchObject({ previous: { question: 'Where is the ledger?' } });
     expect(asked()[1]).not.toHaveProperty('threads');
+    // Undo waits for the answer, as every thread action does while a question is on its way.
+    store.undoMerge();
+    await flush();
+    expect(store.mergedLine()).toBe('Merged 2 threads');
+    expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id });
     again(ok(answerOf('who approves them?')));
     await first;
     await flush();

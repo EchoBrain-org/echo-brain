@@ -155,6 +155,7 @@ test('Merge joins a thread to the open one in this computer\'s file, and Undo pu
   await billing.hover();
   await expect(billing.getByTestId('thread-merge')).toHaveCSS('opacity', '1');
   await expect(billing.getByTestId('thread-merge')).toHaveAccessibleName('Merge into this thread');
+  await picture(page, 'ask-thread-merge-row');
   await billing.getByTestId('thread-merge').click();
   await expect(page.getByTestId('thread-list')).toHaveCount(0);
   // One faint line says so. The thread keeps its name, and the merged question joins it in time order, above.
@@ -162,6 +163,7 @@ test('Merge joins a thread to the open one in this computer\'s file, and Undo pu
   await expect(merged).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
   await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
   await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
+  await picture(page, 'ask-thread-merged');
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'When does the pilot start?', 'When does the pilot start?': 'When does the pilot start?' });
   // One thread is left to list.
   await page.getByTestId('thread-name').click();
@@ -253,6 +255,12 @@ test('a question that could belong to several threads asks which one: a thread i
   // Back on Apollo's page under Ask: the project it was asked in.
   await back(page);
   await expect(page.getByTestId('title')).toHaveText('Apollo');
+  // A question from Apollo's page carries Apollo's thread and no other (R3): Home's ledger thread stays out of it.
+  await ask(page, 'Which tests fail?');
+  expect(asks().at(-1)).toMatchObject({ question: 'Which tests fail?', project_id: APOLLO });
+  expect(asks().at(-1)!.threads).toEqual([{ questions: ['Where is the Apollo ledger kept?', 'what changed in the ledger?'], asked_at: expect.any(String) }]);
+  await expect(page.getByTestId('thread-name')).toHaveText('Which tests fail?');
+  await back(page);
 
   // "New question": the same words, where they were typed, with nothing carried; the answer starts a thread.
   await page.getByTestId('sidebar-home').click();
