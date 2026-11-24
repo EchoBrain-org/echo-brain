@@ -20,13 +20,14 @@ branch or a detached `HEAD`, report that and do not pull. Then run
 `git pull --ff-only origin main` and check that `HEAD` matches `origin/main`.
 If your session cannot reach the primary checkout, say so in your report. Never
 reset or discard local work to sync. If local edits block the pull, stash them
-under a named message and note that stash's commit id
-(`git rev-parse stash@{0}`), pull, then restore them with
+under a message of your own and note that stash's commit id, found by the
+message (`git stash list --format='%H %gs'`) and not by position: the stash
+list is shared with every worktree. Pull, then restore the edits with
 `git stash apply --index <id>`. When that applies cleanly, drop that same
-entry, finding its current `stash@{n}` by the id first: the stash list is
-shared with every worktree. Keep the stash when it does not apply cleanly, and
-name it in your report. If local `main` has diverged, report it instead of
-forcing a reset. Feature worktrees stay on their own branches.
+entry, finding its current `stash@{n}` by the id first. Keep the stash when it
+does not apply cleanly, and name it in your report. If local `main` has
+diverged, report it instead of forcing a reset. Feature worktrees stay on their
+own branches.
 
 # Full checks (all coding agents)
 
