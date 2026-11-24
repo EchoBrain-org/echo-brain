@@ -10,7 +10,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskReceipt, AskScope, ListItem, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES } from '../../src/shared/protocol.js';
 import {
-  allOmitted, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, threadOf, turnGroups,
+  allOmitted, askedIn, askedSuggestions, checkedOf, checkPlan, followedTurn, knownStates, previousOf, shownInFull, showsOf, turnGroups,
   unreadableAfter, visibleTurns,
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
@@ -156,11 +156,11 @@ describe('the timeline\'s rules', () => {
     const typed = turn('who owns  IT?', DAY, status(), { scope: inApollo });
     const elsewhere = turn('Who owns it?', HOUR, status());
     const turns = [first, apolloTurn, again, typed, elsewhere];
-    expect(threadOf(turns, { kind: 'global' })).toEqual(turns);
-    expect(threadOf(turns, inApollo)).toEqual([apolloTurn, typed]);
+    expect(askedIn(turns, { kind: 'global' })).toEqual(turns);
+    expect(askedIn(turns, inApollo)).toEqual([apolloTurn, typed]);
     // Home's thread: the first was asked again, and Apollo's question was asked again there; the same words asked at Home stay.
-    expect(visibleTurns(threadOf(turns, { kind: 'global' }))).toEqual([again, typed, elsewhere]);
-    expect(visibleTurns(threadOf(turns, inApollo))).toEqual([typed]);
+    expect(visibleTurns(askedIn(turns, { kind: 'global' }))).toEqual([again, typed, elsewhere]);
+    expect(visibleTurns(askedIn(turns, inApollo))).toEqual([typed]);
   });
 
   it('lets go of a source a check found unreadable once a check reads it, and keeps it while one cannot tell', () => {

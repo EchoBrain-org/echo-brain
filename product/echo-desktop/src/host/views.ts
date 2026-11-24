@@ -281,9 +281,11 @@ export function recordRead(value: unknown): RecordRead | null {
  * citations among the answer's), or, asking which one (`clarify`), the
  * choices and no part. An answer that drafted follow-ups (ADR-0053) names them by id only: the page reads each card
  * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
- * derive actionable explanations from gap_details.
+ * derive actionable explanations from gap_details. An answer to an Ask that carried the asker's other threads
+ * (ADR-0056) may say where the question belongs and which of them are on its subject, by their place among the
+ * `threads` sent: a place past them names nothing the page offered, so the answer is not one.
  */
-export function answerView(raw: unknown, scope: AskScope): Answer {
+export function answerView(raw: unknown, scope: AskScope, threads = 0): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
   try {
     line = validatePersonAskProgressResultLineV3(raw);
@@ -295,12 +297,16 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = line;
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
+  const { thread, merge } = result;
+  const placed = thread !== undefined || merge !== undefined;
+  if ((placed && threads === 0) || [...(thread?.kind === 'other' ? thread.threads : []), ...(merge ?? [])].some(place => place >= threads)) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }),
-    ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }) };
+    ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }),
+    ...(thread === undefined ? {} : { thread }), ...(merge === undefined ? {} : { merge }) };
 }
 
 const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);
