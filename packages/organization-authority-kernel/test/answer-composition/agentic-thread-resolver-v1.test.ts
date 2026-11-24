@@ -53,6 +53,7 @@ const PREVIOUS: PersonAnswerPreviousV1 = {
     { question: "and when is the review?", asked_at: "2026-11-21T18:00:00.000Z", statements: [], citations: [] },
   ],
 };
+const { earlier: _earlier, ...SINGLE } = PREVIOUS;
 const THREADS: readonly PersonAnswerThreadV1[] = [
   { questions: ["What did Kestrel quote for the heater block tooling?", "when does that quote expire?"], asked_at: "2026-11-22T19:00:00.000Z" },
   { questions: ["When is the FCC pre-scan booked?"], asked_at: "2026-11-19T07:30:00.000Z" },
@@ -67,6 +68,8 @@ const shownAs = (open: boolean, sources: number, threads: number | undefined) =>
 const SHOWN = shownAs(true, 3, 3);
 const CHOICES = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
 const OPEN_RESOLVED = { thread: "open", resolution: "resolved", question: "What are the details on THERM-482?", about: [1] };
+const SAME = { thread: "open", resolution: { resolution: "same" }, merge: [] } as const;
+const CONTRADICTORY = { thread: "other", threads: [1], resolution: "clarify", choices: CHOICES };
 
 /** What a call ran under the request's observer: the corrections its span counted. */
 async function observed<T>(operation: () => Promise<T> | T): Promise<{ readonly value: T; readonly corrections: Readonly<Record<string, number>>; readonly events: readonly CoreRuntimeObservationV1[] }> {
@@ -81,69 +84,55 @@ function resolver(replies: readonly unknown[], input: { readonly previous?: Pers
   return { run, gate, inputs, trace };
 }
 
-describe("thread resolution: the fixtures are a valid Ask (ADR-0056)", () => {
-  it("is a request the API takes", () => {
-    const request = { schema_version: 3, question: QUESTION, previous: PREVIOUS, threads: THREADS };
-    expect(validatePersonAnswerRequestV3(request)).toEqual(request);
-  });
-});
-
 describe("thread resolution: reading a reply into one placement (ADR-0056)", () => {
-  it("reads open with each resolution, by the follow-up resolver's own rules, against the thread's sources as one list", () => {
-    expect(parseThreadPlacementV1({ thread: "open", resolution: "same" }, SHOWN)).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });
-    expect(parseThreadPlacementV1({ ...OPEN_RESOLVED, about: [1, 3] }, SHOWN))
-      .toEqual({ thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0, 2] }, merge: [] });
-    expect(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES }, SHOWN)).toEqual({ thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] });
-    // The follow-up resolver's own refusals reach the repair unchanged.
-    expect(() => parseThreadPlacementV1({ ...OPEN_RESOLVED, about: [4] }, SHOWN)).toThrow("\"about\" holds source numbers from 1 to 3");
-    expect(() => parseThreadPlacementV1({ thread: "open" }, SHOWN)).toThrow("\"resolution\" must be \"same\", \"resolved\" or \"clarify\"");
-    expect(() => parseThreadPlacementV1({ thread: "open", resolution: "resolved", about: [1] }, SHOWN)).toThrow(/full question/u);
-    expect(() => parseThreadPlacementV1({ thread: "open", resolution: "same", choices: CHOICES }, SHOWN)).toThrow(/offers no choices/u);
-  });
-
-  it("reads new, and other with thread numbers as shown (from 1), kept as indexes into the request's threads", () => {
-    expect(parseThreadPlacementV1({ thread: "new" }, SHOWN)).toEqual({ thread: "new" });
-    expect(parseThreadPlacementV1({ thread: "other", threads: [2] }, SHOWN)).toEqual({ thread: "other", threads: [1], merge: [] });
-    expect(parseThreadPlacementV1({ thread: "other", threads: [3, 1] }, SHOWN)).toEqual({ thread: "other", threads: [2, 0], merge: [] });
+  it.each([
+    ["open, same", { thread: "open", resolution: "same" }, SHOWN, SAME],
+    // The follow-up resolver's own rules, against the thread's sources as one list.
+    ["open, resolved", { ...OPEN_RESOLVED, about: [1, 3] }, SHOWN, { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0, 2] }, merge: [] }],
+    ["open, clarify", { thread: "open", resolution: "clarify", choices: CHOICES }, SHOWN, { thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] }],
+    ["new", { thread: "new" }, SHOWN, { thread: "new" }],
+    // Thread numbers as shown (from 1), kept as indexes into the request's threads. Several are never cut to one (R4).
+    ["other, one thread", { thread: "other", threads: [2] }, SHOWN, { thread: "other", threads: [1], merge: [] }],
+    ["other, several threads", { thread: "other", threads: [3, 1] }, SHOWN, { thread: "other", threads: [2, 0], merge: [] }],
     // Fields that say nothing (missing, null, blank, an empty list) are not a second thing said.
-    expect(parseThreadPlacementV1({ thread: "new", resolution: null, question: " ", about: [], choices: [], threads: [] }, SHOWN)).toEqual({ thread: "new" });
-    expect(parseThreadPlacementV1({ thread: "other", threads: [1], resolution: "", question: "", about: [], choices: [] }, SHOWN)).toEqual({ thread: "other", threads: [0], merge: [] });
+    ["new beside fields that say nothing", { thread: "new", resolution: null, question: " ", about: [], choices: [], threads: [] }, SHOWN, { thread: "new" }],
+    ["other beside fields that say nothing", { thread: "other", threads: [1], resolution: "", question: "", about: [], choices: [] }, SHOWN, { thread: "other", threads: [0], merge: [] }],
+    // A request that carried the list is being placed, however many threads it holds: with none, the person can still
+    // start a second thread from inside their only one.
+    ["new, to an empty list with a thread open", { thread: "new" }, shownAs(true, 3, 0), { thread: "new" }],
+    ["new, to a list with a thread open", { thread: "new" }, shownAs(true, 3, 2), { thread: "new" }],
+    ["new, to an empty list with no thread open", { thread: "new" }, shownAs(false, 0, 0), { thread: "new" }],
+    ["new, to a list with no thread open", { thread: "new" }, shownAs(false, 0, 2), { thread: "new" }],
+    // Older turns and no `threads` field are not placed: the contract carries `thread` only to a request that carried
+    // `threads`, so a new subject is answered as asked in its thread.
+    ["new, to older turns with no list", { thread: "new" }, shownAs(true, 3, undefined), SAME],
+    // The open thread reads the same with an empty list as with none.
+    ["open, to an empty list", OPEN_RESOLVED, shownAs(true, 3, 0), { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0] }, merge: [] }],
+    ["open, to no list", OPEN_RESOLVED, shownAs(true, 3, undefined), { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0] }, merge: [] }],
+  ] as const)("reads %s", (_name, reply, shown, placement) => {
+    expect(parseThreadPlacementV1(reply, shown)).toEqual(placement);
   });
 
   it.each([
-    // The reply the review found read as thread 1, which a client may jump to with no click.
-    ["other with a resolution and choices", { thread: "other", threads: [1], resolution: "clarify", choices: CHOICES }, /"other" says nothing of the open thread, and the reply also gave "resolution", "choices"/u],
-    ["other with a resolution alone", { thread: "other", threads: [1], resolution: "same" }, /"other" says nothing of the open thread, and the reply also gave "resolution"/u],
-    ["other with a rewritten question and its sources", { thread: "other", threads: [2], question: "What are the details on THERM-482?", about: [1] }, /also gave "question", "about"/u],
-    ["new with a resolution", { thread: "new", resolution: "same" }, /"new" says nothing of the open thread, and the reply also gave "resolution"/u],
-    ["new with a resolution that is none", { thread: "new", resolution: "guess" }, /"new" says nothing of the open thread/u],
-    ["new with choices", { thread: "new", choices: CHOICES }, /also gave "choices"/u],
-    ["new with a question", { thread: "new", question: "Who leads firmware?" }, /also gave "question"/u],
-    ["new with sources", { thread: "new", about: [1] }, /also gave "about"/u],
-    ["new naming a thread outside a list", { thread: "new", threads: 2 }, /"new" names no other thread/u],
-    ["open naming a thread outside a list", { thread: "open", resolution: "same", threads: "2" }, /"open" names no other thread/u],
-  ])("sends back a reply that says two things, %s, and reads it as neither", (_name, reply, reason) => {
-    expect(() => parseThreadPlacementV1(reply, SHOWN)).toThrow(reason);
-    // The rule it names is the one thing the repair is told: only an open reply has these.
-    if (!/names no other thread/u.test(String(reason))) expect(() => parseThreadPlacementV1(reply, SHOWN)).toThrow(/only an "open" reply has a resolution, a question, sources or choices/u);
-  });
-
-  it("normalizes only what cannot change the meaning: a place's spelling, a number as a string, a repeated number", async () => {
-    const { value, corrections } = await observed(() => [
-      parseThreadPlacementV1({ thread: " Other ", threads: ["2", 2, "S3"] }, SHOWN),
-      parseThreadPlacementV1({ thread: "OPEN", resolution: "same", merge: ["1"] }, SHOWN),
-    ]);
-    expect(value).toEqual([{ thread: "other", threads: [1, 2], merge: [] }, { thread: "open", resolution: { resolution: "same" }, merge: [0] }]);
-    expect(corrections).toEqual({ model_enum_respelled: 2, model_id_respelled: 3, model_repeat_dropped: 1 });
-  });
-
-  it.each([
+    // A reply that says two things is read as neither. The first is the one the review found: read as thread 1, a client
+    // may jump there with no click.
+    ["other with a resolution and choices", CONTRADICTORY, SHOWN, /"other" says nothing of the open thread, and the reply also gave "resolution", "choices"/u],
+    ["other with a resolution alone", { thread: "other", threads: [1], resolution: "same" }, SHOWN, /"other" says nothing of the open thread, and the reply also gave "resolution"/u],
+    ["other with a rewritten question and its sources", { thread: "other", threads: [2], question: "What are the details on THERM-482?", about: [1] }, SHOWN, /also gave "question", "about"/u],
+    ["new with a resolution", { thread: "new", resolution: "same" }, SHOWN, /"new" says nothing of the open thread, and the reply also gave "resolution"/u],
+    ["new with a resolution that is none", { thread: "new", resolution: "guess" }, SHOWN, /"new" says nothing of the open thread/u],
+    ["new with choices", { thread: "new", choices: CHOICES }, SHOWN, /also gave "choices"/u],
+    ["new with a question", { thread: "new", question: "Who leads firmware?" }, SHOWN, /also gave "question"/u],
+    ["new with sources", { thread: "new", about: [1] }, SHOWN, /also gave "about"/u],
+    ["new naming a thread outside a list", { thread: "new", threads: 2 }, SHOWN, /"new" names no other thread/u],
+    ["open naming a thread outside a list", { thread: "open", resolution: "same", threads: "2" }, SHOWN, /"open" names no other thread/u],
+    ["open naming another thread", { thread: "open", resolution: "same", threads: [2] }, SHOWN, /"open" names no other thread/u],
+    ["new naming another thread", { thread: "new", threads: [2] }, SHOWN, /"new" names no other thread/u],
+    // Anything else unusable.
     ["not an object", "open", SHOWN, /JSON object/u],
     ["another place", { thread: "elsewhere" }, SHOWN, /"thread" must be "open", "new" or "other"/u],
     ["no place", { resolution: "same" }, SHOWN, /"thread" must be "open", "new" or "other"/u],
     ["open when no thread is open", { thread: "open", resolution: "same" }, shownAs(false, 0, 3), /no thread open, so the thread is "new" or "other"/u],
-    ["open naming another thread", { thread: "open", resolution: "same", threads: [2] }, SHOWN, /"open" names no other thread/u],
-    ["new naming another thread", { thread: "new", threads: [2] }, SHOWN, /"new" names no other thread/u],
     ["other naming no thread", { thread: "other" }, SHOWN, /"other" needs "threads"/u],
     ["other with an empty list", { thread: "other", threads: [] }, SHOWN, /"other" needs "threads"/u],
     ["other naming a thread not shown", { thread: "other", threads: [1, 4] }, SHOWN, /thread numbers from 1 to 3/u],
@@ -155,68 +144,37 @@ describe("thread resolution: reading a reply into one placement (ADR-0056)", () 
     ["other when the request carried an empty list", { thread: "other", threads: [1] }, shownAs(true, 3, 0), /no other thread, so the thread is "open" or "new"$/u],
     ["other with nothing named and an empty list", { thread: "other", threads: [] }, shownAs(true, 3, 0), /no other thread, so the thread is "open" or "new"$/u],
     ["other with an empty list and no thread open", { thread: "other", threads: [1] }, shownAs(false, 0, 0), /no other thread, so the thread is "new"$/u],
-  ])("sends back %s for its one repair", (_name, reply, shown, reason) => {
+    // The follow-up resolver's own refusals reach the repair unchanged.
+    ["open sources outside the thread's list", { ...OPEN_RESOLVED, about: [4] }, SHOWN, /"about" holds source numbers from 1 to 3/u],
+    ["open with no resolution", { thread: "open" }, SHOWN, /"resolution" must be "same", "resolved" or "clarify"/u],
+    ["open resolved with no question", { thread: "open", resolution: "resolved", about: [1] }, SHOWN, /full question/u],
+    ["open same with choices", { thread: "open", resolution: "same", choices: CHOICES }, SHOWN, /offers no choices/u],
+  ] as const)("sends back %s for its one repair", (_name, reply, shown, reason) => {
     expect(() => parseThreadPlacementV1(reply, shown)).toThrow(reason);
+    // A reply that says two things hears the one rule it broke: only an open reply has these.
+    if (/also gave/u.test(String(reason))) expect(() => parseThreadPlacementV1(reply, shown)).toThrow(/only an "open" reply has a resolution, a question, sources or choices/u);
   });
 
-  it("lets new stand whenever the request carried threads, even an empty list; only older turns alone are answered in the open thread", () => {
-    // A request that carried the list is being placed, however many threads it holds: with none, the person can still
-    // start a second thread from inside their only one.
-    expect(parseThreadPlacementV1({ thread: "new" }, shownAs(true, 3, 0))).toEqual({ thread: "new" });
-    expect(parseThreadPlacementV1({ thread: "new" }, shownAs(true, 3, 2))).toEqual({ thread: "new" });
-    expect(parseThreadPlacementV1({ thread: "new" }, shownAs(false, 0, 0))).toEqual({ thread: "new" });
-    expect(parseThreadPlacementV1({ thread: "new" }, shownAs(false, 0, 2))).toEqual({ thread: "new" });
-    // A request with older turns and no `threads` field is not placed: the contract carries `thread` only to a request
-    // that carried `threads`, so a new subject is answered as asked in its thread.
-    expect(parseThreadPlacementV1({ thread: "new" }, shownAs(true, 3, undefined))).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });
-    // The open thread reads the same with an empty list as with none.
-    expect(parseThreadPlacementV1(OPEN_RESOLVED, shownAs(true, 3, 0))).toEqual(parseThreadPlacementV1(OPEN_RESOLVED, shownAs(true, 3, undefined)));
-  });
-
-  it("drops a bad merge entry and counts it, keeping the rest: a merge never sends a reply back", async () => {
-    const { value, corrections } = await observed(() => [
-      // No thread 9, thread 2 twice, an unreadable entry: only 2 and 3 stand.
-      parseThreadPlacementV1({ thread: "open", resolution: "same", merge: [9, 2, 2, "the old one", 3, 0] }, SHOWN),
-      // The thread the question belongs to is never merged with itself.
-      parseThreadPlacementV1({ thread: "other", threads: [1], merge: [1, 3] }, SHOWN),
-      // Anything but a list is one entry code cannot read.
-      parseThreadPlacementV1({ thread: "other", threads: [2], merge: 3 }, SHOWN),
-    ]);
-    expect(value).toEqual([
-      { thread: "open", resolution: { resolution: "same" }, merge: [1, 2] },
-      { thread: "other", threads: [0], merge: [2] },
-      { thread: "other", threads: [1], merge: [] },
-    ]);
-    expect(corrections).toEqual({ model_entry_dropped: 5, model_repeat_dropped: 1 });
-  });
-
-  it("merges nothing with a new subject, or when the question could belong to several threads", async () => {
-    const { value, corrections } = await observed(() => [
-      parseThreadPlacementV1({ thread: "new", merge: [1, 2] }, SHOWN),
-      parseThreadPlacementV1({ thread: "other", threads: [1, 2], merge: [3] }, SHOWN),
-      // With no other thread on the request (no list, or an empty one), nothing can be merged with the open one either.
-      parseThreadPlacementV1({ thread: "open", resolution: "same", merge: [1] }, shownAs(true, 3, undefined)),
-      parseThreadPlacementV1({ thread: "open", resolution: "same", merge: [1] }, shownAs(true, 3, 0)),
-    ]);
-    expect(value).toEqual([{ thread: "new" }, { thread: "other", threads: [0, 1], merge: [] }, { thread: "open", resolution: { resolution: "same" }, merge: [] }, { thread: "open", resolution: { resolution: "same" }, merge: [] }]);
-    expect(corrections).toEqual({ model_entry_dropped: 5 });
-  });
-
-  it("merges nothing beside choices: the placement that asks which thing is meant is the answer the product releases", async () => {
-    const { value, corrections } = await observed(() => [
-      parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES, merge: [3, 1] }, SHOWN),
-      // The same merge beside a resolution that answers stands.
-      parseThreadPlacementV1({ ...OPEN_RESOLVED, merge: [3, 1] }, SHOWN),
-      parseThreadPlacementV1({ thread: "open", resolution: "same", merge: [3] }, SHOWN),
-    ]);
-    expect(value[0]).toEqual({ thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] });
-    expect(value[1]).toMatchObject({ thread: "open", resolution: { resolution: "resolved" }, merge: [2, 0] });
-    expect(value[2]).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [2] });
-    // Both entries beside the choices were dropped and counted; no reply was sent back.
-    expect(corrections).toEqual({ model_entry_dropped: 2 });
-    // What an answer says of the threads follows: a clarify says nothing, as the contract requires.
-    expect(agenticThreadFieldsV1(value[0]!)).toEqual({});
-    expect(agenticThreadFieldsV1(value[1]!)).toEqual({ merge: [2, 0] });
+  it.each([
+    // Only what cannot change the meaning is normalized: a place's spelling, a number as a string, a repeated number.
+    ["a respelled place and thread numbers", { thread: " Other ", threads: ["2", 2, "S3"] }, SHOWN, { thread: "other", threads: [1, 2], merge: [] }, { model_enum_respelled: 1, model_id_respelled: 2, model_repeat_dropped: 1 }],
+    ["a respelled place and merge number", { thread: "OPEN", resolution: "same", merge: ["1"] }, SHOWN, { ...SAME, merge: [0] }, { model_enum_respelled: 1, model_id_respelled: 1 }],
+    // A merge entry that names no thread, the target, or nothing readable is dropped and counted; the rest stand.
+    ["a merge naming no thread, one twice, something unreadable", { thread: "open", resolution: "same", merge: [9, 2, 2, "the old one", 3, 0] }, SHOWN, { ...SAME, merge: [1, 2] }, { model_entry_dropped: 3, model_repeat_dropped: 1 }],
+    ["a merge naming the thread it belongs to", { thread: "other", threads: [1], merge: [1, 3] }, SHOWN, { thread: "other", threads: [0], merge: [2] }, { model_entry_dropped: 1 }],
+    ["a merge that is not a list", { thread: "other", threads: [2], merge: 3 }, SHOWN, { thread: "other", threads: [1], merge: [] }, { model_entry_dropped: 1 }],
+    // Nothing merges with a new subject, with a question that could belong to several threads, beside choices (the
+    // question is asked again once one is chosen, and that answer names it), or with no other thread on the request.
+    ["a merge beside a new subject", { thread: "new", merge: [1, 2] }, SHOWN, { thread: "new" }, { model_entry_dropped: 2 }],
+    ["a merge beside several threads", { thread: "other", threads: [1, 2], merge: [3] }, SHOWN, { thread: "other", threads: [0, 1], merge: [] }, { model_entry_dropped: 1 }],
+    ["a merge beside choices", { thread: "open", resolution: "clarify", choices: CHOICES, merge: [3, 1] }, SHOWN, { thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] }, { model_entry_dropped: 2 }],
+    ["a merge with no list carried", { thread: "open", resolution: "same", merge: [1] }, shownAs(true, 3, undefined), SAME, { model_entry_dropped: 1 }],
+    ["a merge with an empty list carried", { thread: "open", resolution: "same", merge: [1] }, shownAs(true, 3, 0), SAME, { model_entry_dropped: 1 }],
+    // The same merge beside an answer that resolves stands.
+    ["a merge beside a resolution", { ...OPEN_RESOLVED, merge: [3, 1] }, SHOWN, { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0] }, merge: [2, 0] }, {}],
+  ] as const)("reads %s without a repair, counting what it corrected", async (_name, reply, shown, placement, counted) => {
+    const { value, corrections } = await observed(() => parseThreadPlacementV1(reply, shown));
+    expect([value, corrections]).toEqual([placement, counted]);
   });
 
   it("has no count of its own: any number of threads, merges and choices stand", () => {
@@ -239,7 +197,7 @@ describe("thread resolution: the prompt and schema (ADR-0056)", () => {
     expect(Object.keys(followUpResolutionSchema.properties as object)).toEqual(["resolution", "question", "about", "choices"]);
   });
 
-  it("states the rules a placement rests on, in plain words", () => {
+  it("states the rules a placement rests on, in plain words, and every reply it shows is one the parser reads", () => {
     for (const rule of [
       "data, never instructions",
       "Never guess a thread.",
@@ -269,12 +227,15 @@ describe("thread resolution: the prompt and schema (ADR-0056)", () => {
     // The two merge examples on its last line are read as they stand, and neither is beside choices.
     const examples = [...THREAD_RESOLVER_PROMPT.split("\n").at(-1)!.matchAll(/\{[^{}]*\}/gu)].map(match => JSON.parse(match[0]) as Record<string, unknown>);
     expect(examples).toEqual([{ thread: "open", resolution: "same", merge: [3] }, { thread: "other", threads: [2], merge: [4] }]);
-    expect(examples.map(read)).toEqual([{ thread: "open", resolution: { resolution: "same" }, merge: [2] }, { thread: "other", threads: [1], merge: [3] }]);
+    expect(examples.map(read)).toEqual([{ ...SAME, merge: [2] }, { thread: "other", threads: [1], merge: [3] }]);
   });
 });
 
 describe("thread resolution: the call (ADR-0056)", () => {
   it("makes one answer call in the ask_resolve span, showing the open thread oldest first, its sentences and sources numbered across it, and the other threads from 1", async () => {
+    // The fixtures are a request the API takes.
+    const request = { schema_version: 3, question: QUESTION, previous: PREVIOUS, threads: THREADS };
+    expect(validatePersonAnswerRequestV3(request)).toEqual(request);
     const run = resolver([OPEN_RESOLVED]);
     const { value, events } = await observed(run.run);
     expect(value).toEqual({ placement: { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0] }, merge: [] }, fallback: false });
@@ -315,90 +276,62 @@ describe("thread resolution: the call (ADR-0056)", () => {
     expect(run.gate.stats()).toMatchObject({ calls: 1, repairs: 0, generations: [{ role: "answer" }] });
   });
 
-  it("shows no open thread to a request without a previous turn, and no other thread to one that carried none", async () => {
-    const alone = resolver([{ thread: "other", threads: [2] }], { threads: THREADS });
-    expect(await alone.run()).toEqual({ placement: { thread: "other", threads: [1], merge: [] }, fallback: false });
-    const shown = JSON.parse(alone.inputs[0]!.user_prompt) as Record<string, unknown>;
-    expect(Object.keys(shown)).toEqual(["today", "threads", "question"]);
-    const older = resolver([{ thread: "open", resolution: "same" }], { previous: PREVIOUS });
-    expect((await older.run()).placement).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });
-    expect(older.inputs[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
-    expect(JSON.parse(older.inputs[0]!.user_prompt)).toMatchObject({ threads: [], open: { turns: [{}, {}, {}] } });
+  it.each([
+    // No open thread to a request without a previous turn, and no other thread to one that carried none.
+    ["threads alone", { threads: THREADS }, { thread: "other", threads: [2] }, { thread: "other", threads: [1], merge: [] }, { keys: ["today", "threads", "question"] }],
+    ["older turns alone", { previous: PREVIOUS }, { thread: "open", resolution: "same" }, SAME, { threads: [], open: { turns: [{}, {}, {}] } }],
+    // A client that keeps threads sends the list with every question it wants placed, even when the person has no other.
+    ["older turns and an empty list", { previous: PREVIOUS, threads: [] }, { thread: "new" }, { thread: "new" }, { threads: [], open: { turns: [{}, {}, {}] } }],
+    // The same reply to the same turns without the list is answered in the open thread: only what the request carried differs.
+    ["older turns alone, told new", { previous: PREVIOUS }, { thread: "new" }, SAME, { threads: [], open: { turns: [{}, {}, {}] } }],
+    // A previous turn with no older turn and an empty list is placed too: the list alone takes the thread resolver.
+    ["one turn and an empty list", { previous: SINGLE, threads: [] }, { thread: "new" }, { thread: "new" }, { threads: [], open: { turns: [{}] } }],
+  ] as const)("asks the thread resolver once with %s, and reads its reply", async (_name, input, reply, placement, shown) => {
+    const run = resolver([reply], input);
+    expect(await run.run()).toEqual({ placement, fallback: false });
+    expect(run.inputs.map(each => each.system_prompt)).toEqual([THREAD_RESOLVER_PROMPT]);
+    const prompt = JSON.parse(run.inputs[0]!.user_prompt) as Record<string, unknown>;
+    if ("keys" in shown) expect(Object.keys(prompt)).toEqual(shown.keys);
+    else expect(prompt).toMatchObject(shown);
   });
 
-  it("places a question for a request that carried an empty list of threads: new stands, and the model is shown no other thread", async () => {
-    // A client that keeps threads sends the list with every question it wants placed, even when the person has no other.
-    const none = resolver([{ thread: "new" }], { previous: PREVIOUS, threads: [] });
-    expect(await none.run()).toEqual({ placement: { thread: "new" }, fallback: false });
-    expect(none.inputs[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
-    expect(JSON.parse(none.inputs[0]!.user_prompt)).toMatchObject({ threads: [], open: { turns: [{}, {}, {}] } });
-    // The same reply to the same turns without the list is answered in the open thread: the model saw the same input,
-    // and only what the request carried differs.
-    const older = resolver([{ thread: "new" }], { previous: PREVIOUS });
-    expect(await older.run()).toEqual({ placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: false });
-    expect(older.inputs[0]!.user_prompt).toBe(none.inputs[0]!.user_prompt);
-    // A previous turn with no older turn and an empty list is placed too: the list alone takes the thread resolver.
-    const { earlier: _earlier, ...single } = PREVIOUS;
-    const one = resolver([{ thread: "new" }], { previous: single, threads: [] });
-    expect((await one.run()).placement).toEqual({ thread: "new" });
-    expect(one.inputs[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
+  it("shows the model the same input whether or not an empty list came, and asks nothing with no thread open and an empty list", async () => {
+    const [placed, unplaced] = [resolver([{ thread: "new" }], { previous: PREVIOUS, threads: [] }), resolver([{ thread: "new" }], { previous: PREVIOUS })];
+    await Promise.all([placed.run(), unplaced.run()]);
+    expect(placed.inputs[0]!.user_prompt).toBe(unplaced.inputs[0]!.user_prompt);
     // With no thread open either, there is nothing but a new thread: no model is asked, and it is no fallback.
     const first = resolver([{ thread: "other", threads: [1] }], { threads: [] });
     expect(await first.run()).toEqual({ placement: { thread: "new" }, fallback: false });
     expect(first.inputs).toHaveLength(0);
-    // No other thread can be named: `other` goes back for the repair, which hears what the thread can be.
-    const other = resolver([{ thread: "other", threads: [1] }, { thread: "open", resolution: "same" }], { previous: PREVIOUS, threads: [] });
-    expect((await other.run()).placement).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });
-    expect(JSON.parse(other.inputs[1]!.user_prompt).validation_error).toContain("the person has no other thread, so the thread is \"open\" or \"new\"");
   });
 
-  it("sends a reply that says two things back for the one repair, and falls back when the repair says two things too", async () => {
-    // The reply the review found: another thread, and also a clarify with choices. It is read as neither.
-    const contradictory = { thread: "other", threads: [1], resolution: "clarify", choices: CHOICES };
-    const repaired = resolver([contradictory, { thread: "other", threads: [1] }]);
-    expect(await repaired.run()).toEqual({ placement: { thread: "other", threads: [0], merge: [] }, fallback: false });
-    expect(repaired.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
-    const reason = JSON.parse(repaired.inputs[1]!.user_prompt).validation_error as string;
-    expect(reason).toContain("\"other\" says nothing of the open thread, and the reply also gave \"resolution\", \"choices\"");
-    expect(reason).toContain("only an \"open\" reply has a resolution, a question, sources or choices");
-    // A second contradiction is not read as thread 1 either: the question stays in the open thread, as asked.
-    const failed = resolver([contradictory, { thread: "new", resolution: "same" }, { thread: "other", threads: [1] }]);
-    const { value, corrections } = await observed(failed.run);
-    expect(value).toEqual({ placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true });
-    expect(corrections).toEqual({ model_repair_rejected: 1, resolver_fallback: 1 });
-    expect(failed.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
-    expect(failed.inputs).toHaveLength(2);
-    // With no thread open the same two replies fall back to a new thread, never to the thread they named.
-    const alone = resolver([contradictory, contradictory], { threads: THREADS });
-    expect(await alone.run()).toEqual({ placement: { thread: "new" }, fallback: true });
-  });
-
-  it("asks once more with the rule that was broken, and never a third time", async () => {
-    const repaired = resolver([{ thread: "other", threads: [7] }, { thread: "other", threads: [3], merge: [1] }]);
-    expect(await repaired.run()).toEqual({ placement: { thread: "other", threads: [2], merge: [0] }, fallback: false });
-    expect(JSON.parse(repaired.inputs[1]!.user_prompt).validation_error).toContain("\"threads\" holds thread numbers from 1 to 3");
-    expect(repaired.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
-    const failed = resolver([{ thread: "other" }, { thread: "other", threads: [9] }, { thread: "other", threads: [1] }]);
-    const { value, corrections } = await observed(failed.run);
-    expect(value.fallback).toBe(true);
-    expect(corrections).toEqual({ model_repair_rejected: 1, resolver_fallback: 1 });
-    expect(failed.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
-    expect(failed.inputs).toHaveLength(2);
-  });
-
-  it("falls back to the open thread, as asked, with a previous turn; and to a new thread without one; never to another thread or a merge", async () => {
-    const unusable = [{ thread: "other", threads: [9], merge: [1] }, "still not an object"];
-    const following = await resolver(unusable).run();
-    expect(following).toEqual({ placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true });
-    const alone = resolver(unusable, { threads: THREADS });
-    expect(await alone.run()).toEqual({ placement: { thread: "new" }, fallback: true });
+  it.each([
+    // A reply that says two things goes back with the rule it broke, and a repair that says one thing is read.
+    ["a reply that says two things, then one", [CONTRADICTORY, { thread: "other", threads: [1] }], undefined, { thread: "other", threads: [0], merge: [] }, false,
+      ["\"other\" says nothing of the open thread, and the reply also gave \"resolution\", \"choices\"", "only an \"open\" reply has a resolution, a question, sources or choices"]],
+    ["a thread not shown, then a usable reply", [{ thread: "other", threads: [7] }, { thread: "other", threads: [3], merge: [1] }], undefined, { thread: "other", threads: [2], merge: [0] }, false,
+      ["\"threads\" holds thread numbers from 1 to 3"]],
+    ["another thread when there is none, then the open thread", [{ thread: "other", threads: [1] }, { thread: "open", resolution: "same" }], { previous: PREVIOUS, threads: [] }, SAME, false,
+      ["the person has no other thread, so the thread is \"open\" or \"new\""]],
+    // A second contradiction is not read as thread 1 either: the question stays in the open thread, as asked; with no
+    // thread open it falls back to a new thread, never to the thread it named, and never with a merge.
+    ["two contradictions with a thread open", [CONTRADICTORY, { thread: "new", resolution: "same" }, { thread: "other", threads: [1] }], undefined, SAME, true, []],
+    ["two contradictions with no thread open", [CONTRADICTORY, CONTRADICTORY], { threads: THREADS }, { thread: "new" }, true, []],
+    // Never a third call.
+    ["no thread named, then a thread not shown", [{ thread: "other" }, { thread: "other", threads: [9] }, { thread: "other", threads: [1] }], undefined, SAME, true, []],
+    ["unusable replies with a thread open", [{ thread: "other", threads: [9], merge: [1] }, "still not an object"], undefined, SAME, true, []],
+    ["unusable replies with no thread open", [{ thread: "other", threads: [9], merge: [1] }, "still not an object"], { threads: THREADS }, { thread: "new" }, true, []],
     // A request with threads and no previous turn has no open thread to continue: `open` goes back for the repair.
-    const open = resolver([{ thread: "open", resolution: "same" }, { thread: "open", resolution: "same" }], { threads: THREADS });
-    const { value, corrections } = await observed(open.run);
-    expect(value).toEqual({ placement: { thread: "new" }, fallback: true });
-    expect(JSON.parse(open.inputs[1]!.user_prompt).validation_error).toContain("the person has no thread open, so the thread is \"new\" or \"other\"");
-    expect(corrections).toEqual({ model_repair_rejected: 1, resolver_fallback: 1 });
-    for (const fallback of [following, value]) expect(agenticThreadFieldsV1(fallback.placement)).not.toHaveProperty("merge");
+    ["the open thread when none is open, twice", [{ thread: "open", resolution: "same" }, { thread: "open", resolution: "same" }], { threads: THREADS }, { thread: "new" }, true,
+      ["the person has no thread open, so the thread is \"new\" or \"other\""]],
+  ] as const)("asks once more after %s, and never a third time", async (_name, replies, input, placement, fallback, heard) => {
+    const run = resolver(replies, input);
+    const { value, corrections } = await observed(run.run);
+    expect(value).toEqual({ placement, fallback });
+    expect(run.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
+    expect(run.inputs).toHaveLength(2);
+    for (const rule of heard) expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(rule);
+    if (fallback) expect([corrections, agenticThreadFieldsV1(value.placement)]).toEqual([{ model_repair_rejected: 1, resolver_fallback: 1 }, value.placement.thread === "new" ? { thread: { kind: "new" } } : {}]);
   });
 
   it("makes no call, and falls back, once a permanent provider failure has stopped the gate", async () => {
@@ -406,7 +339,7 @@ describe("thread resolution: the call (ADR-0056)", () => {
     for (const input of [{ previous: PREVIOUS, threads: THREADS }, { threads: THREADS }]) {
       const run = resolver([denied, OPEN_RESOLVED], input);
       await run.gate.call({ role: "answer", span: "ask_answer" }, "system", {}, {}).catch(() => undefined);
-      expect(await run.run()).toEqual({ placement: input.previous === undefined ? { thread: "new" } : { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true });
+      expect(await run.run()).toEqual({ placement: input.previous === undefined ? { thread: "new" } : SAME, fallback: true });
       expect(run.trace).toEqual(["revalidate", "generate"]);
     }
   });
@@ -425,20 +358,19 @@ describe("thread resolution: the call (ADR-0056)", () => {
   });
 
   it("is the follow-up resolver, byte for byte, for an Ask with neither other threads nor older turns", async () => {
-    const { earlier: _earlier, ...single } = PREVIOUS;
     const reply = { resolution: "resolved", question: "What are the details on THERM-482?", about: [2] };
-    const placed = resolver([reply], { previous: single });
+    const placed = resolver([reply], { previous: SINGLE });
     expect(await placed.run()).toEqual({ placement: { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [1] }, merge: [] }, fallback: false });
     const plain = scriptedGate([reply], []);
-    await resolveAgenticFollowUpV1({ gate: plain.gate, previous: single, question: QUESTION, today: "2026-11-23", time_zone: "America/Los_Angeles", signal: new AbortController().signal });
+    await resolveAgenticFollowUpV1({ gate: plain.gate, previous: SINGLE, question: QUESTION, today: "2026-11-23", time_zone: "America/Los_Angeles", signal: new AbortController().signal });
     const sent = (inputs: readonly StructuredGenerationInput[]) => inputs.map(({ signal: _signal, ...input }) => input);
     expect(sent(placed.inputs)).toEqual(sent(plain.inputs));
     expect(placed.inputs).toHaveLength(1);
     expect(placed.inputs[0]!.system_prompt).toBe(FOLLOW_UP_RESOLVER_PROMPT);
     expect(placed.inputs[0]!.schema).toBe(followUpResolutionSchema);
     // Its fallback is the open thread, as asked.
-    const failed = resolver([{ resolution: "guess" }, { resolution: "guess" }], { previous: single });
-    expect(await failed.run()).toEqual({ placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true });
+    const failed = resolver([{ resolution: "guess" }, { resolution: "guess" }], { previous: SINGLE });
+    expect(await failed.run()).toEqual({ placement: SAME, fallback: true });
   });
 
   it("runs the product's call on its own for the eval, with no desk", async () => {
@@ -463,20 +395,18 @@ describe("the open thread's citations as one list, and what an answer says of th
     expect(agenticFollowUpStartingV1(PREVIOUS, [1])).toEqual([{ citation: decision.citation, if_unreadable: "skip" }]);
     expect(agenticFollowUpStartingV1(PREVIOUS, [3])).toEqual([]);
     // A turn with no older turn is its own list, in its own order.
-    const { earlier: _earlier, ...single } = PREVIOUS;
-    expect(agenticFollowUpStartingV1(single, [0, 1])).toEqual([{ citation: single.citations[1]!.citation, if_unreadable: "skip" }]);
+    expect(agenticFollowUpStartingV1(SINGLE, [0, 1])).toEqual([{ citation: SINGLE.citations[1]!.citation, if_unreadable: "skip" }]);
   });
 
-  it("maps each placement to the response's thread and merge, and nothing for the open thread with nothing to merge", () => {
+  it("maps each placement to the response's thread and merge, and a question that belongs elsewhere to a clarify with no part, citation or choice", () => {
     const same = { resolution: "same" } as const;
     expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [] })).toEqual({});
     expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [2] })).toEqual({ merge: [2] });
     expect(agenticThreadFieldsV1({ thread: "new" })).toEqual({ thread: { kind: "new" } });
     expect(agenticThreadFieldsV1({ thread: "other", threads: [0, 1], merge: [] })).toEqual({ thread: { kind: "other", threads: [0, 1] } });
     expect(agenticThreadFieldsV1({ thread: "other", threads: [1], merge: [2] })).toEqual({ thread: { kind: "other", threads: [1] }, merge: [2] });
-  });
-
-  it("answers a question that belongs elsewhere with no part, citation or choice: the question asked and the threads", () => {
+    // A reply that asks which thing is meant says nothing of the threads, whatever merge it gave.
+    expect(agenticThreadFieldsV1(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES, merge: [3, 1] }, SHOWN))).toEqual({});
     const response = agenticElsewhereResponseV1({ kind: "global" }, QUESTION, { thread: "other", threads: [1], merge: [2] });
     expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, thread: { kind: "other", threads: [1] }, merge: [2] });
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);

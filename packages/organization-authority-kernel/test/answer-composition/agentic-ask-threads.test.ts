@@ -39,6 +39,7 @@ const PREVIOUS: PersonAnswerPreviousV1 = {
     citations: [cited(ticketItem, "ticket"), cited(decisionItem, "decision")],
   }],
 };
+const { earlier: _earlier, ...SINGLE } = PREVIOUS;
 const THREADS: readonly PersonAnswerThreadV1[] = [
   { questions: ["What did Kestrel quote for the heater block tooling?", "when does that quote expire?"], asked_at: "2026-11-22T19:00:00.000Z" },
   { questions: ["When is the FCC pre-scan booked?"], asked_at: "2026-11-19T17:30:00.000Z" },
@@ -47,6 +48,7 @@ const THREADS: readonly PersonAnswerThreadV1[] = [
 const QUESTION = "what are the details on that ticket?";
 const RESOLVED = "What are the details on THERM-482?";
 const ELSEWHERE = { thread: "other", threads: [2, 1] };
+const CHOICES = [{ label: "THERM-482", question: RESOLVED }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
 
 /** Research that searches once and finishes on what it found, and a writer that states one sentence from it. */
 const researched = (question: string) => ({
@@ -72,132 +74,77 @@ function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>) {
   });
   return { ask, audits };
 }
-const reads =(port: ReturnType<typeof desk>) => [port.search, port.list, port.open, port.openCitation];
+const reads = (port: ReturnType<typeof desk>) => [port.search, port.list, port.open, port.openCitation];
+/** The Ask's input, carrying `previous` and `threads` only when given. */
+const sent = (previous: PersonAnswerPreviousV1 | undefined, threads: readonly PersonAnswerThreadV1[] | undefined, question = QUESTION) =>
+  ({ question, ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }) });
 
-describe("the fixtures are a valid Ask with its threads (ADR-0056)", () => {
-  it("is a request the API takes", () => {
-    const request = { schema_version: 3, question: QUESTION, previous: PREVIOUS, threads: THREADS };
-    expect(validatePersonAnswerRequestV3(request)).toEqual(request);
-  });
-});
-
-describe("a question that belongs to other threads (ADR-0056)", () => {
-  it("is not answered here: no research, no citation, the threads by index, released and audited as clarify", async () => {
-    const run = scripted({ resolver: [ELSEWHERE] });
+describe("where the question belongs decides its one path (ADR-0056)", () => {
+  it.each([
+    ["several other threads, from its thread", ELSEWHERE, PREVIOUS, { thread: { kind: "other", threads: [1, 0] } }, {}],
+    // Merge entries that named the thread itself and no thread were dropped, never failed.
+    ["one other thread and the thread on its subject, from its thread", { thread: "other", threads: [1], merge: [3, 1, 9] }, PREVIOUS, { thread: { kind: "other", threads: [0] }, merge: [2] }, { model_entry_dropped: 2 }],
+    ["one other thread and the thread on its subject, from a page", { thread: "other", threads: [1], merge: [3, 1, 9] }, undefined, { thread: { kind: "other", threads: [0] }, merge: [2] }, { model_entry_dropped: 2 }],
+  ] as const)("does not answer a question that belongs to %s: no research, no citation, the threads by index, released and audited as clarify", async (_name, reply, previous, placed, counted) => {
+    expect(validatePersonAnswerRequestV3({ schema_version: 3, ...sent(previous, THREADS) })).toEqual({ schema_version: 3, ...sent(previous, THREADS) });
+    const run = scripted({ resolver: [reply] });
     const port = desk();
     const { ask, audits } = askV8(port, run);
-    const response = await ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS });
-    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, thread: { kind: "other", threads: [1, 0] } });
+    const { value: response, corrections } = await observed(() => ask.answer(sent(previous, THREADS)));
+    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, ...placed });
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+    expect(corrections).toEqual(counted);
     for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
     // One call, the thread resolver's, in the follow-up resolver's place.
-    expect(run.inputs).toHaveLength(1);
-    expect(run.inputs[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
-    expect(run.inputs[0]!.schema).toBe(threadPlacementSchema);
+    expect(run.inputs.map(input => [input.system_prompt, input.schema])).toEqual([[THREAD_RESOLVER_PROMPT, threadPlacementSchema]]);
     // The check before the resolver's call, then the release's checks before and after the audit.
     expect(port.revalidate).toHaveBeenCalledTimes(3);
-    // Nothing new in the audit's vocabulary: outcome clarify, one answer-role call.
+    // Nothing new in the audit's vocabulary: outcome clarify, one answer-role call; its hashes cover the placement, and
+    // no thread text reaches it.
     expect(audits).toEqual([expect.objectContaining({ outcome: "clarify", rounds: 0, model_calls: 1, repairs: 0, citation_count: 0, receipt_digests: [], generations: [expect.objectContaining({ role: "answer" })] })]);
-    expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
-    expect(audits[0]!.response_sha256).toBe(canonicalSha256(response));
-    // No thread text reaches the audit record.
+    expect([audits[0]!.answer_sha256, audits[0]!.response_sha256]).toEqual([agenticAskAnswerSha256V1(response), canonicalSha256(response)]);
     for (const thread of THREADS) for (const question of thread.questions) expect(JSON.stringify(audits)).not.toContain(question);
   });
 
-  it("names the one thread it belongs to and the threads to merge with it, from a page with no thread open too", async () => {
-    for (const previous of [PREVIOUS, undefined]) {
-      const run = scripted({ resolver: [{ thread: "other", threads: [1], merge: [3, 1, 9] }] });
-      const { ask, audits } = askV8(desk(), run);
-      const { value: response, corrections } = await observed(() => ask.answer({ question: "when does the Kestrel quote expire?", threads: THREADS, ...(previous === undefined ? {} : { previous }) }));
-      expect(response).toMatchObject({ outcome: "clarify", thread: { kind: "other", threads: [0] }, merge: [2] });
-      expect(response).not.toHaveProperty("choices");
-      // The merge entries that named the thread itself and no thread were dropped, never failed.
-      expect(corrections).toEqual({ model_entry_dropped: 2 });
-      expect(run.inputs).toHaveLength(1);
-      expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
-    }
-  });
-});
-
-describe("a new subject (ADR-0056)", () => {
-  it("researches the question as asked, from nothing of the open thread, and the answer says it starts a new thread", async () => {
-    for (const previous of [PREVIOUS, undefined]) {
-      const run = scripted({ resolver: [{ thread: "new", merge: [1] }], ...researched(QUESTION) });
-      const port = desk();
-      const { ask, audits } = askV8(port, run);
-      const response = await ask.answer({ question: QUESTION, threads: THREADS, ...(previous === undefined ? {} : { previous }) });
-      expect(validatePersonAnswerResponseV8(response)).toEqual(response);
-      expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" }, parts: [{ question: QUESTION }] });
-      // A new subject merges nothing.
-      expect(response).not.toHaveProperty("merge");
-      // No starting item: nothing of the open thread is opened, and research and the writer see the question as asked.
-      expect(port.openCitation).not.toHaveBeenCalled();
-      const [firstStep] = run.of("step");
-      expect(JSON.parse(firstStep!.user_prompt)).toMatchObject({ question: QUESTION, opened: [] });
-      expect(JSON.parse(run.of("writer")[0]!.user_prompt)).toMatchObject({ question: QUESTION });
-      // Neither research nor the writer is shown any thread.
-      for (const input of [...run.of("step"), ...run.of("writer")]) for (const thread of THREADS) expect(`${input.system_prompt}\n${input.user_prompt}`).not.toContain(thread.questions[0]!);
-      expect(audits).toEqual([expect.objectContaining({ outcome: "answered", model_calls: 4, generations: [
-        expect.objectContaining({ role: "answer" }), expect.objectContaining({ role: "step" }), expect.objectContaining({ role: "step" }), expect.objectContaining({ role: "answer" }),
-      ] })]);
-      // The answer's hash covers where it says the question belongs.
-      expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
-      const { thread: _thread, ...unplaced } = response;
-      expect(agenticAskAnswerSha256V1(unplaced as PersonAnswerResponseV8)).not.toBe(audits[0]!.answer_sha256);
-    }
-  });
-
-  it("is the fallback of a request with threads and no previous turn: open is refused for the repair, and the answer says new", async () => {
-    const run = scripted({ resolver: [{ thread: "open", resolution: "same" }, { thread: "open", resolution: "same" }], ...researched(QUESTION) });
-    const { ask } = askV8(desk(), run);
-    const { value: response, corrections } = await observed(() => ask.answer({ question: QUESTION, threads: THREADS }));
-    expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" } });
-    expect(run.of("resolver")).toHaveLength(2);
-    expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("the person has no thread open");
-    expect(corrections).toMatchObject({ model_repair_rejected: 1, resolver_fallback: 1 });
-  });
-
-  it("starts a new thread from inside the person's only thread: a request that carried an empty list of threads is placed", async () => {
-    const { earlier: _earlier, ...single } = PREVIOUS;
-    // With older turns or without: the list, even empty, is what asks for the question to be placed.
-    for (const previous of [PREVIOUS, single, undefined]) {
-      const run = scripted({ resolver: [{ thread: "new" }], ...researched(QUESTION) });
-      const port = desk();
-      const { ask, audits } = askV8(port, run);
-      const response = await ask.answer({ question: QUESTION, threads: [], ...(previous === undefined ? {} : { previous }) });
-      expect(validatePersonAnswerResponseV8(response)).toEqual(response);
-      expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" } });
-      expect(response).not.toHaveProperty("merge");
-      // One call, the thread resolver's, shown no other thread; then research as asked, from nothing of the open thread.
-      // With no thread open either, a new thread is the only place there is, so no model is asked where it belongs.
-      expect(run.of("resolver").map(input => input.system_prompt)).toEqual(previous === undefined ? [] : [THREAD_RESOLVER_PROMPT]);
-      if (previous !== undefined) expect(JSON.parse(run.of("resolver")[0]!.user_prompt).threads).toEqual([]);
-      expect(port.openCitation).not.toHaveBeenCalled();
-      expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
-    }
-  });
-
-  it("never reads a reply that says two things as either: it takes the repair, and then the question stays where it was asked", async () => {
-    // Another thread and a clarify with choices at once. Read as the thread, a client could jump there with no click.
-    const choices = [{ label: "THERM-482", question: RESOLVED }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
-    const contradictory = { thread: "other", threads: [1], resolution: "clarify", choices };
-    const run = scripted({ resolver: [contradictory, contradictory], ...researched(QUESTION) });
+  it.each([
+    ["it says so, from a thread", [{ thread: "new", merge: [1] }], PREVIOUS, THREADS],
+    ["it says so, from a page", [{ thread: "new", merge: [1] }], undefined, THREADS],
+    // With threads and no previous turn there is no open thread to fall back to: `open` goes back for the repair, then new.
+    ["the resolver falls back with no thread open", [{ thread: "open", resolution: "same" }, { thread: "open", resolution: "same" }], undefined, THREADS],
+    // The list, even empty, is what asks for a question to be placed: the person starts a second thread from their only one.
+    ["it says so, from a person's only thread", [{ thread: "new" }], PREVIOUS, []],
+    ["it says so, from a person's only thread of one turn", [{ thread: "new" }], SINGLE, []],
+    // With no thread open either, a new thread is the only place there is: no model is asked where it belongs.
+    ["there is nowhere else, with no thread open and an empty list", [], undefined, []],
+  ] as const)("researches a new subject as asked, from nothing of the open thread, when %s: the answer starts a new thread and merges nothing", async (_name, resolver, previous, threads) => {
+    const run = scripted({ resolver, ...researched(QUESTION) });
     const port = desk();
     const { ask, audits } = askV8(port, run);
-    const { value: response, corrections } = await observed(() => ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS }));
-    expect(response).toMatchObject({ outcome: "answered", question: QUESTION });
-    for (const key of ["thread", "merge", "choices"]) expect(response).not.toHaveProperty(key);
-    expect(run.of("resolver")).toHaveLength(2);
-    expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("only an \"open\" reply has a resolution, a question, sources or choices");
-    expect(corrections).toMatchObject({ model_repair_rejected: 1, resolver_fallback: 1 });
-    expect(audits).toEqual([expect.objectContaining({ outcome: "answered", repairs: 1 })]);
-    // A repair that says one thing is read as it stands.
-    const repaired = scripted({ resolver: [contradictory, { thread: "other", threads: [1] }] });
-    expect(await askV8(desk(), repaired).ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS })).toMatchObject({ outcome: "clarify", thread: { kind: "other", threads: [0] } });
+    const { value: response, corrections } = await observed(() => ask.answer(sent(previous, threads)));
+    expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+    expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" }, parts: [{ question: QUESTION }] });
+    expect(response).not.toHaveProperty("merge");
+    expect(run.of("resolver").map(input => input.system_prompt)).toEqual(resolver.map(() => THREAD_RESOLVER_PROMPT));
+    if (resolver.length > 0) expect(JSON.parse(run.of("resolver")[0]!.user_prompt).threads).toHaveLength(threads.length);
+    if (resolver.length === 2) {
+      expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("the person has no thread open");
+      expect(corrections).toMatchObject({ model_repair_rejected: 1, resolver_fallback: 1 });
+    }
+    // No starting item: nothing of the open thread is opened, and research and the writer see the question as asked,
+    // and never a thread.
+    expect(port.openCitation).not.toHaveBeenCalled();
+    expect(JSON.parse(run.of("step")[0]!.user_prompt)).toMatchObject({ question: QUESTION, opened: [] });
+    expect(JSON.parse(run.of("writer")[0]!.user_prompt)).toMatchObject({ question: QUESTION });
+    for (const input of [...run.of("step"), ...run.of("writer")]) for (const thread of THREADS) expect(`${input.system_prompt}\n${input.user_prompt}`).not.toContain(thread.questions[0]!);
+    expect(audits).toEqual([expect.objectContaining({ outcome: "answered", model_calls: resolver.length + 3, generations: [
+      ...resolver.map(() => expect.objectContaining({ role: "answer" })), expect.objectContaining({ role: "step" }), expect.objectContaining({ role: "step" }), expect.objectContaining({ role: "answer" }),
+    ] })]);
+    // The answer's hash covers where it says the question belongs.
+    expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
+    const { thread: _thread, ...unplaced } = response;
+    expect(agenticAskAnswerSha256V1(unplaced as PersonAnswerResponseV8)).not.toBe(audits[0]!.answer_sha256);
   });
-});
 
-describe("a question that continues the open thread (ADR-0056)", () => {
   it("resolves a reference to something only an older turn names, starts research from that turn's citation, and carries the merge", async () => {
     const run = scripted({
       resolver: [{ thread: "open", resolution: "resolved", question: RESOLVED, about: [1], merge: [3] }],
@@ -223,48 +170,44 @@ describe("a question that continues the open thread (ADR-0056)", () => {
   });
 
   it("asks which one between things in the open thread, and names no merge beside the choices", async () => {
-    const choices = [{ label: "THERM-482: thermal fixture", question: RESOLVED }, { label: "MECH-214: drop test", question: "What are the details on MECH-214?" }];
-    const run = scripted({ resolver: [{ thread: "open", resolution: "clarify", choices, merge: [3] }] });
+    const run = scripted({ resolver: [{ thread: "open", resolution: "clarify", choices: CHOICES, merge: [3] }] });
     const port = desk();
     const { ask, audits } = askV8(port, run);
     const response = await ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS });
     // The question is asked again once a choice is made, and that answer names the threads to merge.
-    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, choices });
+    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, choices: CHOICES });
     for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
     expect(audits).toEqual([expect.objectContaining({ outcome: "clarify", rounds: 0, model_calls: 1 })]);
     expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
   });
 
-  it("answers a question that stands alone as asked, and so does a resolver with no usable reply: the open thread, never another, never a merge", async () => {
-    for (const resolver of [[{ thread: "open", resolution: "same" }], [{ thread: "other", threads: [9], merge: [1] }, { thread: "elsewhere", merge: [1] }]]) {
-      const run = scripted({ resolver, ...researched(QUESTION) });
-      const port = desk();
-      const { ask } = askV8(port, run);
-      const { value: response, corrections } = await observed(() => ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS }));
-      expect(response).toMatchObject({ outcome: "answered", question: QUESTION });
-      for (const key of ["thread", "merge", "choices"]) expect(response).not.toHaveProperty(key);
-      expect(port.openCitation).not.toHaveBeenCalled();
-      expect(corrections.resolver_fallback ?? 0).toBe(resolver.length === 2 ? 1 : 0);
-      expect(run.of("resolver")).toHaveLength(resolver.length);
-    }
-  });
-
-  it("answers in the open thread, saying nothing of threads, when the request carried older turns and no other thread", async () => {
+  it.each([
+    ["it stands alone", [{ thread: "open", resolution: "same" }], THREADS, 0],
+    ["no repair makes the reply usable", [{ thread: "other", threads: [9], merge: [1] }, { thread: "elsewhere", merge: [1] }], THREADS, 1],
+    // Another thread and a clarify with choices at once: read as the thread, a client could jump there with no click.
+    ["the reply and its repair each say two things", [{ thread: "other", threads: [1], resolution: "clarify", choices: CHOICES }, { thread: "other", threads: [1], resolution: "clarify", choices: CHOICES }], THREADS, 1],
     // Only an answer to a request that carried `threads` may say where the question belongs.
-    for (const reply of [{ thread: "new" }, { thread: "open", resolution: "same", merge: [1] }]) {
-      const run = scripted({ resolver: [reply], ...researched(QUESTION) });
-      const { ask } = askV8(desk(), run);
-      const response = await ask.answer({ question: QUESTION, previous: PREVIOUS });
-      expect(run.of("resolver")[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
-      expect(response).toMatchObject({ outcome: "answered", question: QUESTION });
-      for (const key of ["thread", "merge"]) expect(response).not.toHaveProperty(key);
+    ["the request carried older turns and no list, and the reply says new", [{ thread: "new" }], undefined, 0],
+    ["the request carried older turns and no list, and the reply names a merge", [{ thread: "open", resolution: "same", merge: [1] }], undefined, 0],
+  ] as const)("answers in the open thread as asked when %s: never another thread, never a merge", async (_name, resolver, threads, fallbacks) => {
+    const run = scripted({ resolver, ...researched(QUESTION) });
+    const port = desk();
+    const { ask, audits } = askV8(port, run);
+    const { value: response, corrections } = await observed(() => ask.answer(sent(PREVIOUS, threads)));
+    expect(response).toMatchObject({ outcome: "answered", question: QUESTION });
+    for (const key of ["thread", "merge", "choices"]) expect(response).not.toHaveProperty(key);
+    expect(port.openCitation).not.toHaveBeenCalled();
+    expect(run.of("resolver").map(input => input.system_prompt)).toEqual(resolver.map(() => THREAD_RESOLVER_PROMPT));
+    expect(corrections.resolver_fallback ?? 0).toBe(fallbacks);
+    expect(audits).toEqual([expect.objectContaining({ outcome: "answered", repairs: resolver.length - 1 })]);
+    if (resolver.length === 2) expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toBeTruthy();
+    if (resolver[0]!.thread === "other" && "choices" in resolver[0]!) {
+      expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("only an \"open\" reply has a resolution, a question, sources or choices");
     }
   });
 });
 
 describe("an Ask without threads or older turns is today's (ADR-0056)", () => {
-  const { earlier: _earlier, ...SINGLE } = PREVIOUS;
-
   it("resolves a follow-up with the follow-up resolver's own prompt and schema, and answers with no thread or merge", async () => {
     const run = scripted({ resolver: [{ resolution: "same" }], ...researched(QUESTION) });
     const { ask, audits } = askV8(desk(), run);
@@ -314,27 +257,28 @@ describe("every place ends in one released answer or one audited stop (ADR-0056)
     return { pending, audits, run, port, controller };
   }
 
-  it("audits a cancel during the resolver's call once, as cancelled, and releases nothing", async () => {
-    const stopped = elsewhere(async () => checked, [() => { stopped.controller.abort(cancel()); throw cancel(); }]);
-    await expect(stopped.pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(stopped.audits).toEqual([expect.objectContaining({ outcome: "cancelled", model_calls: 1, answer_sha256: null, response_sha256: null })]);
-    expect(stopped.run.inputs).toHaveLength(1);
-    for (const read of reads(stopped.port)) expect(read).not.toHaveBeenCalled();
-  });
-
-  it("audits a cancel between the resolver's reply and the release's audit once, as cancelled", async () => {
+  it.each([
+    // The resolver's own call cancelled: audited once, nothing read.
+    ["a cancel during the resolver's call", () => {
+      const stopped = elsewhere(async () => checked, [() => { stopped.controller.abort(cancel()); throw cancel(); }]);
+      return stopped;
+    }, { name: "AbortError" }, [{ outcome: "cancelled", model_calls: 1, answer_sha256: null, response_sha256: null }]],
     // The second access check is the release's, before its audit record.
-    const stopped = elsewhere(async (call, controller) => { if (call === 2) controller.abort(cancel()); return checked; });
-    await expect(stopped.pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(stopped.audits).toEqual([expect.objectContaining({ outcome: "cancelled", model_calls: 1, response_sha256: null })]);
-  });
-
-  it("releases nothing after a cancel that follows the audit record, and writes no second record", async () => {
-    // The third access check is the release's, after its audit record: the answer is audited and still not handed over.
-    const stopped = elsewhere(async (call, controller) => { if (call === 3) controller.abort(cancel()); return checked; });
-    await expect(stopped.pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(stopped.audits).toEqual([expect.objectContaining({ outcome: "clarify", model_calls: 1 })]);
-    expect(stopped.port.revalidate).toHaveBeenCalledTimes(3);
+    ["a cancel between the resolver's reply and the release's audit", () => elsewhere(async (call, controller) => { if (call === 2) controller.abort(cancel()); return checked; }),
+      { name: "AbortError" }, [{ outcome: "cancelled", model_calls: 1, response_sha256: null }]],
+    // The third is the release's, after its audit record: the answer is audited and still not handed over.
+    ["a cancel after the audit record, with no second record", () => elsewhere(async (call, controller) => { if (call === 3) controller.abort(cancel()); return checked; }),
+      { name: "AbortError" }, [{ outcome: "clarify", model_calls: 1 }]],
+    // Access lost before the release fails it, releasing and auditing nothing, as every Ask does.
+    ["access lost before the release", () => elsewhere(async (call) => { if (call === 2) throw new AuthorityOperationError("stale_access_state", "Membership changed"); return checked; }),
+      { code: "stale_access_state" }, []],
+  ] as const)("releases nothing after %s", async (_name, start, rejection, stops) => {
+    const stopped = start();
+    await expect(stopped.pending).rejects.toMatchObject(rejection);
+    expect(stopped.audits).toEqual(stops.map(stop => expect.objectContaining(stop)));
+    expect(stopped.run.inputs).toHaveLength(1);
+    if (stops[0]?.outcome === "clarify") expect(stopped.port.revalidate).toHaveBeenCalledTimes(3);
+    for (const read of reads(stopped.port)) expect(read).not.toHaveBeenCalled();
   });
 
   it.each([[1, 0], [2, 1]])("audits an access check that stalls (check %i) once, as timed_out, and releases nothing", async (stalled, modelCalls) => {
@@ -347,12 +291,6 @@ describe("every place ends in one released answer or one audited stop (ADR-0056)
       expect(stopped.audits).toEqual([expect.objectContaining({ outcome: "timed_out", model_calls: modelCalls, prompt_sha256: null, answer_sha256: null, response_sha256: null })]);
       expect(stopped.run.inputs).toHaveLength(modelCalls);
     } finally { vi.useRealTimers(); }
-  });
-
-  it("fails, releasing and auditing nothing, when access is lost before the release, as every Ask does", async () => {
-    const stopped = elsewhere(async (call) => { if (call === 2) throw new AuthorityOperationError("stale_access_state", "Membership changed"); return checked; });
-    await expect(stopped.pending).rejects.toMatchObject({ code: "stale_access_state" });
-    expect(stopped.audits).toEqual([]);
   });
 
   it("audits a cancel during research of a new subject once, and never releases the answer", async () => {
@@ -379,35 +317,24 @@ describe("a resolution kept between the attempts of one request (ADR-0056)", () 
     return { response, reported, resolverCalls: run.of("resolver").length };
   }
   const SENT = { previous: PREVIOUS, threads: THREADS };
+  const KEY = agenticResolutionKeyV1({ question: QUESTION, previous: PREVIOUS, threads: THREADS, today: "2026-11-23", time_zone: "America/Los_Angeles" });
 
-  it("reports what it resolved with the key of the question, the checked previous turn and the threads it was made from", async () => {
-    const first = await attempt(SENT, [ELSEWHERE]);
-    expect(first.resolverCalls).toBe(1);
-    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1({ question: QUESTION, previous: PREVIOUS, threads: THREADS, today: "2026-11-23", time_zone: "America/Los_Angeles" }), value: { placement: { thread: "other", threads: [1, 0], merge: [] }, fallback: false } }]);
-    // What is held between attempts for a question that belongs elsewhere is a digest and thread numbers: none of the
-    // question's, the turn's or the threads' text.
+  it.each([
+    ["a placement elsewhere", [ELSEWHERE], { placement: { thread: "other", threads: [1, 0], merge: [] }, fallback: false }, { outcome: "clarify", thread: { kind: "other", threads: [1, 0] } }],
+    // A fallback is kept as any resolution is: the call and its repair are not paid for again, and it stays the open thread as asked.
+    ["a fallback", [{ thread: "elsewhere" }, { thread: "other", threads: [9] }], { placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true }, { outcome: "answered", question: QUESTION }],
+  ] as const)("reports %s keyed by what it was made from, holding no text, and the next attempt with the same input uses it with no call", async (_name, resolver, value, response) => {
+    const first = await attempt(SENT, resolver);
+    expect(first.resolverCalls).toBe(resolver.length);
+    expect(first.reported).toEqual([{ key: KEY, value }]);
+    // What is held between attempts is a digest and thread numbers: none of the question's, the turn's or the threads' text.
     expect(first.reported[0]!.key).toMatch(/^sha256:[0-9a-f]{64}$/u);
     for (const text of [QUESTION, PREVIOUS.question, PREVIOUS.statements[0]!.text, ...THREADS.flatMap(thread => thread.questions)]) expect(JSON.stringify(first.reported)).not.toContain(text);
-  });
-
-  it("uses a kept resolution, and makes no second call, when the question, the checked turn and the threads are the same", async () => {
-    const [kept] = (await attempt(SENT, [ELSEWHERE])).reported;
-    // No resolver reply is scripted: a second call would fail the Ask.
-    const second = await attempt({ previous: structuredClone(PREVIOUS), threads: structuredClone(THREADS) }, [], kept);
-    expect(second.resolverCalls).toBe(0);
-    expect(second.response).toMatchObject({ outcome: "clarify", thread: { kind: "other", threads: [1, 0] } });
-    // It was not resolved again, so there is nothing new to keep.
-    expect(second.reported).toEqual([]);
-  });
-
-  it("keeps a fallback as it keeps any resolution: the call and its repair are not paid for again, and it stays the open thread as asked", async () => {
-    const first = await attempt(SENT, [{ thread: "elsewhere" }, { thread: "other", threads: [9] }]);
-    expect(first.resolverCalls).toBe(2);
-    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1({ question: QUESTION, previous: PREVIOUS, threads: THREADS, today: "2026-11-23", time_zone: "America/Los_Angeles" }), value: { placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true } }]);
-    const second = await attempt(SENT, [], first.reported[0]);
-    expect(second.resolverCalls).toBe(0);
-    expect(second.response).toMatchObject({ outcome: "answered", question: QUESTION });
-    for (const key of ["thread", "merge"]) expect(second.response).not.toHaveProperty(key);
+    // No resolver reply is scripted: a second call would fail the Ask. It was not resolved again, so nothing new is kept.
+    const second = await attempt({ previous: structuredClone(PREVIOUS), threads: structuredClone(THREADS) }, [], first.reported[0]);
+    expect([second.resolverCalls, second.reported]).toEqual([0, []]);
+    expect(second.response).toMatchObject(response);
+    if (response.outcome === "answered") for (const key of ["thread", "merge"]) expect(second.response).not.toHaveProperty(key);
   });
 
   it.each([
