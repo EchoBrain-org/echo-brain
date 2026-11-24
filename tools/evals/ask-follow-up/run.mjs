@@ -55,7 +55,7 @@ const groupCounts = (trials, more) => Object.freeze({ trials: trials.length, pas
 const SETS = Object.freeze({
   "follow-up": Object.freeze({
     cases_file: CASES_FILE, cases_path: "tools/evals/ask-follow-up/cases.json", groups: GROUPS, load: loadCases,
-    trial: (...args) => runTrial(...args), summarize: (results) => summarizeRules(results),
+    trial: runTrial, summarize: summarizeRules,
     group: (trials) => groupCounts(trials, (list) => ({ clarify: list.filter((entry) => entry.clarify).length })),
     report_kind: "echo-ask-follow-up-evaluation-v1", progress_kind: "echo-ask-follow-up-evaluation-progress-v1", report_prefix: "ask-follow-up-evaluation",
     progress: (result) => ({ resolution: result.resolution }),
@@ -65,7 +65,7 @@ const SETS = Object.freeze({
   threads: Object.freeze({
     cases_file: THREAD_CASES_FILE, cases_path: "tools/evals/ask-follow-up/thread-cases.json", groups: THREAD_GROUPS, load: loadThreadCases,
     // The grader itself says whether the trials are the whole registered run: the gate is its, not the selection's.
-    trial: (...args) => runThreadTrial(...args), summarize: (results, document) => summarizeThreadRules(results, document.cases),
+    trial: runThreadTrial, summarize: (results, document) => summarizeThreadRules(results, document.cases),
     group: (trials) => groupCounts(trials, (list) => ({ named_all: list.filter((entry) => entry.named_all).length, merged: list.filter((entry) => entry.merged).length })),
     report_kind: "echo-ask-thread-evaluation-v1", progress_kind: "echo-ask-thread-evaluation-progress-v1", report_prefix: "ask-thread-evaluation",
     progress: (result) => ({ thread: result.thread }),
@@ -132,7 +132,7 @@ export function parseArgs(argv) {
 
 /**
  * One resolver call of a trial, through `structuredOutput` (the production adapter, or a test's), with only model
- * metadata recorded per call. What it resolved, or the safe error of a trial that threw, which passes nothing.
+ * metadata recorded per call. What it resolved, or null for a trial that threw, which keeps its safe error and passes nothing.
  */
 async function resolvedTrial(structuredOutput, resolve) {
   const calls = [];
@@ -159,33 +159,26 @@ async function resolvedTrial(structuredOutput, resolve) {
   } catch (caught) {
     error = safeError(caught);
   }
-  return { resolved, error, calls, elapsed_ms: () => Math.round(performance.now() - started) };
+  // What every trial keeps after its own fields: how the resolver ran, its grade, and any safe error.
+  const kept = (grade) => ({ fallback: resolved?.fallback ?? null, calls: resolved?.calls ?? calls.length, repairs: resolved?.repairs ?? null, ...grade,
+    elapsed_ms: Math.round(performance.now() - started), model_calls: Object.freeze(calls), ...(error === null ? {} : { error }) });
+  return { resolved, kept };
 }
 
-/**
- * One trial: the kernel's resolver on one case, through `structuredOutput` (the production adapter, or a test's), with
- * only model metadata recorded per call. A trial that throws is kept as its safe error and passes nothing.
- */
+/** One follow-up trial (ADR-0047): the kernel's follow-up resolver on one case. */
 export async function runTrial(caseDefinition, trial, structuredOutput, generation, document, options) {
-  const { resolved, error, calls, elapsed_ms: elapsed } = await resolvedTrial(structuredOutput, (model) => resolveAgenticFollowUpOnceV1({
+  const { resolved, kept } = await resolvedTrial(structuredOutput, (model) => resolveAgenticFollowUpOnceV1({
     model, generation, previous: caseDefinition.previous, question: caseDefinition.question, today: document.today, time_zone: document.time_zone,
     signal: AbortSignal.timeout(options.timeoutMs),
   }));
   const resolution = resolved?.resolution ?? null;
-  const grade = gradeTrial(caseDefinition, resolution, resolved?.fallback === true);
   return Object.freeze({
     case_id: caseDefinition.id, group: caseDefinition.group, trial,
     resolution: resolution?.resolution ?? null,
     // Synthetic case text only: what the resolver asked research to answer, the sources (from 1) it pointed to, and its choices.
     ...(resolution?.resolution === "resolved" ? { question: resolution.question, about: Object.freeze(resolution.about.map((index) => index + 1)) } : {}),
     ...(resolution?.resolution === "clarify" ? { choices: resolution.choices } : {}),
-    fallback: resolved?.fallback ?? null,
-    calls: resolved?.calls ?? calls.length,
-    repairs: resolved?.repairs ?? null,
-    passed: grade.passed, clarify: grade.clarify,
-    elapsed_ms: elapsed(),
-    model_calls: Object.freeze(calls),
-    ...(error === null ? {} : { error }),
+    ...kept(gradeTrial(caseDefinition, resolution, resolved?.fallback === true)),
   });
 }
 
@@ -199,31 +192,23 @@ function placementKept(placement) {
     case "open": return { thread: "open", resolution: placement.resolution.resolution, ...merge(placement.merge) };
     case "new": return { thread: "new" };
     case "other": return { thread: "other", threads: numbers(placement.threads), ...merge(placement.merge) };
-    default: throw new Error("a placement is the open thread, a new one, or other threads");
   }
 }
 
 /**
  * One thread trial (ADR-0056): the kernel's thread resolver, the function the product's Ask calls, on one case's open
- * thread, other threads and question. A trial that throws is kept as its safe error and passes nothing.
+ * thread, other threads and question.
  */
 export async function runThreadTrial(caseDefinition, trial, structuredOutput, generation, document, options) {
-  const { resolved, error, calls, elapsed_ms: elapsed } = await resolvedTrial(structuredOutput, (model) => resolveAgenticThreadOnceV1({
-    model, generation, ...(caseDefinition.previous === undefined ? {} : { previous: caseDefinition.previous }), threads: caseDefinition.threads,
+  const { resolved, kept } = await resolvedTrial(structuredOutput, (model) => resolveAgenticThreadOnceV1({
+    model, generation, previous: caseDefinition.previous, threads: caseDefinition.threads,
     question: caseDefinition.question, today: document.today, time_zone: document.time_zone, signal: AbortSignal.timeout(options.timeoutMs),
   }));
   const placement = resolved?.placement ?? null;
-  const grade = gradeThreadTrial(caseDefinition, placement, resolved?.fallback === true);
   return Object.freeze({
     case_id: caseDefinition.id, group: caseDefinition.group, trial,
     ...placementKept(placement),
-    fallback: resolved?.fallback ?? null,
-    calls: resolved?.calls ?? calls.length,
-    repairs: resolved?.repairs ?? null,
-    passed: grade.passed, named_all: grade.named_all, merged: grade.merged,
-    elapsed_ms: elapsed(),
-    model_calls: Object.freeze(calls),
-    ...(error === null ? {} : { error }),
+    ...kept(gradeThreadTrial(caseDefinition, placement, resolved?.fallback === true)),
   });
 }
 

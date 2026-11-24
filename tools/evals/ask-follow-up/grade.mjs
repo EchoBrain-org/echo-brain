@@ -16,6 +16,8 @@ export const THRESHOLDS = Object.freeze({ resolve_the_obvious: 0.9, leave_unrela
 const lower = (text) => text.toLocaleLowerCase("en-US");
 const mentions = (text, alternatives) => alternatives.some((term) => lower(text).includes(lower(term)));
 const nonEmptyStrings = (value) => Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.trim() !== "");
+const count = (list, pick) => list.filter(pick).length;
+const rate = (list, pick) => (list.length === 0 ? null : count(list, pick) / list.length);
 
 /** Every problem with the cases document; an empty list when it is the pre-registered set. */
 export function caseProblems(document) {
@@ -98,8 +100,6 @@ export function gradeTrial(caseDefinition, resolution, fallback = false) {
  */
 export function summarizeRules(trials) {
   const of = (...groups) => trials.filter((trial) => groups.includes(trial.group));
-  const count = (list, pick) => list.filter(pick).length;
-  const rate = (list, pick) => (list.length === 0 ? null : count(list, pick) / list.length);
   const several = of("several_referents");
   const one = of("one_referent");
   const alone = of("unrelated", "standalone");
@@ -122,13 +122,7 @@ export function summarizeRules(trials) {
   });
 }
 
-/*
- * ---- Thread resolution (Ask threads v1, "Thread resolution eval (pre-registered)", ADR-0056) ----
- *
- * A second pre-registered set, graded the same way: each case is an Ask with the asker's other threads, and for most an
- * open thread, and a trial passes or fails from the resolver's placement alone. The follow-up cases and their grading
- * above are unchanged.
- */
+/* ---- Thread resolution (Ask threads v1, "Thread resolution eval (pre-registered)", ADR-0056) ---- */
 
 export const THREAD_CASES_FILE = new URL("./thread-cases.json", import.meta.url);
 /** Each thread group's number of cases, as pre-registered. */
@@ -278,8 +272,6 @@ export function threadRunIsComplete(trials, cases) {
  */
 export function summarizeThreadRules(trials, cases) {
   const of = (...groups) => trials.filter((trial) => groups.includes(trial.group));
-  const count = (list, pick) => list.filter(pick).length;
-  const rate = (list, pick) => (list.length === 0 ? null : count(list, pick) / list.length);
   const several = of("several_others");
   const obvious = of("continues_open", "one_other");
   const fresh = of("new_subject");
