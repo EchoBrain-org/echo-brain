@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { rmSync, writeFileSync } from 'node:fs';
+import { renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -425,7 +425,7 @@ test('a latest citation chosen at the end while a question is on its way opens i
   await expect(page.getByTestId('asking')).toHaveCount(0);
 });
 
-test('a merge and its Undo leave the reading where it was: only a new question, answer, choice or failure goes to the end', async () => {
+test('a merge, its Undo and a move this computer refuses leave the sentence being read where it was: only a new question, answer, choice or failure goes to the end', async () => {
   run = await launch('ask-scroll');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -433,25 +433,46 @@ test('a merge and its Undo leave the reading where it was: only a new question, 
   await ask(page, 'Quick status');
   await page.getByTestId('back').click();
   await ask(page, 'Long readout');
-  const view = page.getByTestId('ask-view');
-  const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  const bottom = () => page.getByTestId('ask-view').evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(bottom).toBeLessThan(1);
-  // The person reads from the top of the long answer.
-  await view.evaluate((element) => { element.scrollTop = 0; });
+  // The person reads a sentence in the middle of the long answer, 180 pixels down the view.
+  const sentence = page.getByTestId('turn').last().getByTestId('statement-text').nth(7);
+  await sentence.evaluate((element) => {
+    const view = element.closest('.ask')!;
+    view.scrollTop += element.getBoundingClientRect().top - view.getBoundingClientRect().top - 180;
+  });
   await settled(page);
-  expect(await bottom()).toBeGreaterThan(100);
-  // The short thread joins from the list: its question shows as one line above, and the reading stays put.
-  await page.getByTestId('thread-name').click();
-  const quick = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Quick status' });
-  await quick.hover();
-  await quick.getByTestId('thread-merge').click();
+  const stays = async () => {
+    await settled(page);
+    await expect.poll(async () => Math.abs(await offset(sentence) - 180)).toBeLessThanOrEqual(1);
+  };
+  await stays();
+  // The short thread joins from the list: its question shows as one line above, and the sentence stays where it was.
+  const merge = async () => {
+    await page.getByTestId('thread-name').click();
+    const quick = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Quick status' });
+    await quick.hover();
+    await quick.getByTestId('thread-merge').click();
+  };
+  await merge();
   await expect(page.getByTestId('thread-merged')).toBeVisible();
   await expect(page.getByTestId('timeline-question')).toHaveText(['Quick status']);
-  await settled(page);
-  expect(await bottom()).toBeGreaterThan(100);
-  // Undo takes it back out, and the reading is still where it was.
+  await stays();
+  // Undo takes it back out, and the sentence is still where it was.
   await page.getByTestId('thread-undo').click();
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await settled(page);
-  expect(await bottom()).toBeGreaterThan(100);
+  await stays();
+  // A merge this computer refuses (its timeline folder made a link) moves nothing, and the sentence stays too.
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  renameSync(folder, `${folder}.kept`);
+  symlinkSync(`${folder}.kept`, folder);
+  try {
+    await merge();
+    await expect(page.getByTestId('toast')).toHaveText('Some questions could not be moved on this computer, so they are where they were.');
+    await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+    await stays();
+  } finally {
+    rmSync(folder);
+    renameSync(`${folder}.kept`, folder);
+  }
 });

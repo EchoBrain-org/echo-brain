@@ -110,8 +110,10 @@ Adopt option 1, the founder's choice.
 - **Merging.** A person merges another thread of the same home into the open
   one from the list. The resolver may also name other threads that are
   plainly the same subject as the one the question belongs to; the desktop
-  merges those, within one home too, and says so with Undo. A merge only
-  relabels saved turns. No merge crosses homes, so every turn of a thread was
+  merges those, within one home too, and says so with Undo (beside a jump the
+  merge is made before the question is asked again, which then ends its
+  Undo). A merge only relabels saved turns, in one write this computer
+  confirms. No merge crosses homes, so every turn of a thread was
   asked in the thread's home and a project's request never carries a turn
   asked outside the project.
 - **No new limits (ADR-0055).** No count of threads, questions or earlier

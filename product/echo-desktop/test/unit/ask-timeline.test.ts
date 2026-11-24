@@ -76,6 +76,15 @@ function turn(question: string, ago: number, answer: Answer, extra: Partial<Time
     scope: answer.scope, answer, citations_complete: true, typed: question, follows: null, ...extra };
 }
 
+/**
+ * What an answer says beside its parts as the Authority answers a request (T2): the question, named whenever the request
+ * carried `previous` or `threads`; and a new subject for a question that carried threads and no previous turn.
+ */
+const placed = (params: Record<string, unknown>) => ({
+  ...(params.previous !== undefined || params.threads !== undefined ? { question: String(params.question) } : {}),
+  ...(params.threads !== undefined && params.previous === undefined ? { thread: { kind: 'new' as const } } : {}),
+});
+
 /** What a check finds of a turn when every source reads the same. */
 const allRead = (one: TimelineTurn) => Object.fromEntries(one.answer.sources.map((_, at) => [at, 'same' as const]));
 
@@ -102,7 +111,7 @@ beforeEach(() => {
   });
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
-    'ask.run': params => ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]])),
+    'ask.run': params => ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]]), ...placed(params) }),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     'projects.activity': () => (activity ? activity() : ok({ items: [{ project_id: apollo.project_id, latest_at: null }] })),
     'list.page': () => ok({ items: feed, next_cursor: null, meetings_held: false }),

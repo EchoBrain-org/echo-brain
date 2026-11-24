@@ -923,14 +923,19 @@ export function AskView({ state }: { state: State }) {
     view.scrollTop = target;
     return { ...position, preferBottom: Math.abs(view.scrollHeight - view.clientHeight - target) < 1 };
   };
-  const keepReading = () => {
+  // The reading where it was, in the view as it is now: a held sentence back at its place in the view, or the end.
+  const restoreReading = () => {
     const view = scroller.current, saved = reading.current;
-    if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
+    if (!view || !saved) return;
     let position = saved.position;
     if (position.kind === 'anchor' && view.contains(position.element)) position = hold(position);
     if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
     placedAt.current = view.scrollTop;
     savePosition(position);
+  };
+  const keepReading = () => {
+    const view = scroller.current, saved = reading.current;
+    if (view && saved && (view.clientWidth !== saved.width || view.clientHeight !== saved.height)) restoreReading();
   };
   const chooseReading = (event: MouseEvent) => {
     // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
@@ -955,6 +960,8 @@ export function AskView({ state }: { state: State }) {
   // else does: turns that join or leave the thread (a merge, its Undo, the timeline read again) change how many it has
   // and leave the reading where it is, as does a move dropping a question still being prepared (`seq`).
   useLayoutEffect(toBottom, [thread.asked, thread.asking === null, thread.failed, thread.clarify]);
+  // Those turns, and the merged line, change what is above the reading: it stays where it was, as when the view changes size.
+  useLayoutEffect(restoreReading, [turns.map(turn => turn.id).join(' '), mergedLine(state)]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
