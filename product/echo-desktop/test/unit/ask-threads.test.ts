@@ -225,8 +225,10 @@ describe('what an Ask carries of the threads (R3, R6, R7)', () => {
       { questions: ['When does the pilot start?', 'did that change?'], asked_at: turns[1]!.asked_at },
     ]);
     expect(sent).toEqual([turns[3]!.id, turns[0]!.id]);
-    // With none to send the request has no list at all.
-    expect(askCarries('and the budget?', GLOBAL, null, [], [])).toEqual({ sent: [] });
+    // A question to be placed carries the list even when it is empty, so its answer can still say it starts a thread; one
+    // that is not to be placed carries none at all.
+    expect(askCarries('and the budget?', GLOBAL, null, [], [])).toEqual({ threads: [], sent: [] });
+    expect(askCarries('and the budget?', GLOBAL, null, [], null)).toEqual({ sent: [] });
   });
 
   it('carries the thread\'s older turns by the person\'s own words, each sentence only when every source it cites was found readable', () => {
@@ -279,12 +281,13 @@ describe('what an Ask carries of the threads (R3, R6, R7)', () => {
     // Older turns alone past the bound: every thread is gone before a turn is, and turns go from the oldest.
     const long = Array.from({ length: 5 }, (_, at) => older(at, 300_000));
     const fewer = askCarries('q?', GLOBAL, previous, long, [other(0, 10)]);
-    expect(fewer).not.toHaveProperty('threads');
+    // The list still goes, empty: the question is still one to be placed.
+    expect(fewer.threads).toEqual([]);
     expect(fewer.sent).toEqual([]);
     expect(fewer.previous!.earlier!.map(each => each.question.slice(0, 8))).toEqual(['Older 2?', 'Older 3?', 'Older 4?']);
     expect(body(fewer)).toBeLessThanOrEqual(MAX_REQUEST_BYTES);
-    // Nothing older fits: the previous turn goes as it is, with no empty list beside it.
-    expect(askCarries('q?', GLOBAL, previous, [older(0, 2_000_000)], []).previous).toEqual(previous);
+    // Nothing older fits: the previous turn goes as it is, with no empty list of older turns in it.
+    expect(askCarries('q?', GLOBAL, previous, [older(0, 2_000_000)], null)).toEqual({ previous, sent: [] });
     // With no previous turn there is nothing an older turn could ride on.
     expect(askCarries('q?', GLOBAL, null, turns, [other(0, 10)])).toEqual({ threads: [{ questions: other(0, 10).questions, asked_at: other(0, 10).asked_at }], sent: ['thread-0'] });
   });
@@ -355,7 +358,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     const release = held.hold('ask.run');
     void store.ask('First ever?');
     await flush();
-    expect(asked()[0]).not.toHaveProperty('threads');
+    expect(asked()[0]!.threads).toEqual([]);
     expect(byTestId(await page(store), 'thread-name')).toEqual([]);
     release(ok(answerOf('First ever?')));
     await flush();
@@ -376,7 +379,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
   it('with Ask open on a thread, continues it: the previous turn, the thread\'s older turns from one fresh check, and the other threads; the answer is saved in it', async () => {
     const { billing, tests, pilot } = seeded();
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.openThread(pilot[0]!.id)).toBe(true);
     await flush();
     expect(store.threadShown()?.id).toBe(pilot[0]!.id);
     const checked = calls('ask.check').length;
@@ -404,7 +407,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     // THERM-482 is no longer the person's to read, in the pilot thread's first turn only.
     checks = items => ok({ items: items.map(item => ({ state: item.asked_at === pilot[0]!.asked_at && item.citation.ticket_id === '20482' ? 'unreadable' : 'same' })) });
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(pilot[0]!.id);
     await flush();
     await store.ask('and the budget?');
     const { earlier } = asked()[0]!.previous as AskPrevious;
@@ -423,7 +426,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     const { pilot } = seeded();
     script = params => (params.question === 'What is the lunch order?' ? ok({ ...answerOf(String(params.question)), thread: { kind: 'new' } }) : null);
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(pilot[0]!.id);
     await flush();
     await store.ask('What is the lunch order?');
     await flush();
@@ -443,7 +446,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     const { billing, pilot } = seeded();
     script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')]) : null);
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(pilot[0]!.id);
     await flush();
     const route = store.getState().route;
     await store.ask('who approves the invoices?');
@@ -473,7 +476,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     // Nothing is guessed (R4): nothing more is asked, and nothing is kept.
     expect(asked()).toHaveLength(1);
     expect(kept()).toHaveLength(6);
-    expect(store.getState().ask?.clarify).toEqual({ kind: 'threads', question: 'did that change?', scope: GLOBAL, threads: [pilot[0]!.id, billing[0]!.id], merge: [] });
+    expect(store.getState().ask?.clarify).toEqual({ kind: 'threads', question: 'did that change?', scope: GLOBAL, thread: null, threads: [pilot[0]!.id, billing[0]!.id], merge: [] });
     const clarify = byTestId(await page(store), 'clarify')[0]!;
     expect(text(clarify)).toContain('Which one?');
     expect(byTestId(clarify, 'choice').map(text)).toEqual(['When does the pilot start?', 'Who owns billing?', 'New question']);
@@ -542,12 +545,12 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     await store.ask('What shipped?');
     expect(asked()[0]).toMatchObject({ scope: inApollo, threads: [{ questions: ['Which tests fail?'], asked_at: tests[0]!.asked_at }] });
     expect(JSON.stringify(asked()[0]!.threads)).not.toMatch(/pilot|billing/u);
-    // In Zephyr, which has no thread: nothing rides.
+    // In Zephyr, which has no thread: the list goes empty, and nothing of another place is in it.
     vi.setSystemTime(NOW.getTime() + 60_000);
     await store.openProject(zephyr);
     await store.ask('What is blocked?');
     expect(asked()[1]).toMatchObject({ scope: inZephyr });
-    expect(asked()[1]).not.toHaveProperty('threads');
+    expect(asked()[1]!.threads).toEqual([]);
     store.goHome();
     await store.ask('What is new?');
     expect((asked()[2]!.threads as AskThread[]).map(thread => thread.questions[0])).toEqual(
@@ -593,7 +596,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     script = params => (params.question === 'who owns that ticket?'
       ? ok({ scope: GLOBAL, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'who owns that ticket?', choices }) : null);
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(pilot[0]!.id);
     await flush();
     await store.ask('who owns that ticket?');
     await flush();
@@ -632,6 +635,177 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
   });
 });
 
+describe('being in a thread, or only shown it (What a person sees, 5)', () => {
+  const seeded = () => {
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY], ['when is it due?', 5 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY], ['who decided that?', 2 * DAY]);
+    seed(...billing, ...pilot);
+    return { billing, pilot };
+  };
+  const open = (store: Store) => store.getState().ask?.thread;
+
+  it('back in Ask from the sidebar, a bare question carries no earlier turn and every thread, the one shown included, and shows alone until it is placed', async () => {
+    const { billing, pilot } = seeded();
+    const store = await startStore();
+    expect(store.returnToAsk()).toBe(true);
+    await flush();
+    // Ask shows the thread asked in last. The person has neither picked it nor asked in it: they are not in it.
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    expect(await questions(store)).toEqual(['who decided that?']);
+    const release = held.hold('ask.run');
+    void store.ask('did that change?');
+    await flush();
+    const sent = asked()[0]!;
+    expect(sent).not.toHaveProperty('previous');
+    expect(sent.threads).toEqual([
+      { questions: ['When does the pilot start?', 'who decided that?'], asked_at: pilot[1]!.asked_at },
+      { questions: ['Who owns billing?', 'when is it due?'], asked_at: billing[1]!.asked_at },
+    ]);
+    // On its way it shows alone, under "New thread": where it belongs is not known yet.
+    expect(store.threadShown()).toBeUndefined();
+    expect(await questions(store)).toEqual(['did that change?']);
+    expect(byTestId(await page(store), 'timeline-row')).toEqual([]);
+    expect(text(byTestId(await page(store), 'thread-name')[0])).toBe('New thread');
+    // It could be either: "Which one?", still alone, the thread that was showing among the buttons.
+    release(elsewhere(sent, [0, 1]));
+    await flush();
+    expect(store.getState().ask?.clarify).toMatchObject({ kind: 'threads', thread: null, threads: [pilot[0]!.id, billing[0]!.id] });
+    expect(byTestId(await page(store), 'choice').map(text)).toEqual(['When does the pilot start?', 'Who owns billing?', 'New question']);
+    expect(await questions(store)).toEqual(['did that change?']);
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    // Picked, the person is in it: the words are asked there, and the same words typed next continue it.
+    await store.chooseThread(pilot[0]!.id);
+    await flush();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    expect(asked()[1]).toMatchObject({ question: 'did that change?', previous: { purpose: 'follow_up', question: 'who decided that?' } });
+    expect(asked()[1]).not.toHaveProperty('threads');
+    await store.ask('and since when?');
+    expect(asked()[2]).toMatchObject({ question: 'and since when?', previous: { purpose: 'follow_up', question: 'did that change?' } });
+    // In a thread only the other threads ride: never the one it continues.
+    expect(asked()[2]!.threads).toEqual([{ questions: ['Who owns billing?', 'when is it due?'], asked_at: billing[1]!.asked_at }]);
+    expect(kept().slice(-2).map(each => each.thread)).toEqual([pilot[0]!.id, pilot[0]!.id]);
+  });
+
+  it('jumps to the thread that was showing when the answer names it alone: the person is then in it, and the question is asked there', async () => {
+    const { pilot } = seeded();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'When does the pilot start?')]) : null);
+    const store = await startStore();
+    store.returnToAsk();
+    await flush();
+    await store.ask('did that change?');
+    await flush();
+    expect(asked()).toHaveLength(2);
+    expect(asked()[0]).not.toHaveProperty('previous');
+    expect((asked()[0]!.threads as AskThread[]).map(thread => thread.questions[0])).toEqual(['When does the pilot start?', 'Who owns billing?']);
+    expect(asked()[1]).toMatchObject({ question: 'did that change?', previous: { purpose: 'follow_up', question: 'who decided that?' } });
+    expect(asked()[1]).not.toHaveProperty('threads');
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    expect(kept().at(-1)).toMatchObject({ text: 'did that change?', thread: pilot[0]!.id, follows: pilot[1]!.id });
+    expect(await questions(store)).toEqual(['who decided that?', 'did that change?']);
+  });
+
+  it('goes back to the thread Ask showed when a question typed before the person is in it is cancelled, and shows one that failed alone', async () => {
+    const { pilot } = seeded();
+    const store = await startStore();
+    store.returnToAsk();
+    await flush();
+    held.hold('ask.run');
+    void store.ask('did that change?');
+    await flush();
+    expect(store.threadShown()).toBeUndefined();
+    store.cancelAsk();
+    // Ask was open before the question: it stays, on the thread it showed, and the person is still not in it.
+    expect(store.getState().ask).toMatchObject({ thread: { id: pilot[0]!.id, entered: false }, asking: null });
+    expect(await questions(store)).toEqual(['who decided that?']);
+    // One that failed belongs to no thread either: it shows alone, and Try again asks it the same way.
+    const failing = held.hold('ask.run');
+    void store.ask('did that change?');
+    await flush();
+    failing(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'did that change?', thread: null });
+    expect(store.threadShown()).toBeUndefined();
+    expect(byTestId(await page(store), 'timeline-row')).toEqual([]);
+    store.retryAsk();
+    await flush();
+    expect(asked().at(-1)).not.toHaveProperty('previous');
+    expect((asked().at(-1)!.threads as AskThread[]).map(thread => thread.questions[0])).toEqual(['When does the pilot start?', 'Who owns billing?']);
+    // Its answer starts a thread, which the person, having asked in it, is in.
+    const saved = kept().at(-1)!;
+    expect(saved.thread).toBe(saved.id);
+    expect(open(store)).toEqual({ id: saved.id, entered: true });
+  });
+
+  it('puts the person in a thread by each way of picking it, and never by the sidebar\'s Ask, a merge or the bar\'s ×', async () => {
+    const { billing, pilot } = seeded();
+    const store = await startStore();
+    const back = async () => { store.closeAsk(); store.returnToAsk(); await flush(); expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false }); };
+    store.returnToAsk();
+    await flush();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    // One of its earlier questions, from its line; folding the line again leaves them in it.
+    store.toggleTurn(pilot[0]!.id);
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    store.toggleTurn(pilot[0]!.id);
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    // Since Ask opened: closed and opened again from the sidebar, they are not.
+    await back();
+    // Ask again, even one cancelled.
+    held.hold('ask.run');
+    store.askAgain(pilot[1]!.id);
+    await flush();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    store.cancelAsk();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    await back();
+    // Its row in the list.
+    await store.openThread(billing[0]!.id);
+    expect(open(store)).toEqual({ id: billing[0]!.id, entered: true });
+    // A suggestion of one of its questions.
+    store.closeAsk();
+    store.pickSuggestion({ question: 'Who owns billing?', turn: billing[0]!.id });
+    await flush();
+    expect(open(store)).toEqual({ id: billing[0]!.id, entered: true });
+    await back();
+    // Neither a merge into the thread shown nor widening the bar is picking it.
+    store.mergeThread(billing[0]!.id);
+    store.widenScope();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    // Asking in it is: the answer to a question placed there lands there.
+    script = params => (params.threads ? elsewhere(params, [0]) : null);
+    await store.ask('and the budget?');
+    await flush();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+  });
+
+  it('sends an empty list from a person\'s only thread, so an answer can say the subject is new and start a second', async () => {
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    seed(...pilot);
+    script = params => (params.question === 'What is for lunch?' ? ok({ ...answerOf(String(params.question)), question: String(params.question), thread: { kind: 'new' } }) : null);
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    // In it, a question continues it, and with no other thread the list still goes, empty.
+    await store.ask('who decided that?');
+    expect(asked()[0]).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' }, threads: [] });
+    expect(kept().at(-1)!.thread).toBe(pilot[0]!.id);
+    expect(store.threads()).toHaveLength(1);
+    // A new subject, typed in that thread: the answer says so, and it starts a second thread.
+    await store.ask('What is for lunch?');
+    await flush();
+    expect(asked()[1]).toMatchObject({ previous: { purpose: 'follow_up', question: 'who decided that?' }, threads: [] });
+    const saved = kept().at(-1)!;
+    expect(saved).toMatchObject({ text: 'What is for lunch?', thread: saved.id });
+    expect(store.threads().map(thread => thread.name)).toEqual(['When does the pilot start?', 'What is for lunch?']);
+    expect(open(store)).toEqual({ id: saved.id, entered: true });
+    // What is never placed carries no list at all: Ask again, and the questions asked again after a pick.
+    store.askAgain(saved.id);
+    await flush();
+    expect(asked()[2]).toMatchObject({ previous: { purpose: 'ask_again' } });
+    expect(asked()[2]).not.toHaveProperty('threads');
+  });
+});
+
 describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
   it('opens the thread asked in most recently from the sidebar, and a suggestion\'s thread at its turn, moving to its place', async () => {
     const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY], ['and who fixes them?', 3 * DAY]);
@@ -648,7 +822,7 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     await flush();
     expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
     expect(store.chipName()).toBe('Apollo');
-    expect(store.getState().ask).toMatchObject({ thread: tests[0]!.id, opened: tests[0]!.id, focus: tests[0]!.id });
+    expect(store.getState().ask).toMatchObject({ thread: { id: tests[0]!.id, entered: true }, opened: tests[0]!.id, focus: tests[0]!.id });
     expect(byTestId(await page(store), 'opened-turn')).toHaveLength(1);
     // The question typed next continues the turn chosen.
     await store.ask('since when?');
@@ -737,9 +911,10 @@ describe('merging threads, and Undo', () => {
     seed(billing[0]!, tests[0]!, billing[1]!, ...pilot);
     return { billing, tests, pilot };
   };
+  /** Ask on the thread asked in most recently, picked from the list: the person is in it. */
   const opened = async () => {
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(store.getState().timeline.turns.at(-1)!.thread!);
     await flush();
     return store;
   };
@@ -938,7 +1113,7 @@ describe('the way out of every wait', () => {
     const { billing } = seeded();
     const store = await startStore();
     let late = await jumping(store, 'page');
-    expect(store.getState().ask).toMatchObject({ thread: billing[0]!.id, forQuestion: true });
+    expect(store.getState().ask).toMatchObject({ thread: { id: billing[0]!.id, entered: true }, forQuestion: true });
     expect(store.getState().ask?.asking?.question).toBe('who approves the invoices?');
     store.cancelAsk();
     expect(store.getState().ask).toBeNull();
@@ -949,7 +1124,7 @@ describe('the way out of every wait', () => {
     // With Ask open before: it stays, on the thread it jumped to, with nothing on its way and nothing kept.
     late = await jumping(store, 'thread');
     store.cancelAsk();
-    expect(store.getState().ask).toMatchObject({ thread: billing[0]!.id, asking: null, failed: null, clarify: null });
+    expect(store.getState().ask).toMatchObject({ thread: { id: billing[0]!.id, entered: true }, asking: null, failed: null, clarify: null });
     late(ok(answerOf('who approves the invoices?')));
     await flush();
     expect(kept()).toHaveLength(5);
@@ -966,7 +1141,7 @@ describe('the way out of every wait', () => {
     const again = await jumping(store, 'thread');
     again(fail('unavailable', { retryable: true }));
     await flush();
-    expect(store.getState().ask).toMatchObject({ thread: billing[0]!.id, asking: null, failed: { question: 'who approves the invoices?', failure: { code: 'unavailable' } } });
+    expect(store.getState().ask).toMatchObject({ thread: { id: billing[0]!.id, entered: true }, asking: null, failed: { question: 'who approves the invoices?', failure: { code: 'unavailable' } } });
     expect(byTestId(await page(store), 'ask-retry')).toHaveLength(1);
     store.retryAsk();
     await flush();
@@ -979,7 +1154,7 @@ describe('the way out of every wait', () => {
   it('refuses a jump, a merge and Undo while a question is on its way, so an answer always lands in the thread that shows', async () => {
     const { billing, pilot } = seeded();
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(pilot[0]!.id);
     await flush();
     store.mergeThread(billing[0]!.id);
     await flush();
@@ -1106,7 +1281,7 @@ describe('the way out of every wait', () => {
     app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
     await store.refreshStatus();
     await flush();
-    expect(store.getState().ask?.thread).toBe(pilot[0]!.id);
+    expect(store.getState().ask?.thread).toEqual({ id: pilot[0]!.id, entered: false });
     expect(store.threadShown()).toBeUndefined();
     expect(store.askThread()).toEqual([]);
     expect(text(byTestId(await page(store), 'thread-name')[0])).toBe('New thread');
@@ -1125,7 +1300,7 @@ describe('the way out of every wait', () => {
     seed(...other, legacy);
     checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
     const store = await startStore();
-    store.returnToAsk();
+    await store.openThread(legacy.id);
     await flush();
     await store.ask('who owns it?');
     await flush();

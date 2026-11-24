@@ -454,9 +454,10 @@ export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, 
   });
 }
 
-/** What an Ask carries beside its question: the previous turn with its thread's older turns, and the other threads, with which threads those are. */
+/** What an Ask carries beside its question: the previous turn with its thread's older turns, and the threads it may be placed in, with which threads those are. */
 export interface AskCarries {
   readonly previous?: AskPrevious;
+  /** Present, though it may be empty, on a question to be placed. */
   readonly threads?: AskThread[];
   /** The threads sent, by id, in the order sent: an answer names one by its place here. */
   readonly sent: readonly string[];
@@ -464,11 +465,13 @@ export interface AskCarries {
 
 /**
  * What an Ask of `question` in `scope` carries, within the request body's bound and with no count of its own (R7):
- * `previous` (previousOf's, which fits alone) with `earlier`, its thread's older turns, and `others`, the other threads.
- * When they do not all fit, threads go first, from the least recently asked, then older turns from the oldest.
+ * `previous` (previousOf's, which fits alone) with `earlier`, its thread's older turns, and `others`, the threads it may
+ * be placed in. When they do not all fit, threads go first, from the least recently asked, then older turns from the
+ * oldest. `others` null: the question is not to be placed, and carries no list. A question to be placed carries one even
+ * when it is empty, so the answer can say it starts a thread although the person has no other.
  */
-export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Thread[]): AskCarries {
-  const threads = others.map(({ questions, asked_at }): AskThread => ({ questions, asked_at }));
+export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Thread[] | null): AskCarries {
+  const threads = (others ?? []).map(({ questions, asked_at }): AskThread => ({ questions, asked_at }));
   // Each entry with the comma before the next, and each list that goes with its key and brackets.
   const sizes = (entries: readonly unknown[]) => entries.map(entry => jsonBytes(entry) + 1);
   const total = (bytes: readonly number[]) => bytes.reduce((sum, size) => sum + size, 0);
@@ -481,8 +484,8 @@ export function askCarries(question: string, scope: AskScope, previous: AskPrevi
   const older = previous === null ? [] : earlier.slice(from);
   return {
     ...(previous === null ? {} : { previous: older.length > 0 ? { ...previous, earlier: older } : previous }),
-    ...(kept > 0 ? { threads: threads.slice(0, kept) } : {}),
-    sent: others.slice(0, kept).map(thread => thread.id),
+    ...(others === null ? {} : { threads: threads.slice(0, kept) }),
+    sent: (others ?? []).slice(0, kept).map(thread => thread.id),
   };
 }
 

@@ -116,9 +116,13 @@ const seed = (...turns: TimelineTurn[]) => { timelineFiles.set(fileOf(ACCOUNT), 
 const kept = () => timelineFiles.get(fileOf(ACCOUNT)) ?? [];
 /** Turns as a thread of their own: the first's. */
 const asThread = (...turns: TimelineTurn[]): TimelineTurn[] => turns.map(each => ({ ...each, thread: turns[0]!.id }));
-/** The sidebar's Ask: Ask opens on the thread asked in most recently, and a question typed then continues it. */
-async function reopen(store: { returnToAsk(): boolean }): Promise<void> {
-  store.returnToAsk();
+/**
+ * Ask on the thread asked in most recently, picked from the thread list: the person is in it (ADR-0056), and a question
+ * typed then continues it. The sidebar's Ask alone only shows that thread.
+ */
+async function reopen(store: { getState(): { timeline: { turns: readonly TimelineTurn[] } }; openThread(id: string): Promise<boolean> }): Promise<void> {
+  const latest = store.getState().timeline.turns.at(-1)!;
+  await store.openThread(latest.thread ?? latest.id);
   await flush();
 }
 async function view() {
@@ -1567,12 +1571,12 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     await store.openProject(apollo);
     store.pickSuggestion({ question: old.question, turn: old.id });
     await flush();
-    expect(store.getState().ask).toMatchObject({ thread: old.id, opened: old.id, earlier: false });
+    expect(store.getState().ask).toMatchObject({ thread: { id: old.id, entered: true }, opened: old.id, earlier: false });
     const checked = calls('ask.check').length;
     store.widenScope();
     await flush();
     expect(store.getState().barScope).toEqual({ kind: 'global' });
-    expect(store.getState().ask).toMatchObject({ thread: old.id, opened: old.id, earlier: false });
+    expect(store.getState().ask).toMatchObject({ thread: { id: old.id, entered: true }, opened: old.id, earlier: false });
     expect(lines((await view())(store))).toEqual([old.question]);
     expect(calls('ask.check')).toHaveLength(checked);
   });

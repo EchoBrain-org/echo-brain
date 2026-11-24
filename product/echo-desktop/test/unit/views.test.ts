@@ -766,21 +766,28 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   });
 
   it('reads where an answer says the question belongs among the threads the Ask sent, and which are on its subject (ADR-0056)', () => {
-    // A new subject is an ordinary answer; one that continues the open thread says nothing of threads.
-    expect(answerView(line({ thread: { kind: 'new' } }), scope, 3).thread).toEqual({ kind: 'new' });
-    expect(answerView(line({ merge: [0, 2] }), scope, 3)).toMatchObject({ outcome: 'answered', merge: [0, 2] });
-    for (const key of ['thread', 'merge']) expect(answerView(line({}), scope, 3)).not.toHaveProperty(key);
+    // A new subject is an ordinary answer; one that continues the open thread says nothing of threads. Either names its question.
+    const question = 'Who owns ECHO-7?';
+    expect(answerView(line({ question, thread: { kind: 'new' } }), scope, 3).thread).toEqual({ kind: 'new' });
+    expect(answerView(line({ question, merge: [0, 2] }), scope, 3)).toMatchObject({ outcome: 'answered', merge: [0, 2] });
+    for (const key of ['thread', 'merge']) expect(answerView(line({ question }), scope, 3)).not.toHaveProperty(key);
     // One that belongs to other threads answers nothing: "Which one?", without choices.
     const elsewhere = (threads: number[], extra: Record<string, unknown> = {}) => line({ outcome: 'clarify', citations: [], parts: [], question: 'did that change?',
       thread: { kind: 'other', threads }, ...extra });
     expect(answerView(elsewhere([2], { merge: [0] }), scope, 3)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 },
       question: 'did that change?', thread: { kind: 'other', threads: [2] }, merge: [0] });
-    // A place past the threads sent names nothing the page offered, and an Ask that sent none is told nothing of them.
+    // A place past the threads sent names nothing the page offered.
     expect(() => answerView(elsewhere([3]), scope, 3)).toThrow(ViewError);
     expect(() => answerView(elsewhere([0, 3]), scope, 3)).toThrow(ViewError);
     expect(() => answerView(elsewhere([1], { merge: [3] }), scope, 3)).toThrow(ViewError);
-    expect(() => answerView(line({ merge: [3] }), scope, 3)).toThrow(ViewError);
-    expect(() => answerView(line({ thread: { kind: 'new' } }), scope)).toThrow(ViewError);
+    expect(() => answerView(line({ question, merge: [3] }), scope, 3)).toThrow(ViewError);
+    // An empty list sent is still a list: the answer may say the subject is new, and can name no thread.
+    expect(answerView(line({ question, thread: { kind: 'new' } }), scope, 0).thread).toEqual({ kind: 'new' });
+    expect(() => answerView(elsewhere([0]), scope, 0)).toThrow(ViewError);
+    expect(() => answerView(line({ question, merge: [0] }), scope, 0)).toThrow(ViewError);
+    // An Ask that carried no list is told nothing of threads.
+    expect(() => answerView(line({ question, thread: { kind: 'new' } }), scope)).toThrow(ViewError);
+    expect(() => answerView(line({ question, merge: [0] }), scope)).toThrow(ViewError);
     expect(() => answerView(elsewhere([0]), scope)).toThrow(ViewError);
   });
 

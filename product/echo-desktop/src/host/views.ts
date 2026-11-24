@@ -283,9 +283,11 @@ export function recordRead(value: unknown): RecordRead | null {
  * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
  * derive actionable explanations from gap_details. An answer to an Ask that carried the asker's other threads
  * (ADR-0056) may say where the question belongs and which of them are on its subject, by their place among the
- * `threads` sent: a place past them names nothing the page offered, so the answer is not one.
+ * `threads` sent (how many; undefined when the Ask carried no list, which is not the same as an empty one): a place
+ * past them names nothing the page offered, and an Ask that carried no list is told nothing of threads, so either
+ * answer is not one.
  */
-export function answerView(raw: unknown, scope: AskScope, threads = 0): Answer {
+export function answerView(raw: unknown, scope: AskScope, threads?: number): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
   try {
     line = validatePersonAskProgressResultLineV3(raw);
@@ -299,7 +301,7 @@ export function answerView(raw: unknown, scope: AskScope, threads = 0): Answer {
   const sources = result.citations.map(citedSource);
   const { thread, merge } = result;
   const placed = thread !== undefined || merge !== undefined;
-  if ((placed && threads === 0) || [...(thread?.kind === 'other' ? thread.threads : []), ...(merge ?? [])].some(place => place >= threads)) throw new ViewError();
+  if ((placed && threads === undefined) || [...(thread?.kind === 'other' ? thread.threads : []), ...(merge ?? [])].some(place => place >= (threads ?? 0))) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),

@@ -396,9 +396,13 @@ describe('what the page sends with an Ask and a check', () => {
     // No count of its own: many threads, of many questions, all go.
     expect(askThreads(Array.from({ length: 300 }, () => ({ ...thread, questions: Array.from({ length: 20 }, (_, at) => `Question ${at}?`) })), 'Who owns it?', previous)).toHaveLength(300);
     for (const bad of [
-      [], [{ ...thread, questions: [] }], [{ ...thread, questions: [' padded '] }], [{ ...thread, asked_at: 'today' }], [{ ...thread, name: 'Apollo' }], [{ questions: thread.questions }],
+      [{ ...thread, questions: [] }], [{ ...thread, questions: [' padded '] }], [{ ...thread, asked_at: 'today' }], [{ ...thread, name: 'Apollo' }], [{ questions: thread.questions }],
       'threads', null, {},
     ]) expect(askThreads(bad, 'Who owns it?', previous)).toBeNull();
+    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
+    expect(askThreads([], 'Who owns it?', previous)).toEqual([]);
+    expect(askThreads([], 'Who owns it?', undefined)).toEqual([]);
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, []).at(-1)).toBe('--threads=[]');
     // An Ask again carries none, and the list and the turn fit the body together.
     expect(askThreads([thread], previous.question, { ...previous, purpose: 'ask_again' })).toBeNull();
     expect(askThreads([{ ...thread, questions: ['é'.repeat(600_000)] }], 'Who owns it?', previous)).toBeNull();

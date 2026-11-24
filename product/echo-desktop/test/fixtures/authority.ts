@@ -53,7 +53,9 @@ interface Contract {
   validatePersonListResponseV1(value: unknown): unknown;
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
-  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
+  validatePersonAnswerRequestV3(value: unknown): {
+    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string }; threads?: readonly { readonly questions: readonly string[] }[];
+  };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
   validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
   validatePersonAskCheckV1(value: unknown): unknown;
@@ -331,9 +333,11 @@ export const RESOLVED_PREFIX = 'Resolved:';
  * when a question typed in it names it:
  * - about a subject some sent threads are on: it belongs to them (`other`), and nothing is answered;
  * - "same as <subject>": the sent threads on that subject are on the subject of the one it belongs to (`merge`);
- * - otherwise it continues the open thread, or with none (no `previous`) is a new subject (`new`).
- * An answer to a request with threads names its question. A follow-up's names one no one typed ("Resolved: …"), which
- * must never come back as a thread's question. A request without threads is answered as any other.
+ * - "unrelated", or a request with no open thread (no `previous`): a new subject (`new`);
+ * - otherwise it continues the open thread.
+ * The list may be empty: the question can still be a new subject. An answer to a request with threads names its
+ * question. A follow-up's names one no one typed ("Resolved: …"), which must never come back as a thread's question.
+ * A request without threads is never placed, and is answered as any other.
  */
 function threadsAnswer(request: { readonly question: string; readonly previous?: { readonly purpose: string; readonly question: string }; readonly threads?: readonly { readonly questions: readonly string[] }[] },
   plain: Record<string, unknown>): Record<string, unknown> {
@@ -350,7 +354,7 @@ function threadsAnswer(request: { readonly question: string; readonly previous?:
     return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: plain.scope, outcome: 'clarify', citations: [], parts: [], question,
       thread: { kind: 'other', threads: belongs }, ...(belongs.length === 1 && merge.length > 0 ? { merge } : {}) };
   }
-  if (previous === undefined) return { ...plain, question, thread: { kind: 'new' } };
+  if (previous === undefined || /\bunrelated\b/u.test(words)) return { ...plain, question, thread: { kind: 'new' } };
   return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}) };
 }
 
@@ -1824,9 +1828,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
-      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
+      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources. To a request that carried
+      // threads (ADR-0056) it names its question, and with no open thread to continue says the subject is new, as the
+      // Authority does.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      return answered({ ...answer, scope, parts: [{ ...part, question }] });
+      const placed = request.threads === undefined ? {} : { question, ...(request.previous === undefined ? { thread: { kind: 'new' } } : {}) };
+      return answered({ ...answer, scope, parts: [{ ...part, question }], ...placed });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;
