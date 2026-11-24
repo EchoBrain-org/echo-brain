@@ -173,7 +173,7 @@ CLI's and the desktop's, asks
 `POST /v7/person/ask`, the only Ask route since
 [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the ones before it,
 and the scope rules here apply to it. The CLI accepts
-`person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>]`.
+`person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>]`.
 The client does not silently downgrade a project request to global Ask.
 
 The
