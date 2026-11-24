@@ -3,7 +3,7 @@
 // on this computer's file, a question that belongs elsewhere asked again where it belongs, "Which one?" between threads,
 // and what of the threads a request carries.
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -491,6 +491,36 @@ test('back in Ask from the sidebar a question is placed among every thread, the 
   expect(again).not.toHaveProperty('threads');
   expect(asks()).toHaveLength(before + 2);
   await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
+});
+
+test('the thread list closes when Ask shows another thread under it, and opens again with nothing to find', async () => {
+  // This Authority holds each answer until the test lets it go.
+  run = await launch('ask-progress');
+  const { page } = run;
+  const release = join(run.home, 'release-ask');
+  writeFileSync(release, '');
+  await ask(page, 'When does the pilot start?');
+  await back(page);
+  // A second question, from the page: on its way it belongs to no thread yet, and the list can be opened meanwhile.
+  rmSync(release);
+  await page.getByTestId('ask-field').fill('Who owns billing?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('asking')).toBeVisible();
+  const name = page.getByTestId('thread-name');
+  const list = page.getByTestId('thread-list');
+  await expect(name).toHaveText('New thread');
+  await name.click();
+  await list.getByTestId('thread-find').fill('pilot');
+  await expect(list.getByTestId('thread-row')).toHaveCount(1);
+  // While the question is on its way no row moves Ask.
+  await expect(list.getByTestId('thread-row')).toBeDisabled();
+  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone.
+  writeFileSync(release, '');
+  await expect(name).toHaveText('Who owns billing?');
+  await expect(list).toHaveCount(0);
+  await name.click();
+  await expect(list.getByTestId('thread-find')).toHaveValue('');
+  await expect(list.getByTestId('thread-row')).toHaveCount(2);
 });
 
 test('an answer that does not say where a question asked with the threads belongs is refused, and nothing of it is kept', async () => {

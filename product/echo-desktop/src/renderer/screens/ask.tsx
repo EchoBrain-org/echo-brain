@@ -773,13 +773,20 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
 /**
  * Ask's first line (ADR-0056): the open thread's name, the first question typed in it, on one line; "New thread" with
  * none open. It opens the thread list under it; whether the list is open is this line's own, and goes with Ask. The
- * list closes on Escape pressed inside this line or the list, on a click outside them, and when the keyboard's focus
- * leaves them (Tab past the last row). Under it, after a merge, one faint line says so, with Undo.
+ * list closes on Escape pressed inside this line or the list, on a click outside them, when the keyboard's focus
+ * leaves them (Tab past the last row), when a question starts, and when Ask shows another thread. What "Find a thread"
+ * held goes with it. Under the name, after a merge, one faint line says so, with Undo.
  */
 function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
+  // The list is of what Ask showed when it opened. A question started, or another thread shown under it (an answer that
+  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find.
+  const shown = threadShown(state)?.id ?? null;
+  const asking = Boolean(state.ask?.asking);
+  useLayoutEffect(() => { setOpen(false); }, [shown]);
+  useLayoutEffect(() => { if (asking) setOpen(false); }, [asking]);
   useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
