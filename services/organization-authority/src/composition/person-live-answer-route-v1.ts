@@ -160,6 +160,11 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     // The asker's other threads (ADR-0056), as sent: their own typed questions, which reach only the Ask's resolver. Nothing
     // about them is stored, logged or audited beyond the request's prompt digest.
     const threads = input.request.threads;
+    // The day every attempt of this request reads as today, when the client sent no clock of its own: the server's day
+    // as the request arrived, read once. A snapshot restart that runs after midnight is then shown the same day, so the
+    // resolution it kept is still the one made from what it is shown, and is not paid for twice. With the client's clock
+    // (`time_context`) the day is already the same for every attempt.
+    const today = input.time_context === undefined ? new Date().toISOString().slice(0, 10) : undefined;
     input.signal?.throwIfAborted();
     // What the request's resolver settled (what a follow-up refers to, and where the question belongs), a paid call, held
     // between the attempts of this request with the key of what it was made from. The Ask itself decides whether a later
@@ -181,7 +186,8 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       const sink = options.follow_up_drafts?.(authorization);
       const askOptions = { model: options.model, generation: options.generation,
         ...(options.research_driver === undefined ? {} : { research_driver: options.research_driver }),
-        ...(input.time_context === undefined ? {} : { time_context: input.time_context }), desk, audit: options.audit.forRequest(context),
+        ...(input.time_context === undefined ? {} : { time_context: input.time_context }), ...(today === undefined ? {} : { today: () => today }),
+        desk, audit: options.audit.forRequest(context),
         ...(asker === undefined ? {} : { asker }),
         ...(sink === undefined ? {} : { follow_ups: { request_id: context.request_id, sink } }),
       };
