@@ -1,0 +1,1683 @@
+{
+  "schema_version": 1,
+  "kind": "echo-ask-thread-eval-cases-v1",
+  "description": "Pre-registered thread resolution cases (Ask threads v1, ADR-0056). Synthetic engineering content. Each case is an Ask with the asker's other threads, most recently asked first, and for most an open thread; thread numbers in expectations count from 1, as the resolver is shown them. A case's near_miss says which thread is related to the question's subject without being the same thing: it is for readers, and the resolver is never shown it.",
+  "today": "2026-11-23",
+  "time_zone": "America/Los_Angeles",
+  "cases": [
+    {
+      "id": "open-details-on-that-ticket",
+      "group": "continues_open",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-11-23T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "what are the details on that ticket?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "open-bezel-redesign-from-an-older-turn",
+      "group": "continues_open",
+      "near_miss": "Thread 1 is about the enclosure too, but about a tooling quote, not the bezel redesign the open thread names.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "who owns the retest?",
+        "asked_at": "2026-11-23T16:40:00.000Z",
+        "statements": [
+          {
+            "text": "Lin Zhao owns the drop retest, scheduled for Dec 2 once the rev C bezels arrive.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20231",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-231",
+              "text_sha256": "sha256:01ada01be1dec85658812700fdedd2aa2306b6a7cd077295e4d6117131c58f00"
+            },
+            "kind": "ticket",
+            "label": "MECH-231: Drop retest with the rev C bezel",
+            "visibility": "only_me"
+          }
+        ],
+        "earlier": [
+          {
+            "question": "Why did the drop test fail on MECH-214?",
+            "asked_at": "2026-11-21T18:20:00.000Z",
+            "statements": [
+              {
+                "text": "The drop test failed because the front bezel cracked at the lower-left snap on the third 1.2 m drop; MECH-214 tracks it.",
+                "citation_indexes": [
+                  0
+                ]
+              },
+              {
+                "text": "A bezel redesign with a thicker snap rib, rev C, is drafted and waiting on a tooling change.",
+                "citation_indexes": [
+                  1
+                ]
+              }
+            ],
+            "citations": [
+              {
+                "citation": {
+                  "kind": "ticket",
+                  "tool_id": "jira",
+                  "external_scope_id": "therm-cloud",
+                  "ticket_id": "20214",
+                  "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+                  "text_sha256": "sha256:643f8b2913ef6ca7e062f43cb63b3d6b20863fa42bc1797ea8a538403d141d78"
+                },
+                "kind": "ticket",
+                "label": "MECH-214: Front bezel cracks in the 1.2 m drop test",
+                "visibility": "only_me"
+              },
+              {
+                "citation": {
+                  "kind": "page",
+                  "tool_id": "confluence",
+                  "external_scope_id": "therm-site",
+                  "page_id": "1447102",
+                  "section_id": "overview",
+                  "version": "4",
+                  "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1447102",
+                  "text_sha256": "sha256:5aa7343fa78ff2067c740b4a20a94845668d8b3e7cee0c8f0985b65fef6a5185"
+                },
+                "kind": "page",
+                "label": "Bezel redesign rev C: thicker snap rib",
+                "visibility": "only_me"
+              }
+            ]
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Nordlake quote for the enclosure tooling?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What's blocking the DVT gate?",
+            "who owns THERM-482?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "is the bezel redesign approved yet?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "open-fallback-if-they-miss-that-date",
+      "group": "continues_open",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Has Voltaris confirmed the cell delivery date?",
+        "asked_at": "2026-11-23T18:15:00.000Z",
+        "statements": [
+          {
+            "text": "Voltaris confirmed 500 cells for Dec 9, two weeks later than the original Nov 25 date.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:ab24a6880a3261dee1c045849f1bbcd1c257193f0807c739a89c3c438756add1",
+              "record_sha256": "sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "Supplier sync (Nov 18): Voltaris cells slip to Dec 9",
+            "visibility": "team",
+            "ref": "meeting:sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Who signs off the packaging drop spec?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "what's the fallback if they miss that date?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "open-who-is-reviewing-the-fix",
+      "group": "continues_open",
+      "near_miss": "Thread 1 is about firmware too, but about what is cut from a release, not the FW-77 fix.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's the status of FW-77?",
+        "asked_at": "2026-11-23T19:02:00.000Z",
+        "statements": [
+          {
+            "text": "FW-77 is in review: the watchdog resets the board under thermal load, and Aiko Tanaka has a fix up.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "30077",
+              "permalink": "https://therm-hw.atlassian.net/browse/FW-77",
+              "text_sha256": "sha256:ac90b7df36d95910ca87577d2390abcd268ba0ff16e5b09808c899895ef80985"
+            },
+            "kind": "ticket",
+            "label": "FW-77: Watchdog reset under thermal load",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "Which firmware features are cut from the PVT release?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What's blocking the DVT gate?",
+            "who owns THERM-482?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "who is reviewing the fix?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "open-move-it-a-week-earlier",
+      "group": "continues_open",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "what do we need to bring?",
+        "asked_at": "2026-11-23T17:36:00.000Z",
+        "statements": [
+          {
+            "text": "Bring three production-equivalent units and the antenna tuning report.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1451880",
+              "section_id": "checklist",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+              "text_sha256": "sha256:2a712def46d09a976b30b3e8d7d430c912872dab48a37706c8ff39edea01802d"
+            },
+            "kind": "page",
+            "label": "FCC pre-scan plan: what to bring",
+            "visibility": "only_me"
+          }
+        ],
+        "earlier": [
+          {
+            "question": "When is the FCC pre-scan booked?",
+            "asked_at": "2026-11-23T17:30:00.000Z",
+            "statements": [
+              {
+                "text": "The FCC pre-scan is booked for Dec 4 at Brightwave Labs.",
+                "citation_indexes": [
+                  0
+                ]
+              }
+            ],
+            "citations": [
+              {
+                "citation": {
+                  "kind": "page",
+                  "tool_id": "confluence",
+                  "external_scope_id": "therm-site",
+                  "page_id": "1451880",
+                  "section_id": "overview",
+                  "version": "4",
+                  "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+                  "text_sha256": "sha256:f5677de987673685ce8fc0484ea662345f7843641f0fb61272c199819aa93da0"
+                },
+                "kind": "page",
+                "label": "FCC pre-scan plan",
+                "visibility": "only_me"
+              }
+            ]
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Has Voltaris confirmed the cell delivery date?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "When do the Halvorsen heat sink samples arrive?",
+            "how many are they sending?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "can we move it a week earlier?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "open-lead-time-of-the-second-one",
+      "group": "continues_open",
+      "near_miss": "Thread 1 is about a Kestrel quote too, but for heater block tooling, not the heat sink quote the open thread lists second.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Which vendors sent heat sink quotes?",
+        "asked_at": "2026-11-23T20:11:00.000Z",
+        "statements": [
+          {
+            "text": "Two vendors sent heat sink quotes: Halvorsen at $4.10 a unit and Kestrel at $4.60 a unit.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1449310",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1449310",
+              "text_sha256": "sha256:dcc8d28b1fa24bc0873b1f0dff6589ca5e9b80c7981a01da44cc0fe02e4a4525"
+            },
+            "kind": "page",
+            "label": "Heat sink RFQ responses",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?",
+            "is the bezel redesign approved?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "what lead time did the second one give?",
+      "expect": {
+        "thread": "open"
+      }
+    },
+    {
+      "id": "other-mech-214-retest",
+      "group": "one_other",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "When is the FCC pre-scan booked?",
+        "asked_at": "2026-11-23T17:30:00.000Z",
+        "statements": [
+          {
+            "text": "The FCC pre-scan is booked for Dec 4 at Brightwave Labs.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1451880",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+              "text_sha256": "sha256:f5677de987673685ce8fc0484ea662345f7843641f0fb61272c199819aa93da0"
+            },
+            "kind": "page",
+            "label": "FCC pre-scan plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?",
+            "is the bezel redesign approved?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "Did the MECH-214 retest pass?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          2
+        ]
+      }
+    },
+    {
+      "id": "other-therm-482-fix-with-no-thread-open",
+      "group": "one_other",
+      "threads": [
+        {
+          "questions": [
+            "Has Voltaris confirmed the cell delivery date?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What's blocking the DVT gate?",
+            "who owns THERM-482?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "has the fix for THERM-482 landed?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          2
+        ]
+      }
+    },
+    {
+      "id": "other-kestrel-quote-expiry",
+      "group": "one_other",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "How many units are in the PVT build?",
+        "asked_at": "2026-11-23T16:05:00.000Z",
+        "statements": [
+          {
+            "text": "The PVT build is 200 units, split across two lines.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:5cd5580f2d9f8dd906f1c354b33abc19f7b4b9fb69001409b20aa41d746689c1",
+              "record_sha256": "sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "PVT build plan review (Nov 12): 200 units across two lines",
+            "visibility": "team",
+            "ref": "meeting:sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?",
+            "is the bezel redesign approved?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "when does the Kestrel quote expire?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1
+        ]
+      }
+    },
+    {
+      "id": "other-fw-77-fix-merged",
+      "group": "one_other",
+      "near_miss": "Thread 1 is about firmware too, but not about FW-77.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-11-23T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "Which firmware features are cut from the PVT release?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Who signs off the packaging drop spec?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "did the FW-77 watchdog fix get merged?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          2
+        ]
+      }
+    },
+    {
+      "id": "other-halvorsen-samples-with-no-thread-open",
+      "group": "one_other",
+      "threads": [
+        {
+          "questions": [
+            "When do the Halvorsen heat sink samples arrive?",
+            "how many are they sending?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "How many units are in the PVT build?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "did the Halvorsen samples clear customs?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1
+        ]
+      }
+    },
+    {
+      "id": "other-what-the-fcc-lab-needs",
+      "group": "one_other",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Has Voltaris confirmed the cell delivery date?",
+        "asked_at": "2026-11-23T18:15:00.000Z",
+        "statements": [
+          {
+            "text": "Voltaris confirmed 500 cells for Dec 9, two weeks later than the original Nov 25 date.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:ab24a6880a3261dee1c045849f1bbcd1c257193f0807c739a89c3c438756add1",
+              "record_sha256": "sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "Supplier sync (Nov 18): Voltaris cells slip to Dec 9",
+            "visibility": "team",
+            "ref": "meeting:sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "Who signs off the packaging drop spec?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What's blocking the DVT gate?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "what does the FCC lab need from us before the pre-scan?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          2
+        ]
+      }
+    },
+    {
+      "id": "several-tooling-quotes",
+      "group": "several_others",
+      "near_miss": "Threads 1 and 2 are both tooling quotes, from two vendors for two parts: either could be meant, and they are not one subject.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "When is the FCC pre-scan booked?",
+        "asked_at": "2026-11-23T17:30:00.000Z",
+        "statements": [
+          {
+            "text": "The FCC pre-scan is booked for Dec 4 at Brightwave Labs.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1451880",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+              "text_sha256": "sha256:f5677de987673685ce8fc0484ea662345f7843641f0fb61272c199819aa93da0"
+            },
+            "kind": "page",
+            "label": "FCC pre-scan plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What did Nordlake quote for the enclosure tooling?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "How many units are in the PVT build?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "when does that tooling quote expire?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "several-failed-tests-with-no-thread-open",
+      "group": "several_others",
+      "threads": [
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did the thermal soak fail on THERM-482?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "has the retest been scheduled?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "several-sample-shipments",
+      "group": "several_others",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "who signs off the PVT build plan?",
+        "asked_at": "2026-11-23T16:12:00.000Z",
+        "statements": [
+          {
+            "text": "Mara Okonkwo signs off the PVT build plan after the DVT exit review.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:60585e881504f9bfad3ba1305b814157e3741ff07d5437fff5cf6e2bf77926ba",
+              "record_sha256": "sha256:2f0453a8c8d502a13e75b50fdd9d37b8d665878662f63b07bf1930943a524f69",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "PVT build plan review (Nov 12): Mara Okonkwo signs off after the DVT exit review",
+            "visibility": "team",
+            "ref": "meeting:sha256:2f0453a8c8d502a13e75b50fdd9d37b8d665878662f63b07bf1930943a524f69"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "When do the Halvorsen heat sink samples arrive?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When do the Nordlake enclosure samples arrive?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "When do the Voltaris cell samples arrive?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?"
+          ],
+          "asked_at": "2026-11-16T20:31:00.000Z"
+        }
+      ],
+      "question": "have the samples shipped yet?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "id": "several-redesigns",
+      "group": "several_others",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "When is the FCC pre-scan booked?",
+        "asked_at": "2026-11-23T17:30:00.000Z",
+        "statements": [
+          {
+            "text": "The FCC pre-scan is booked for Dec 4 at Brightwave Labs.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1451880",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+              "text_sha256": "sha256:f5677de987673685ce8fc0484ea662345f7843641f0fb61272c199819aa93da0"
+            },
+            "kind": "page",
+            "label": "FCC pre-scan plan",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "Who owns the bezel redesign?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Who owns the fixture redesign?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Has Voltaris confirmed the cell delivery date?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "is the redesign on track for the DVT build?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "several-reviews-action-items",
+      "group": "several_others",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "Has Voltaris confirmed the cell delivery date?",
+        "asked_at": "2026-11-23T18:15:00.000Z",
+        "statements": [
+          {
+            "text": "Voltaris confirmed 500 cells for Dec 9, two weeks later than the original Nov 25 date.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:ab24a6880a3261dee1c045849f1bbcd1c257193f0807c739a89c3c438756add1",
+              "record_sha256": "sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "Supplier sync (Nov 18): Voltaris cells slip to Dec 9",
+            "visibility": "team",
+            "ref": "meeting:sha256:82423924d863682da714937a578a1ba4d5ef16027753d2f8725c90327fa4c36f"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did we decide in the DVT readiness review?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What did we decide in the supplier quality review?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "who took the action items from that review?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "several-firmware-fixes",
+      "group": "several_others",
+      "near_miss": "Threads 1 and 2 are both firmware tickets, FW-77 and FW-81: either could be meant, and they are not one subject.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did Kestrel quote for the heater block tooling?",
+        "asked_at": "2026-11-23T21:20:00.000Z",
+        "statements": [
+          {
+            "text": "Kestrel quoted $18,400 for the heater block tooling, with a six-week lead time.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1450021",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1450021",
+              "text_sha256": "sha256:ad057e8a45feee17f59a646729f37ca2d4312038e28047b93326e2eac1bcbabc"
+            },
+            "kind": "page",
+            "label": "Kestrel quote Q-2217: heater block tooling",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What's the status of FW-81?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "did that firmware fix make the Friday build?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "id": "new-factory-on-call",
+      "group": "new_subject",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-11-23T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "Who is on call for the factory line this weekend?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "new-travel-budget-with-no-thread-open",
+      "group": "new_subject",
+      "threads": [
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "What's our travel budget for the Shenzhen build trip?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "new-label-artwork-status",
+      "group": "new_subject",
+      "near_miss": "Thread 1 asks for a status in the same words, and thread 2 is about packaging; neither is about the label artwork.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "How many units are in the PVT build?",
+        "asked_at": "2026-11-23T16:05:00.000Z",
+        "statements": [
+          {
+            "text": "The PVT build is 200 units, split across two lines.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:5cd5580f2d9f8dd906f1c354b33abc19f7b4b9fb69001409b20aa41d746689c1",
+              "record_sha256": "sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "PVT build plan review (Nov 12): 200 units across two lines",
+            "visibility": "team",
+            "ref": "meeting:sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Who signs off the packaging drop spec?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "What's the status of the label artwork for the retail box?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "new-ul-safety-audit",
+      "group": "new_subject",
+      "near_miss": "Thread 1 is about a certification event too, the FCC pre-scan, not the UL safety audit.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What did Kestrel quote for the heater block tooling?",
+        "asked_at": "2026-11-23T21:20:00.000Z",
+        "statements": [
+          {
+            "text": "Kestrel quoted $18,400 for the heater block tooling, with a six-week lead time.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1450021",
+              "section_id": "overview",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1450021",
+              "text_sha256": "sha256:ad057e8a45feee17f59a646729f37ca2d4312038e28047b93326e2eac1bcbabc"
+            },
+            "kind": "page",
+            "label": "Kestrel quote Q-2217: heater block tooling",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?",
+            "is the bezel redesign approved?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "When is the UL safety audit?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "new-a-ticket-no-thread-names",
+      "group": "new_subject",
+      "near_miss": "The open thread and thread 1 are about tickets too, THERM-482 and MECH-214, not ELEC-309.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-11-23T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "Why did the drop test fail on MECH-214?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Has Voltaris confirmed the cell delivery date?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "What is ELEC-309 about?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "new-freight-spend-after-older-turns",
+      "group": "new_subject",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "what do we need to bring?",
+        "asked_at": "2026-11-23T17:36:00.000Z",
+        "statements": [
+          {
+            "text": "Bring three production-equivalent units and the antenna tuning report.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "page",
+              "tool_id": "confluence",
+              "external_scope_id": "therm-site",
+              "page_id": "1451880",
+              "section_id": "checklist",
+              "version": "4",
+              "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+              "text_sha256": "sha256:2a712def46d09a976b30b3e8d7d430c912872dab48a37706c8ff39edea01802d"
+            },
+            "kind": "page",
+            "label": "FCC pre-scan plan: what to bring",
+            "visibility": "only_me"
+          }
+        ],
+        "earlier": [
+          {
+            "question": "When is the FCC pre-scan booked?",
+            "asked_at": "2026-11-23T17:30:00.000Z",
+            "statements": [
+              {
+                "text": "The FCC pre-scan is booked for Dec 4 at Brightwave Labs.",
+                "citation_indexes": [
+                  0
+                ]
+              }
+            ],
+            "citations": [
+              {
+                "citation": {
+                  "kind": "page",
+                  "tool_id": "confluence",
+                  "external_scope_id": "therm-site",
+                  "page_id": "1451880",
+                  "section_id": "overview",
+                  "version": "4",
+                  "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1451880",
+                  "text_sha256": "sha256:f5677de987673685ce8fc0484ea662345f7843641f0fb61272c199819aa93da0"
+                },
+                "kind": "page",
+                "label": "FCC pre-scan plan",
+                "visibility": "only_me"
+              }
+            ]
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "How many units are in the PVT build?",
+            "who signs off the PVT build plan?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When do the Halvorsen heat sink samples arrive?",
+            "how many are they sending?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        }
+      ],
+      "question": "How much did we spend on expedited freight in October?",
+      "expect": {
+        "thread": "new"
+      }
+    },
+    {
+      "id": "twice-the-open-dvt-gate-thread",
+      "group": "same_subject_twice",
+      "near_miss": "Thread 3 mentions a heater too, but is about a tooling quote: only thread 2 is the open thread's subject again.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "What's blocking the DVT gate?",
+        "asked_at": "2026-11-23T17:05:00.000Z",
+        "statements": [
+          {
+            "text": "The DVT gate is blocked by THERM-482: the thermal fixture fails at 45 °C, so the 72-hour soak test cannot finish.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "10482",
+              "permalink": "https://therm-hw.atlassian.net/browse/THERM-482",
+              "text_sha256": "sha256:83afb56dca06324069b7ecb5a5df9385f4ef26dccd51dc13a8d7ac0815b8e213"
+            },
+            "kind": "ticket",
+            "label": "THERM-482: Thermal fixture fails at 45 °C",
+            "visibility": "only_me"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "What is blocking the DVT gate right now?",
+            "who owns THERM-482?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "has anyone tried the new heater controller on it?",
+      "expect": {
+        "thread": "open",
+        "merge": [
+          2
+        ]
+      }
+    },
+    {
+      "id": "twice-the-kestrel-tooling-quote",
+      "group": "same_subject_twice",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "How many units are in the PVT build?",
+        "asked_at": "2026-11-23T16:05:00.000Z",
+        "statements": [
+          {
+            "text": "The PVT build is 200 units, split across two lines.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "approved_record",
+              "atom_id": "sha256:5cd5580f2d9f8dd906f1c354b33abc19f7b4b9fb69001409b20aa41d746689c1",
+              "record_sha256": "sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015",
+              "policy_id": "project-members-readable-person-v1"
+            },
+            "kind": "decision",
+            "label": "PVT build plan review (Nov 12): 200 units across two lines",
+            "visibility": "team",
+            "ref": "meeting:sha256:9afd45172d5fcc85f3a13b4293702bccc84b1174c98133fee0fa8fb25ac13015"
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What did Kestrel quote for the heater block tooling?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "How much is the Kestrel heater block tooling quote?",
+            "does it include the spare inserts?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "when does the Kestrel heater block tooling quote expire?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1
+        ],
+        "merge": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "twice-fw-77-with-no-thread-open",
+      "group": "same_subject_twice",
+      "threads": [
+        {
+          "questions": [
+            "What's the status of FW-77?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Has Voltaris confirmed the cell delivery date?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "Is FW-77 fixed yet?",
+            "who is reviewing the FW-77 fix?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "did the FW-77 fix make the Friday build?",
+      "expect": {
+        "thread": "other",
+        "threads": [
+          1
+        ],
+        "merge": [
+          3
+        ]
+      }
+    },
+    {
+      "id": "twice-the-open-drop-test-thread",
+      "group": "same_subject_twice",
+      "near_miss": "Thread 1 is about a drop spec too, for packaging: only thread 2 is the open thread's subject again.",
+      "previous": {
+        "purpose": "follow_up",
+        "question": "who owns the retest?",
+        "asked_at": "2026-11-23T16:40:00.000Z",
+        "statements": [
+          {
+            "text": "Lin Zhao owns the drop retest, scheduled for Dec 2 once the rev C bezels arrive.",
+            "citation_indexes": [
+              0
+            ]
+          }
+        ],
+        "citations": [
+          {
+            "citation": {
+              "kind": "ticket",
+              "tool_id": "jira",
+              "external_scope_id": "therm-cloud",
+              "ticket_id": "20231",
+              "permalink": "https://therm-hw.atlassian.net/browse/MECH-231",
+              "text_sha256": "sha256:01ada01be1dec85658812700fdedd2aa2306b6a7cd077295e4d6117131c58f00"
+            },
+            "kind": "ticket",
+            "label": "MECH-231: Drop retest with the rev C bezel",
+            "visibility": "only_me"
+          }
+        ],
+        "earlier": [
+          {
+            "question": "Why did the drop test fail on MECH-214?",
+            "asked_at": "2026-11-21T18:20:00.000Z",
+            "statements": [
+              {
+                "text": "The drop test failed because the front bezel cracked at the lower-left snap on the third 1.2 m drop; MECH-214 tracks it.",
+                "citation_indexes": [
+                  0
+                ]
+              },
+              {
+                "text": "A bezel redesign with a thicker snap rib, rev C, is drafted and waiting on a tooling change.",
+                "citation_indexes": [
+                  1
+                ]
+              }
+            ],
+            "citations": [
+              {
+                "citation": {
+                  "kind": "ticket",
+                  "tool_id": "jira",
+                  "external_scope_id": "therm-cloud",
+                  "ticket_id": "20214",
+                  "permalink": "https://therm-hw.atlassian.net/browse/MECH-214",
+                  "text_sha256": "sha256:643f8b2913ef6ca7e062f43cb63b3d6b20863fa42bc1797ea8a538403d141d78"
+                },
+                "kind": "ticket",
+                "label": "MECH-214: Front bezel cracks in the 1.2 m drop test",
+                "visibility": "only_me"
+              },
+              {
+                "citation": {
+                  "kind": "page",
+                  "tool_id": "confluence",
+                  "external_scope_id": "therm-site",
+                  "page_id": "1447102",
+                  "section_id": "overview",
+                  "version": "4",
+                  "permalink": "https://therm-hw.atlassian.net/wiki/spaces/HW/pages/1447102",
+                  "text_sha256": "sha256:5aa7343fa78ff2067c740b4a20a94845668d8b3e7cee0c8f0985b65fef6a5185"
+                },
+                "kind": "page",
+                "label": "Bezel redesign rev C: thicker snap rib",
+                "visibility": "only_me"
+              }
+            ]
+          }
+        ]
+      },
+      "threads": [
+        {
+          "questions": [
+            "What's the drop height in the packaging drop spec?"
+          ],
+          "asked_at": "2026-11-22T17:10:00.000Z"
+        },
+        {
+          "questions": [
+            "Why did MECH-214 fail the drop test?"
+          ],
+          "asked_at": "2026-11-20T18:17:00.000Z"
+        },
+        {
+          "questions": [
+            "When is the FCC pre-scan booked?"
+          ],
+          "asked_at": "2026-11-18T19:24:00.000Z"
+        }
+      ],
+      "question": "who signs off the retest?",
+      "expect": {
+        "thread": "open",
+        "merge": [
+          2
+        ]
+      }
+    }
+  ]
+}

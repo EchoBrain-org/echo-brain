@@ -189,6 +189,12 @@ export interface CreateAskRendererV1Options {
    * Without it the response names none.
    */
   readonly answers?: string;
+  /**
+   * For an Ask that carried the asker's threads (ADR-0056): what the response says of them, as the request's resolution
+   * settled it (`agenticThreadFieldsV1`): a new thread, or the threads to merge with the open one. The writer never
+   * sees or changes it.
+   */
+  readonly placed?: Pick<PersonAnswerResponseV8, "thread" | "merge">;
   /** For an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
   readonly earlier?: AskEarlierAnswerV1;
   /**
@@ -931,6 +937,8 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...(since === undefined ? {} : { since: Object.freeze({ statements: released(since) }) }),
           // Only an answer that drafted follow-ups lists them (ADR-0053), so any other keeps its earlier shape.
           ...followUpIds,
+          // Only an answer to a request that carried the asker's threads says where its question belongs (ADR-0056).
+          ...options.placed,
         });
         // What of the reply survived the check, before byte fitting: a statement, a list it placed that code filled (its rows,
         // a selection that matched none, or a hand-pick of none: the writer saying no member answers), something it did not

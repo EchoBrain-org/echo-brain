@@ -31,6 +31,13 @@ describe('the asker\'s other threads on the Ask request (ADR-0056)', () => {
     expect(Object.isFrozen(validatePersonAnswerRequestV3(alone).threads![0]!.questions)).toBe(true);
     expect(validatePersonAnswerRequestV3(ask({ previous: previous() }))).toEqual(ask({ previous: previous() }));
     expect(validatePersonAnswerThreadsV1([thread()])).toEqual([thread()]);
+    // No other thread yet: the list still goes, empty, so the answer may say the question starts a new one.
+    expect(validatePersonAnswerRequestV3(ask({ previous: previous(), threads: [] }))).toEqual(ask({ previous: previous(), threads: [] }));
+    expect(validatePersonAnswerRequestV3(ask({ threads: [] })).threads).toEqual([]);
+  });
+
+  it('fails a request wrong in two places on the field it always failed on first', () => {
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Q?', project_id: 'bad', previous: {} })).toThrow('Ask request project_id');
   });
 
   it('counts neither threads nor questions: the request\'s transport bound is the only limit', () => {
@@ -40,9 +47,9 @@ describe('the asker\'s other threads on the Ask request (ADR-0056)', () => {
     expect(() => validatePersonAnswerRequestV3(ask({ threads: huge }))).toThrow('Ask request exceeds JSON byte bound');
   });
 
-  it('refuses anything else: none, a thread with no question, a bad question or time, another key, or an Ask again', () => {
+  it('refuses anything else: a thread with no question, a bad question or time, another key, or an Ask again', () => {
     for (const threads of [
-      [], [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
+      [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
       [thread({ asked_at: '2026-11-16T18:00:00Z' })], [{ ...thread(), title: 'Apollo' }], [(({ asked_at: _asked, ...rest }) => rest)(thread())],
       [null], {}, 'threads', null,
     ]) expect(() => validatePersonAnswerRequestV3(ask({ threads })), JSON.stringify(threads)).toThrow();
@@ -96,7 +103,13 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
   it('names threads on the same subject beside the open thread or the one other thread, never beside a new one or several', () => {
     expect(validatePersonAnswerResponseV8(answered({ merge: [1, 4] })).merge).toEqual([1, 4]);
     expect(validatePersonAnswerResponseV8(elsewhere([2], { merge: [0] })).merge).toEqual([0]);
+    const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
+    const asking = { ...elsewhere([2]), thread: undefined, choices };
+    delete (asking as { thread?: unknown }).thread;
+    expect(validatePersonAnswerResponseV8(asking).choices).toHaveLength(1);
     for (const value of [
+      // An answer that offers choices names no merge: the answer to the choice does.
+      { ...asking, merge: [0] },
       answered({ thread: { kind: 'new' }, merge: [1] }), elsewhere([2, 3], { merge: [0] }), elsewhere([2], { merge: [2] }),
       answered({ merge: [] }), answered({ merge: [1, 1] }), answered({ merge: [-1] }), answered({ merge: [1.5] }), answered({ merge: '1' }),
     ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();
@@ -111,6 +124,9 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
       (({ thread: _thread, ...rest }) => rest)(elsewhere([1])), (({ question: _question, ...rest }) => rest)(elsewhere([1])),
       elsewhere([]), elsewhere([1, 1]), elsewhere([-1]), elsewhere([1], { thread: { kind: 'other' } }), elsewhere([1], { thread: { kind: 'other', threads: [1], extra: 1 } }),
       answered({ thread: { kind: 'open' } }), answered({ thread: { kind: 'new', threads: [1] } }), answered({ thread: 'new' }), answered({ thread: null }),
+      // An answer that says anything of threads names its question, and is never an Ask again's.
+      (({ question: _question, ...rest }) => rest)(answered({ thread: { kind: 'new' } })), (({ question: _question, ...rest }) => rest)(answered({ merge: [1] })),
+      answered({ thread: { kind: 'new' }, since: { statements: [] } }), answered({ merge: [1], since: { statements: [] } }),
     ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();
   });
 });

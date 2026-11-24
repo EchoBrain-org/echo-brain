@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { answerBlocksFollowUpsSchema, answerBlocksSchema, answerBlocksSinceFollowUpsSchema, answerBlocksSinceSchema, createStepSchema, parseStep } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-ask-v1-model-protocol.js';
-import { followUpResolutionSchema } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-follow-up-resolver-v1.js';
+import { followUpResolutionSchema, threadPlacementSchema } from '../../packages/organization-authority-kernel/src/answer-composition/agentic-follow-up-resolver-v1.js';
 import { createOpenRouterStructuredGenerationAdapter } from '../../providers/openrouter/src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js';
 
 // Claude's documented grammar rejects these bounds. Local protocol parsing
@@ -48,6 +48,8 @@ describe('Sonnet receives supported schemas for the real Ask protocol', () => {
     ['research', createStepSchema(['meetings', 'pages'], ['E1', 'E2'], true, true, true)],
     // The follow-up resolver (ADR-0047).
     ['follow-up resolution', followUpResolutionSchema],
+    // The thread resolver (ADR-0056), which runs in its place when an Ask carries threads or older turns.
+    ['thread resolution', threadPlacementSchema],
   ])('%s keeps the closed protocol without unsupported wire bounds', async (_role, schema) => {
     const before = JSON.stringify(schema);
     const body = await wireRequest(schema);

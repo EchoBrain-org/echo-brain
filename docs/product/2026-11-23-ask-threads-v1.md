@@ -45,12 +45,18 @@ and ECHO works out which earlier conversation a question continues.
 4. **Jumping** moves Ask to the thread's place, as the sidebar's Ask does
    today (Home for no project, the project's page otherwise), opens the
    thread, and checks its turns' sources.
-5. **Asking.**
-   - With Ask open on a thread, a typed question continues it: it carries the
-     previous turn, the thread's earlier turns, and the person's other
-     threads.
-   - From a page with Ask closed, a typed question is asked with no previous
-     turn. It carries the person's threads only.
+5. **Asking.** A person is **in** a thread once they have asked in it or
+   picked it since Ask opened: its row in the list, a "Which one?" button, one
+   of its earlier questions, or a suggestion. Ask merely showing the thread
+   they last used, as the sidebar's Ask does, is not being in it.
+   - In a thread, a typed question continues it: it carries the previous
+     turn, the thread's earlier turns, and the person's other threads.
+   - Otherwise (from a page with Ask closed, or back in Ask with nothing
+     asked or picked yet) a typed question carries no previous turn. It
+     carries every thread it may be placed in, the one shown included, and
+     shows alone while it is on its way. So "did that change?" typed on
+     coming back asks which thread, and the same words typed right after an
+     answer continue that thread.
 6. **Where the answer lands.**
    - It continues the open thread: saved in it.
    - A new subject: saved as a new thread, which becomes the open thread.
@@ -108,7 +114,7 @@ gains one, both validated with exact keys inside the existing body bound:
 ```ts
 interface PersonAnswerRequestV3 {
   // schema_version, question, project_id?, previous? as today
-  /** The asker's other threads, most recently asked first. At least one when present. */
+  /** The asker's other threads, most recently asked first. May be empty. */
   readonly threads?: readonly PersonAnswerThreadV1[];
 }
 
@@ -136,6 +142,11 @@ interface PersonAnswerEarlierTurnV1 {
 
 - `threads` and `earlier` are refused beside `purpose: 'ask_again'`.
 - They are the asker's context: never stored, never evidence.
+- The desktop sends `threads` with every typed question it wants placed, even
+  when the person has no other thread and the list is empty. Without that a
+  person with one thread could never start a second from inside it. A request
+  without `threads` is never placed: Ask again, a choice between things in one
+  answer, the question asked again after a jump, and "New question".
 
 ### T2. Response
 
@@ -165,7 +176,11 @@ interface PersonAnswerResponseV8 {
   to that thread; several mean it could belong to any of them. The outcome
   `clarify` now comes with exactly one of `choices` and an `other` thread.
 - `merge`: only when `thread` is absent or names exactly one other thread;
-  never beside `new`; never the thread the question belongs to.
+  never beside `new` or `choices`; never the thread the question belongs to.
+  An answer that offers choices names none: the question is asked again once
+  one is chosen, and that answer does.
+- `question` is named on every answer to a request that carried `previous` or
+  `threads`.
 - The answer's hash covers `thread` and `merge`.
 
 ### T3. Kernel
@@ -183,11 +198,17 @@ interface PersonAnswerResponseV8 {
     the sources it is about, or `clarify` with choices), read by today's
     rules. Only when the request has `previous`.
   - `new`: a subject none of the threads is about. Research runs on the
-    question as asked, with no starting item.
+    question as asked, with no starting item. Only when the request carried
+    `threads`, empty or not; a request with `earlier` alone is answered in
+    its thread.
   - `other` with the numbers of the threads it belongs to.
   - Optionally `merge`, the numbers of other threads plainly about the same
     subject as the one the question belongs to. A number that names no
-    thread, or the target, is dropped and counted; the rest stand.
+    thread, or the target, is dropped and counted; the rest stand. A reply
+    that asks which thing is meant names no merge.
+  - A reply that says two things (a place other than the open thread, and
+    also a resolution or choices) has not said where the question belongs
+    and goes back for the one repair.
 - Never guess: more than one other thread that could fit is named, never one
   picked. A question that depends on something no thread gives stays in the
   open thread as `same`.
@@ -255,12 +276,32 @@ Rules:
 5. **Merge the obvious:** reported for "same subject twice"; the founder
    judges it.
 
-A trial whose resolver fell back fails, in every group. If rule 1 or 4
+A trial whose resolver fell back fails, in every group. If rule 1, 2 or 4
 fails, ECHO does not pick threads: the desktop stops sending `threads`, and
-jumping and merging stay by hand until a prompt passes. The existing thirty
-follow-up cases are unchanged, and so is the path they test.
+jumping and merging stay by hand until a prompt passes. Rule 2 decides with
+the other two because a resolver that names every thread for every question
+never guesses and never merges, and is useless. Rules 3 and 5 are reported
+and judged by the founder. Only the whole registered set decides: all 28
+cases, each once, three trials each. The existing thirty follow-up cases are
+unchanged, and so is the path they test.
 
 **Result:** not run yet.
+
+## Known and unchanged
+
+These hold for a follow-up on `main` today and hold the same way for a
+question placed among threads. This change does not alter them:
+
+- An attempt restarted by a snapshot change reuses the resolution it already
+  paid for, so the audit row of the attempt that answers can record no model
+  call for it; and an attempt that audited and then restarted audits again.
+- A snapshot change during the resolver's repair restarts the attempt, which
+  may call the resolver again: at most one call and one repair per attempt.
+- A question near the request's byte bound cannot be answered when the
+  request carried `previous` or `threads`, because the answer names it twice.
+- "Which one?" between things in one answer may offer a single choice.
+- Prompts, which hold the carried turns and thread questions, reach the
+  staging-only trace exporter like every other prompt (INV-PERMISSIONS-015).
 
 ## Not in v1
 
@@ -273,3 +314,9 @@ follow-up cases are unchanged, and so is the path they test.
 - A thread's name is its first question, cut to one line.
 - Inside a project, "Which one?" never offers a thread from outside it (R3).
 - Merging by hand may cross homes; ECHO's own merging never does.
+- Being in a thread is what makes a bare "did that change?" continue it. No
+  clock decides: a thread asked in an hour ago and one asked in last week
+  behave the same once the person has asked in or picked it.
+- In a thread, the open thread wins over another thread that could also fit,
+  and what a question refers to is read from the latest turn first, then
+  from older turns.

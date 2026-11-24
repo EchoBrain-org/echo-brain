@@ -39,7 +39,9 @@ flowchart LR
   arranged by the writer from a catalog of seven blocks and released in them
   ([ADR-0051](../decisions/ADR-0051-ask-answer-layout-v2.md)); no header asks
   for it, and `x-echo-answer-layout`, which older clients send, is not read. A follow-up carries
-  the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)).
+  the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). An Ask may also carry
+  the asker's other threads, and a follow-up the older turns of its thread
+  ([ADR-0056](../decisions/ADR-0056-ask-threads.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
   retired; a request that names it is refused.
 - **Contracts:** `packages/organization-api` (`person-answer-v8.ts` and the
@@ -76,6 +78,7 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-research-loop-v1.ts` | Rounds of search, list and open, steered by the model |
 | `agentic-ask-v1-model-protocol.ts` | Prompts and JSON schemas for the model |
 | `agentic-model-gate-v1.ts` | The access check before every model call |
+| `agentic-follow-up-resolver-v1.ts` | One call before research: what a follow-up refers to, and which thread the question belongs to |
 | `agentic-list-evidence-v1.ts` | Complete lists as evidence |
 | `renderers/ask-renderer-v1.ts`, `ask-layout-v2.ts` | The written answer and its blocks |
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |

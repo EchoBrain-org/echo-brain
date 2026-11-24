@@ -1,6 +1,6 @@
 import {
   AGENTIC_READ_SILENCE_MS_V1, AgenticAskStalledErrorV1, createAgenticAskProgressRequestV1, createAgenticAskV5, type AgenticAskAnswerWithReceiptV3,
-  type AgenticAskProgressSinkV3, type AgenticFollowUpCarryV1, type AgenticFollowUpResolvedV1,
+  type AgenticAskProgressSinkV3, type AgenticFollowUpCarryV1, type AgenticResolutionKeptV1,
 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import type { PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -157,18 +157,24 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     const scope = scopeOf(input.request);
     // The asker's previous turn (ADR-0047), when the request carries it: as sent, until the Authority has checked it.
     const sent = input.request.previous;
+    // The asker's other threads (ADR-0056), as sent: their own typed questions, which reach only the Ask's resolver. Nothing
+    // about them is stored, logged or audited beyond the request's prompt digest.
+    const threads = input.request.threads;
     input.signal?.throwIfAborted();
-    // A follow-up's resolution, a paid call, kept with the checked previous turn it was made from: a snapshot restart whose
-    // check keeps exactly the same sentences uses it again, and one whose check keeps any other resolves anew.
-    let resolved: { readonly turn: string; readonly value: AgenticFollowUpResolvedV1 } | undefined;
+    // What the request's resolver settled (what a follow-up refers to, and where the question belongs), a paid call, held
+    // between the attempts of this request with the key of what it was made from. The Ask itself decides whether a later
+    // attempt may use it: only one shown exactly what that call was shown (agenticResolutionKeyV1).
+    // A snapshot restart whose check keeps any other sentence therefore resolves anew.
+    let resolved: AgenticResolutionKeptV1 | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
-      // Checked for the caller at the start of every attempt, a snapshot restart's included: only its sentences whose every
-      // citation they read then reach the follow-up resolver or any model of that attempt.
+      // Checked for the caller at the start of every attempt, a snapshot restart's included: only the sentences of the
+      // previous turn and of the thread's older turns whose every citation they read then reach the resolver or any model
+      // of that attempt.
       const previous = sent === undefined ? undefined
         : await readablePreviousV1(sent, { access_token: input.access_token, check: options.previous_check, signal });
-      const turn = JSON.stringify(previous ?? null);
-      const follow_up: AgenticFollowUpCarryV1 = resolved?.turn === turn ? { resolved: resolved.value } : { on_resolved: value => { resolved = { turn, value }; } };
+      const follow_up: AgenticFollowUpCarryV1 = { ...(resolved === undefined ? {} : { resolved }), on_resolved: kept => { resolved = kept; } };
+      const carried = { ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }), ...(previous === undefined && threads === undefined ? {} : { follow_up }) };
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
       // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.
@@ -183,9 +189,9 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       // names may be follow-ups, workspace items and tool containers.
       const ask = createAgenticAskV5(askOptions);
       if (streamed !== undefined) {
-        return ask.answerWithReceipt({ question: input.request.question, signal, request: streamed.request, on_progress: streamed.on_progress, ...(previous === undefined ? {} : { previous, follow_up }) });
+        return ask.answerWithReceipt({ question: input.request.question, signal, request: streamed.request, on_progress: streamed.on_progress, ...carried });
       }
-      return ask.answer({ question: input.request.question, signal, ...(previous === undefined ? {} : { previous, follow_up }) });
+      return ask.answer({ question: input.request.question, signal, ...carried });
     }, progress === undefined ? undefined : () => progress.on_start());
   }
   return Object.freeze({
