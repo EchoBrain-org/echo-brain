@@ -324,6 +324,11 @@ describe('what an Ask carries of the threads (R3, R6, R7)', () => {
     expect(earlierOf([legacy, resolved, third!], third!, null).map(each => each.question)).toEqual(['who owns it?']);
     expect(carried(null, resolved).map(each => each.question)).toEqual(['what is open?']);
     expect(carried(null, first!)).toEqual([]);
+    // Continuing a turn that asked an older one again, or asked its question again where it was asked: that older turn
+    // folds away behind it, as the thread shows it.
+    const again = turn('what is open?', HOUR, { follows: first!.id, again_of: first!.id, thread: first!.id });
+    const repeat = turn('what is open?', HOUR, { follows: third!.id, thread: first!.id });
+    for (const latest of [again, repeat]) expect(earlierOf([...thread, latest], latest, null).map(each => each.question)).toEqual(['who owns it?', 'and when?']);
   });
 
   it('leaves out the least recently asked threads first, then the oldest older turns, when the request would pass its body\'s bound, with no count of its own', () => {
@@ -796,7 +801,7 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(previous.earlier!.map(each => each.question)).toEqual(['what is open?', 'who owns it?']);
   });
 
-  it('keeps Ask again in its turn\'s thread, with no thread and no older turn riding', async () => {
+  it('keeps Ask again in its turn\'s thread, with no thread and no older turn riding; a follow-up of it carries the turn it asked again only as it', async () => {
     const { pilot } = seeded();
     const store = await startStore();
     store.returnToAsk();
@@ -807,8 +812,15 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(asked()[0]).toMatchObject({ question: 'When does the pilot start?', previous: { purpose: 'ask_again', question: 'When does the pilot start?' } });
     expect(asked()[0]).not.toHaveProperty('threads');
     expect(asked()[0]!.previous).not.toHaveProperty('earlier');
-    expect(kept().at(-1)).toMatchObject({ again_of: pilot[0]!.id, thread: pilot[0]!.id });
+    const again = kept().at(-1)!;
+    expect(again).toMatchObject({ again_of: pilot[0]!.id, thread: pilot[0]!.id });
     expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+    // The turn asked again folds away behind it, as the thread shows it: its question rides once, as the turn continued.
+    await store.ask('and who signs off?');
+    await flush();
+    expect(asked()[1]).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' } });
+    expect((asked()[1]!.previous as AskPrevious).earlier!.map(each => each.question)).toEqual(['did that change?', 'who decided?']);
+    expect(kept().at(-1)).toMatchObject({ follows: again.id, carried: [again.id, pilot[1]!.id, pilot[2]!.id] });
   });
 
   it('asks a choice of "Which one?" between things as before: the chosen full question, with the same earlier turn alone, in the open thread', async () => {

@@ -468,12 +468,13 @@ export function otherThreads(threads: readonly Thread[], scope: AskScope, contin
 /**
  * The older turns of a thread a follow-up carries (R6), oldest first: those `turns` (the thread's turns where it lives,
  * as kept) has before `before`, the turn it continues, each question once as Ask shows them (visibleTurns), with the
- * person's own words. Found among all the turns kept, never among those shown, `before` is not lost when a later turn
- * repeats its question (one a merge brought in) and folds it away.
+ * person's own words. Folded with `before` among them, so a turn it asks again, or whose question it repeats, folds away
+ * behind it, then without it. Found among all the turns kept, never among those shown, `before` is not lost when a later
+ * turn repeats its question (one a merge brought in) and folds it away.
  */
 export function earlierTurns(turns: readonly TimelineTurn[], before: TimelineTurn): TimelineTurn[] {
   const at = turns.findIndex(turn => turn.id === before.id);
-  return visibleTurns(turns.slice(0, Math.max(at, 0))).filter(turn => sentWords(turn) !== undefined);
+  return visibleTurns(turns.slice(0, at + 1)).filter(turn => turn.id !== before.id && sentWords(turn) !== undefined);
 }
 
 /**
