@@ -160,16 +160,11 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     // The asker's other threads (ADR-0056), as sent: their own typed questions, which reach only the Ask's resolver. Nothing
     // about them is stored, logged or audited beyond the request's prompt digest.
     const threads = input.request.threads;
-    // The day every attempt of this request reads as today, when the client sent no clock of its own: the server's day
-    // as the request arrived, read once. A snapshot restart that runs after midnight is then shown the same day, so the
-    // resolution it kept is still the one made from what it is shown, and is not paid for twice. With the client's clock
-    // (`time_context`) the day is already the same for every attempt.
+    // Without the client's clock (`time_context`), the server's day as the request arrived, read once: a snapshot restart
+    // after midnight is shown the same day, so its kept resolution still applies and is not paid for twice.
     const today = input.time_context === undefined ? new Date().toISOString().slice(0, 10) : undefined;
     input.signal?.throwIfAborted();
-    // What the request's resolver settled (what a follow-up refers to, and where the question belongs), a paid call, held
-    // between the attempts of this request with the key of what it was made from. The Ask itself decides whether a later
-    // attempt may use it: only one shown exactly what that call was shown (agenticResolutionKeyV1).
-    // A snapshot restart whose check keeps any other sentence therefore resolves anew.
+    // The resolver's paid result, held between this request's attempts; the Ask decides when one may reuse it (AgenticFollowUpCarryV1).
     let resolved: AgenticResolutionKeptV1 | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
@@ -179,7 +174,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       const previous = sent === undefined ? undefined
         : await readablePreviousV1(sent, { access_token: input.access_token, check: options.previous_check, signal });
       const follow_up: AgenticFollowUpCarryV1 = { ...(resolved === undefined ? {} : { resolved }), on_resolved: kept => { resolved = kept; } };
-      const carried = { ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }), ...(previous === undefined && threads === undefined ? {} : { follow_up }) };
+      const carried = { ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }), follow_up };
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
       // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.
