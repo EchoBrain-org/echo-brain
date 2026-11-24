@@ -4,8 +4,19 @@ import { message } from '../messages.js';
 import { useState } from 'preact/hooks';
 import {
   installUpdate, loadArchivedProjects, loadProjects, needsCount, openCompose, openHome, openNewProject, openOnlyMe, openOrganization, openProject, openTools,
-  openYourFollowUps, returnToAsk, settleWords, showAccountMenu, type State,
+  openYourFollowUps, returnToAsk, settleWords, sheetUp, showAccountMenu, type State,
 } from '../store.js';
+
+/**
+ * The sidebar's Ask: back to Ask where it was left, or, when that opens nothing, the cursor to the bar, but only while
+ * nothing is up and the keyboard is where the click left it, so a late answer never takes it from Capture or elsewhere.
+ */
+function backToAsk(): void {
+  const left = document.activeElement;
+  void returnToAsk().then((shown) => {
+    if (!shown && !sheetUp() && document.activeElement === left) document.getElementById('ask-field')?.focus();
+  });
+}
 import { useDropTarget } from './drop.js';
 import { Ask, Capture, Chevron, Home as HomeIcon, Padlock, People, Person, Plug, Plus, Ticks, Up } from './icons.js';
 import { ProjectSettingsButton } from './project-settings.js';
@@ -109,9 +120,8 @@ export function Sidebar({ state }: { state: State }) {
             onClick={() => openHome()} onDragOver={noDrop} onDrop={noDrop}>
             <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
           </button>
-          {/* With nothing asked yet there is nothing to go back to: the cursor goes to the bar. */}
           <button type="button" class={`side-row${askOpen ? ' current' : ''}`} data-testid="sidebar-ask" aria-current={askOpen ? 'page' : undefined}
-            onClick={() => { if (!returnToAsk()) document.getElementById('ask-field')?.focus(); }} onDragOver={noDrop} onDrop={noDrop}>
+            onClick={backToAsk} onDragOver={noDrop} onDrop={noDrop}>
             <Ask /><span class="label">Ask</span>
           </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>

@@ -137,7 +137,7 @@ describe('what an empty bar suggests', () => {
     await store.ask('What is left for launch?');
     await flush();
     expect(store.barSuggestions()[0]?.question).toBe('What is left for launch?');
-    // Back in all context: Home's thread holds every question, the project's newest first.
+    // Back in all context: Home suggests every question, the project's newest first.
     store.widenScope();
     expect(questions(store.barSuggestions())).toEqual(['What is left for launch?', 'When do we ship?', 'What did we decide this week?']);
   });

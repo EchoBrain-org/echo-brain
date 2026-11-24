@@ -2,21 +2,19 @@ import { canonicalJsonBytes, canonicalSha256, sha256Digest } from "@echo-brain/f
 import {
   PERSON_ANSWER_RESPONSE_MAX_BYTES_V4,
   validatePersonAnswerResponseV8,
-  type PersonAnswerCitationV8,
   type PersonAnswerPreviousV1,
   type PersonAnswerResponseV8,
   type PersonAskProgressStepEventV3,
 } from "@echo-brain/organization-api";
 import { describe, expect, it, vi } from "vitest";
 import { createAgenticAskV5, type AgenticAskAuditEntryV1 } from "../../src/answer-composition/agentic-ask-v1.js";
-import { ANSWER_PROMPT, ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
+import { ANSWER_SINCE_PROMPT, answerBlocksSchema, answerBlocksSinceSchema } from "../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import { agenticAskAnswerSha256V1, compactAndValidateAgenticAskResponseV1 } from "../../src/answer-composition/agentic-ask-v1-response.js";
 import { FOLLOW_UP_RESOLVER_PROMPT, followUpResolutionSchema } from "../../src/answer-composition/agentic-follow-up-resolver-v1.js";
-import type { StructuredGenerationInput } from "../../src/answer-composition/structured-generation-v1.js";
 import { AuthorityOperationError } from "../../src/domain/errors.js";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2 } from "../../src/shared/evidence-desk-v2.js";
-import { checked, generation, record, recorded, result, writerReply } from "./fixtures/agentic-scenarios.js";
+import { checked, cited, finishOn, generation, observed, record, result, scripted, searchFor, writerReply } from "./fixtures/agentic-scenarios.js";
 
 /**
  * The previous turn on a V8 Ask (ADR-0047): a follow-up resolved before research and answered from where it points, or
@@ -31,10 +29,6 @@ const ticketItem: EvidenceDeskItemV2 = Object.freeze({
   attributes: { status: "In Progress", owner: "Dev Patel" }, occurred_at: "2026-10-20", receipt_sha256: canonicalSha256({ ticket: 482 }),
 });
 const decisionItem = record("dvt-gate", "Approved: the DVT gate stays on hold until THERM-482 is fixed; Dev Patel owns the fix, due Oct 30.") as EvidenceDeskItemV2;
-const cited = (item: EvidenceDeskItemV2, kind: PersonAnswerCitationV8["kind"]): PersonAnswerCitationV8 => ({
-  citation: item.citation as PersonAnswerCitationV8["citation"], kind, label: item.label, visibility: item.visibility,
-  ...(item.citation.kind === "approved_record" ? { ref: `meeting:${item.citation.record_sha256}` as const } : {}),
-});
 const FOLLOW_UP: PersonAnswerPreviousV1 = {
   purpose: "follow_up", question: "What's blocking the DVT gate?", asked_at: "2026-10-24T17:05:00.000Z",
   statements: [{ text: "THERM-482 blocks the DVT gate: the thermal fixture fails at 45 °C.", citation_indexes: [0, 1] }],
@@ -47,24 +41,6 @@ const ASK_AGAIN: PersonAnswerPreviousV1 = {
 const QUESTION = "what are the details on that ticket?";
 const RESOLVED = "What are the details on THERM-482?";
 
-/** Replies by role: the resolver's, research steps', and the writer's, each in order; an unscripted call fails the Ask. */
-function scripted(script: { readonly resolver?: readonly unknown[]; readonly steps?: readonly unknown[]; readonly writer?: readonly unknown[] }) {
-  const inputs: StructuredGenerationInput[] = [];
-  const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
-  const roleOf = (input: StructuredGenerationInput) => input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
-    : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
-  return {
-    inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
-    model: { generate: async (input: StructuredGenerationInput) => {
-      inputs.push(recorded(input));
-      const reply = queue[roleOf(input)].shift();
-      if (reply === undefined) throw new Error(`unscripted ${roleOf(input)} call`);
-      return reply;
-    } },
-  };
-}
-const finishOn = (question: string, evidence: readonly string[]) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "found", evidence }] }], actions: [{ tool: "finish", args: {} }] });
-const searchFor = (question: string, query: string) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query } }] });
 function desk(overrides: Partial<EvidenceDeskPortV2> = {}) {
   return {
     scope: { kind: "global" as const }, live_sources: [JIRA],
@@ -83,14 +59,6 @@ function askV8(port: EvidenceDeskPortV2, run: ReturnType<typeof scripted>) {
     time_context: { now: "2026-10-25T17:00:00.000Z", time_zone: "America/Los_Angeles" },
   });
   return { ask, audits };
-}
-/** A run under the request's observer: the corrections every span of it counted, summed. */
-async function observed<T>(operation: () => Promise<T>): Promise<{ readonly value: T; readonly corrections: Readonly<Record<string, number>> }> {
-  const events: CoreRuntimeObservationV1[] = [];
-  const value = await observeCoreRuntimeV1("research_run", operation, { observer: event => { events.push(event); } });
-  const corrections: Record<string, number> = {};
-  for (const event of events) if (event.event !== "started") for (const [name, count] of Object.entries(event.model_corrections ?? {})) corrections[name] = (corrections[name] ?? 0) + count;
-  return { value, corrections };
 }
 
 describe("a follow-up on the V8 Ask (ADR-0047)", () => {

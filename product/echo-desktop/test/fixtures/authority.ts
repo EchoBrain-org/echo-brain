@@ -53,7 +53,9 @@ interface Contract {
   validatePersonListResponseV1(value: unknown): unknown;
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
-  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
+  validatePersonAnswerRequestV3(value: unknown): {
+    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string }; threads?: readonly { readonly questions: readonly string[] }[];
+  };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
   validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
   validatePersonAskCheckV1(value: unknown): unknown;
@@ -316,6 +318,42 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
 /** Readability only: the follow-up is no longer readable, everything else is. */
 function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
   return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => ({ state: citation.kind === 'follow_up' ? 'unreadable' : 'same' })) };
+}
+
+// ---- Ask threads (ADR-0056) --------------------------------------------------------
+
+/** The subjects `ask-threads` knows a question, and a thread, to be about. */
+const THREAD_SUBJECTS = ['billing', 'pilot', 'tests', 'ledger'] as const;
+
+/**
+ * `ask-threads` places a question among the threads its request carries, as the thread resolver would (Ask threads v1
+ * T2), from the words alone. A question is about each of THREAD_SUBJECTS it names, and a thread sent is on a subject
+ * when a question typed in it names it:
+ * - about a subject some sent threads are on: it belongs to them (`other`), and nothing is answered;
+ * - "same as <subject>": the sent threads on that subject are on the subject of the one it belongs to (`merge`);
+ * - "unrelated", or a request with no open thread (no `previous`): a new subject (`new`);
+ * - otherwise it continues the open thread.
+ * The list may be empty: the question can still be a new subject. An answer to a request with threads names its
+ * question. A follow-up's names one no one typed ("Resolved: …"), which must never come back as a thread's question.
+ * A request without threads is never placed, and is answered as any other.
+ */
+function threadsAnswer(request: { readonly question: string; readonly previous?: { readonly purpose: string; readonly question: string }; readonly threads?: readonly { readonly questions: readonly string[] }[] },
+  plain: Record<string, unknown>): Record<string, unknown> {
+  const { question, previous, threads } = request;
+  const full = previous?.purpose === 'follow_up' ? `Resolved: ${question} (after "${previous.question}")` : question;
+  if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full };
+  const on = (subject: string) => threads.flatMap((thread, at) => (thread.questions.some(typed => typed.toLowerCase().includes(subject)) ? [at] : []));
+  const words = question.toLowerCase();
+  const same = /same as (\w+)/u.exec(words)?.[1];
+  const about = words.replace(/same as \w+/u, '');
+  const belongs = [...new Set(THREAD_SUBJECTS.filter(subject => about.includes(subject)).flatMap(on))].sort((left, right) => left - right);
+  const merge = same === undefined ? [] : on(same).filter(at => !belongs.includes(at));
+  if (belongs.length > 0) {
+    return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: plain.scope, outcome: 'clarify', citations: [], parts: [], question,
+      thread: { kind: 'other', threads: belongs }, ...(belongs.length === 1 && merge.length > 0 ? { merge } : {}) };
+  }
+  if (previous === undefined || /\bunrelated\b/u.test(words)) return { ...plain, question, thread: { kind: 'new' } };
+  return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}) };
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
@@ -700,12 +738,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
    * the request first ends the research, and `ask-stopped` holds the question it stopped.
    */
-  const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
+  const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, placing: (response: object) => object): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const items = progressItems();
     const searched = { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
+    const response = placing({ ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] });
     const steps = [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }];
     const receipt = { looked_through: items.length, elapsed_ms: 48_000, rows: [searched, { type: 'read', items }] };
     const encoder = new TextEncoder();
@@ -1711,7 +1749,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
     }
     // The Ask timeline's reads (ADR-0047): the source check, by citation, and what arrived in your projects. Each is checked
     // by the contract's validator; other modes return 404 for the source check.
-    if (method === 'POST' && path === '/v1/person/ask/check' && mode === 'ask-timeline-unreadable') {
+    if (method === 'POST' && path === '/v1/person/ask/check' && (mode === 'ask-timeline-unreadable' || mode === 'ask-threads-checked')) {
       let items: ReturnType<Contract['validatePersonAskCheckRequestV1']>['items'];
       try {
         ({ items } = api.validatePersonAskCheckRequestV1(body));
@@ -1740,25 +1778,46 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'global' };
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
+      // To a request that carried threads (ADR-0056, T2) an answer names its question and, with no previous turn to
+      // continue, says the subject is new, as the Authority does. An answer that already says either keeps its own.
+      const placing = (response: object): object => (request.threads === undefined ? response
+        : { question, ...(request.previous === undefined ? { thread: { kind: 'new' } } : {}), ...response });
+      const placed = (response: object): Response => answered(placing(response));
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-unreadable') return answered(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      if (mode === 'ask-timeline-unreadable') return placed(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      // `ask-threads` (ADR-0056) places the question among the threads the request carries (threadsAnswer). In
+      // `ask-threads-checked` the source check answers too (timelineCheck), and a question about what was drafted is
+      // answered from a follow-up, the one source that check never finds readable.
+      if (mode === 'ask-threads' || mode === 'ask-threads-checked') {
+        const [part] = desktop.answer.parts as Record<string, unknown>[];
+        const plain = mode === 'ask-threads-checked' && /\bdrafted\b/iu.test(question)
+          ? timelineV8(question, scope, [TRACE_FOLLOW_UP], [cites([TRACE_FOLLOW_UP], 'Confirm the trace is still open.', [0])])
+          : { ...answer, scope, parts: [{ ...part, question }] };
+        return answered(threadsAnswer(request, plain));
+      }
+      // `ask-threads-unplaced` answers as an Authority that does not hold T2 would: to a question asked with the threads
+      // and no previous turn it names the question and never says where it belongs.
+      if (mode === 'ask-threads-unplaced') {
+        const [part] = desktop.answer.parts as Record<string, unknown>[];
+        return answered({ ...answer, scope, parts: [{ ...part, question }], question });
+      }
       // `ask-progress` streams the Ask's steps, then its answer and receipt; every other mode streams its answer alone.
-      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined);
+      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined, placing);
       // `ask-completion` answers what it can and says, typed, that it cannot make changes.
       if (mode === 'ask-completion') {
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        return answered({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
+        return placed({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
           parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.', gap_details: { unsupported_action: true } }],
         });
       }
       // `ask-ticket` answers from one Jira ticket read live.
       if (mode === 'ask-ticket') {
-        return answered({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
+        return placed({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
           parts: [{ question, status: 'answered', statements: [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }] });
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
-      if (mode === 'ask-blocks') return answered(blocksAnswer(question, scope));
+      if (mode === 'ask-blocks') return placed(blocksAnswer(question, scope));
       // `ask-follow-ups` (ADR-0053): the answer drafts one follow-up for the task asked about, saved unsent in Ari's own list
       // with no owner yet and a due date, as the Ask writer's sink saves one.
       if (mode === 'ask-follow-ups') {
@@ -1772,20 +1831,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           approver: ARI, owner: { ...ARI, match: 'approver' }, state: 'unsent', created_at: new Date().toISOString(), sent_at: null, state_set_at: null,
           state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
         });
-        return answered({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
+        return placed({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
       }
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
-        return answered({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+        return placed({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      return answered({ ...answer, scope, parts: [{ ...part, question }] });
+      return placed({ ...answer, scope, parts: [{ ...part, question }] });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;

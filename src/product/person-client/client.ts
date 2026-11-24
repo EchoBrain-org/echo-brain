@@ -3,7 +3,7 @@ import {
   PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, validatePersonDocumentAssociateV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentSearchV2, validatePersonListRequestV1, validatePersonOpenRequestV1,
   personQuestionToSend, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
-  type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
+  type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerThreadV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
   type PersonChangesV1, type PersonDocumentAssociateV1,
   type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1, type PersonOpenRequestV1, type PersonProjectActivityV1,
   type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1,
@@ -483,11 +483,12 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047). It is the one streamed Ask (askWithLiveProgress) with its
-   * steps unread.
+   * (ADR-0047) and other threads (ADR-0056). It is the one streamed Ask
+   * (askWithLiveProgress) with its steps unread.
    */
-  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, previous?: PersonAnswerPreviousV1): Promise<PersonAnswerV8> {
-    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous)).result;
+  async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, previous?: PersonAnswerPreviousV1,
+    threads?: readonly PersonAnswerThreadV1[]): Promise<PersonAnswerV8> {
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, undefined, threads)).result;
   }
 
   /**
@@ -504,7 +505,8 @@ export class PersonClient {
    * refused before the Ask is sent, so no step of that account reaches it.
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
-    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void): Promise<PersonLiveAnswerV3> {
+    onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void,
+    threads?: readonly PersonAnswerThreadV1[]): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -518,7 +520,7 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat, threads);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_SESSION_HEADROOM_MS);

@@ -1,5 +1,6 @@
 import { once } from 'node:events';
 import { expect, vi } from 'vitest';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { createPersonAskProgressDecoderV3, type PersonAnswerResponseV8 } from '@echo-brain/organization-api';
 import type { StructuredGenerationInput, StructuredGenerationPort } from '@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1';
 import type { PersonLiveEvidenceSourceV1 } from '@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1';
@@ -10,7 +11,7 @@ import { JIRA_LIVE_CONNECTOR_V1 } from '../../src/composition/person-live-connec
 import { createPersonAskCheckV1 } from '../../src/composition/person-ask-check-v1.js';
 import { SqliteProjectContextRepositoryV1 } from '../../src/adapters/persistence/sqlite/project-context-v1.js';
 import { CLOUD } from './open-items.js';
-import type { CreatePersonLiveAnswerRouteOptionsV1 } from '../../src/composition/person-live-answer-route-v1.js';
+import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from '../../src/composition/person-live-answer-route-v1.js';
 import { PersonRecordSearchIndexLagV1 } from '../../src/composition/person-record-search-route.js';
 import { createOrganizationAuthorityHttpServer, type OrganizationAuthorityHttpServerOptions } from '../../src/presentation/organization-authority-http-server.js';
 import { authorityHttpServerOptions } from './authority-http-server.js';
@@ -96,6 +97,36 @@ export async function serveAsk(routes: Partial<OrganizationAuthorityHttpServerOp
   const address = server.address(); if (address === null || typeof address === 'string') throw new Error('address unavailable');
   return `http://127.0.0.1:${address.port}`;
 }
+
+/** The live `/v7` Ask over `model`, served behind the real server; its origin. */
+export const v7 = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) => serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
+
+/** The fixture's Jira ticket ECHO-12, as an earlier answer cites it. */
+export const ticket = {
+  citation: { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') },
+  kind: 'ticket' as const, label: 'ECHO-12: Launch checklist', visibility: 'only_me' as const,
+};
+
+/** Research that finishes on what it was given opened; the writer states one sentence from it. */
+export function fromOpened(text = 'ECHO-12 ships on Oct 30.'): StructuredGenerationPort & { readonly steps: Record<string, unknown>[]; readonly writer: StructuredGenerationInput[] } {
+  const steps: Record<string, unknown>[] = [];
+  const writer: StructuredGenerationInput[] = [];
+  return { steps, writer, async generate(input: StructuredGenerationInput) {
+    const prompt = JSON.parse(input.user_prompt) as { readonly question?: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
+    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
+      writer.push(input);
+      return { blocks: [{ block: 'answer', sentences: [{ text, evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
+    }
+    steps.push(prompt);
+    const [opened] = prompt.opened ?? [];
+    return { parts: [{ question: prompt.question!, notes: '', needs: [{ need: 'the ticket', status: opened === undefined ? 'open' : 'found', evidence: opened === undefined ? [] : [opened.id] }] }],
+      actions: [opened === undefined ? { tool: 'search', args: { query: 'ECHO-12' } } : { tool: 'finish', args: {} }] };
+  } };
+}
+
+/** Mina leaves project A: her membership is revoked as of the fixture's clock. */
+export const leave = (f: OpenItemsFixtureV1) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
+  .run(f.clock().toISOString(), f.projectA, f.membership('mina'));
 
 /**
  * A client's Ask of `question` on `path` as `token` (Mina unless told otherwise); `headers` adds headers, and `body`

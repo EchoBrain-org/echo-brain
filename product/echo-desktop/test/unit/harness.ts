@@ -88,8 +88,10 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
 
 /**
  * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
- * turns and `timeline.read` reads them: in place, or at the end. A test reads
- * or seeds them, or deletes one as the host's own sign-out does.
+ * turns (in place, or at the end; one the file has in a thread stays in it),
+ * `timeline.move` moves them between threads (ADR-0056) and `timeline.read`
+ * reads them. A test reads or seeds them, or deletes one as the host's own
+ * sign-out does.
  */
 export const timelineFiles = new Map<string, TimelineTurn[]>();
 export const fileOf = (account: Expect) => `${account.authority} ${account.membership_id}`;
@@ -113,8 +115,20 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         const turn = structuredClone(params.turn as TimelineTurn);
         const kept = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
         const at = kept.findIndex(other => other.id === turn.id);
-        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? turn : other)) : [...kept, turn]);
+        const thread = kept[at]?.thread;
+        const put = thread === undefined ? turn : { ...turn, thread };
+        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
         return ok({});
+      }
+      case 'timeline.move': {
+        // Compare and set, all or nothing, as the host moves: only while the file holds every named turn where its group says.
+        const group = new Map((params.moves as { from: string | null; to: string; turns: string[] }[]).flatMap(move => move.turns.map(turn => [turn, move] as const)));
+        const file = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
+        const named = file.filter(turn => group.has(turn.id));
+        const moved = named.length === group.size && named.every(turn => (turn.thread ?? null) === group.get(turn.id)!.from);
+        const now = moved ? file.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to } : turn)) : file;
+        timelineFiles.set(fileOf(params.expect as Expect), now);
+        return ok({ moved, turns: now.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: turn.thread ?? null })) });
       }
       case 'ask.check': return fail('not_supported');
       case 'projects.activity': return ok({ items: lists().active.map(project => ({ project_id: project.project_id, latest_at: null })) });

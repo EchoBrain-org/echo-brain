@@ -3,9 +3,9 @@
 // prints while it works. Kept apart from host.ts so the whole path, Authority
 // to page, is tested as it runs.
 import {
-  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAskCheckRequestV1, validateProjectIdV1,
+  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
+import type { AskPrevious, AskProgressNotice, AskScope, AskStep, AskThread, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
@@ -15,13 +15,14 @@ import { askStepView } from './views.js';
  * global or project, asks `/v7` with its progress; the host pins it to the
  * account the page shows, as every call: a client signed in as another by
  * then asks nothing and prints no step, so the page's account check of each
- * step is the client's own. A follow-up or Ask again carries the earlier turn
- * (`previous`, ADR-0047), already checked by askPrevious.
+ * step is the client's own. `previous` (ADR-0047) and `threads` (ADR-0056)
+ * come already checked (askContext).
  */
-export function askArgv(text: string, scope: AskScope, previous?: AskPrevious): string[] {
+export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[]): string[] {
   return ['ask', `--question=${text}`, '--progress',
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
-    ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
+    ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`]),
+    ...(threads === undefined ? [] : [`--threads=${JSON.stringify(threads)}`])];
 }
 
 /** Whether the API's own validator takes `value`. */
@@ -43,6 +44,31 @@ export function askPrevious(value: unknown, question: string, scope: AskScope): 
   } catch {
     return null;
   }
+}
+
+/**
+ * The threads as the request will carry them, checked with `previous` so an Ask
+ * again carries none and both fit the body (ADR-0056); null when refused.
+ */
+export function askThreads(value: unknown, question: string, previous: AskPrevious | undefined): AskThread[] | null {
+  const request = { schema_version: 3, question, ...(previous === undefined ? {} : { previous }), threads: value };
+  return checks(validatePersonAnswerRequestV3, request) ? value as AskThread[] : null;
+}
+
+/**
+ * What an Ask carries of what the page sent: context, so what the client would
+ * refuse is left out and the Ask goes on. A refused turn takes the threads with
+ * it: listed without its own thread, they would place the question anywhere but
+ * where it was typed. `refused`: what was left out.
+ */
+export function askContext(earlier: unknown, others: unknown, question: string, scope: AskScope):
+  { readonly previous?: AskPrevious; readonly threads?: AskThread[]; readonly refused: readonly ('previous' | 'threads')[] } {
+  const previous = earlier === undefined ? undefined : askPrevious(earlier, question, scope);
+  const threads = others === undefined || previous === null ? null : askThreads(others, question, previous);
+  return {
+    ...(previous ? { previous } : {}), ...(threads ? { threads } : {}),
+    refused: [...(previous === null ? ['previous' as const] : []), ...(others !== undefined && threads === null ? ['threads' as const] : [])],
+  };
 }
 
 /** The request a check sends (C1), as the API's own validator takes it, or null when the page's items are not one. */

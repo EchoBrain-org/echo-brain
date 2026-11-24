@@ -273,7 +273,7 @@ button.account-row:hover { background: var(--raise); }
 .match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-row.suggestion.active { background: var(--selected); }
 
-/* Ask: the thread of its place, newest at the bottom (ADR-0047, ADR-0049). The latest turn and those asked since Ask opened
+/* Ask: one thread, newest at the bottom (ADR-0047, ADR-0056). The latest turn and those asked since Ask opened
    are in full; every earlier one is a line that opens it. No borders between turns: space alone sets them apart. */
 /* Ask and its bar keep a column short enough to read (ADR-0049). The full page scrolls, with the column inside it, so its
    scrollbar stays at the page edge. */
@@ -281,6 +281,34 @@ button.account-row:hover { background: var(--raise); }
 .ask { position: relative; align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--turn-gap); padding: 24px 24px 16px; }
 .ask > * { width: min(100%, var(--ask-width)); min-width: 0; margin-inline: auto; }
 .turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
+/* The thread's name, Ask's first line (ADR-0056): one quiet line that stays in reach above the turns, with its list under it.
+   It holds the page's top padding itself, so it sticks at the very top and no turn shows above it. */
+.ask:has(> .thread-head) { padding-top: 0; }
+.thread-head { position: sticky; top: 0; z-index: 2; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 0 6px; background: var(--ink); }
+.ask > .thread-head + * { margin-top: calc(12px - var(--turn-gap)); }
+/* A turn brought into view stops under the name, not behind it. */
+.ask [data-turn] { scroll-margin-top: 48px; }
+.thread-name { max-width: 100%; display: flex; align-items: center; gap: 6px; margin-left: -8px; padding: 4px 8px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; }
+.thread-name:hover, .thread-name[aria-expanded="true"] { color: var(--text); background: var(--hover); }
+.thread-name svg { flex-shrink: 0; }
+.thread-name .name, .thread-row .name, .thread-merged .name, .thread-choice .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-merged { max-width: 100%; display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--faint); }
+.thread-merged .link-button { flex-shrink: 0; }
+/* The thread list: a menu under the name, as wide as a question needs. */
+.thread-list { top: 44px; left: -8px; right: auto; width: min(440px, 100%); max-height: min(420px, calc(100vh - 220px)); gap: 4px; padding: 8px; overflow-wrap: normal; }
+/* A click on the list's own edge keeps the keyboard in it, with no ring of its own. */
+.thread-list:focus { outline: none; }
+.thread-groups { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.thread-list .menu-label { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 500; color: var(--faint); }
+.thread-item { position: relative; display: flex; align-items: center; }
+.thread-row { flex-grow: 1; min-width: 0; height: 34px; gap: 12px; }
+.thread-row .name { flex-grow: 1; }
+.thread-row .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
+.thread-row[aria-current="true"] { background: var(--selected); }
+/* Merge shows on the row the pointer or the keyboard is on, over the end of its line. */
+.thread-merge { position: absolute; right: 4px; opacity: 0; font-size: 12.5px; background: var(--raise); }
+.thread-item:hover .thread-merge, .thread-item:focus-within .thread-merge { opacity: 1; }
+.thread-item:has(.thread-merge):hover .when, .thread-item:has(.thread-merge):focus-within .when { visibility: hidden; }
 /* The question is the turn's heading: the answer's size, heavier. */
 .ask .question { font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
 .ask .project-empty { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--faint); }
@@ -315,6 +343,9 @@ button.account-row:hover { background: var(--raise); }
 .choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .choice { min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; font-size: 14px; color: var(--text); background: transparent; text-align: left; }
 .choice:hover { background: var(--hover); }
+/* A thread among them (ADR-0056): its name on one line, and its project, quieter, when it lives elsewhere. */
+.thread-choice { max-width: 100%; display: flex; align-items: center; gap: 10px; }
+.thread-choice .where { flex-shrink: 0; font-size: 12px; color: var(--faint); }
 /* Today, above the first of today's turns when earlier days have some: a quiet word between hairlines. */
 .today { flex-shrink: 0; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--faint); }
 .today::before, .today::after { content: ""; flex-grow: 1; height: 1px; background: var(--line); }
