@@ -443,11 +443,12 @@ export function homeTurns(thread: Pick<Thread, 'home' | 'turns'> | undefined, sc
 }
 
 /**
- * Whether `thread` may merge into `into` (R9): another thread, living where it does. The one rule for every merge, by
- * hand or ECHO's own, and for the row that offers it.
+ * Whether `thread` may merge into `into` (R9): another thread, living where it does, every turn of it asked there, so
+ * one an older file holds mixed never carries a turn of another scope across. The one rule for every merge, by hand or
+ * ECHO's own, and for the row that offers it.
  */
 export function mergeable(thread: Thread, into: Thread | undefined): boolean {
-  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home);
+  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home) && thread.turns.every(turn => sameScope(turn.scope, into.home));
 }
 
 /** Threads, the one asked in most recently first. */

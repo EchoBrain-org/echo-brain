@@ -440,6 +440,12 @@ export interface TimelineTurn {
   readonly thread?: string;
 }
 
+/** One turn of a move between threads (ADR-0056): the turn, and the thread it goes to, both by a turn's id. */
+export interface TimelineMove {
+  readonly turn: string;
+  readonly thread: string;
+}
+
 /**
  * Transport: the most a put may send, one turn, whose answer is at most the
  * API's PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 (1 MiB) with its sources' citations
@@ -762,8 +768,13 @@ export interface HostMethods {
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
-  /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */
+  /**
+   * Keeps one turn: a new one at the end, or one already kept in its place, in the thread the file has it in when it has
+   * it in one (only a move relabels a turn); then the oldest past the bounds go.
+   */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
+  /** Moves turns between threads in one write (ADR-0056): sets only each named turn's thread; answers the turns moved, as kept. */
+  'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { turns: TimelineTurn[] } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -871,7 +882,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.move': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',

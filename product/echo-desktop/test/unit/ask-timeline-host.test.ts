@@ -29,7 +29,8 @@ import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-ap
 import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
-  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelinePath, timelineTurn,
+  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, moveTimeline, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelineMoves,
+  timelinePath, timelineTurn, TimelineWriteUnsure,
 } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -88,6 +89,61 @@ describe('the timeline file (C5)', () => {
     putTimeline(person, ARI, marked);
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('moves turns between threads in one write, setting only their thread, and skips a turn the file does not hold (ADR-0056)', () => {
+    const first = turn(3, {});
+    const second = turn(2, { unreadable: [0] });
+    const third = turn(1);
+    for (const each of [first, second, third]) putTimeline(person, ARI, { ...each, thread: first.id });
+    vi.mocked(renameSync).mockClear();
+    const moved = moveTimeline(person, ARI, [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }, { turn: randomUUID(), thread: second.id }]);
+    expect(renameSync).toHaveBeenCalledTimes(1);
+    expect(moved).toEqual([{ ...second, thread: second.id }, { ...third, thread: second.id }]);
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }]);
+    // Nothing it holds named: nothing moves, and nothing is written.
+    vi.mocked(renameSync).mockClear();
+    expect(moveTimeline(person, ARI, [{ turn: randomUUID(), thread: first.id }])).toEqual([]);
+    expect(renameSync).not.toHaveBeenCalled();
+  });
+
+  it('keeps, on a put, the thread the file has a turn in, so a save of the whole turn never takes back a move; one saved before threads takes the thread the put names', () => {
+    const named = turn(2);
+    const older = turn(1);
+    putTimeline(person, ARI, { ...named, thread: named.id });
+    putTimeline(person, ARI, older);
+    moveTimeline(person, ARI, [{ turn: named.id, thread: older.id }]);
+    // What a check found, saved from the turn as the page had it before the move: the move stays.
+    putTimeline(person, ARI, { ...named, thread: named.id, unreadable: [0] });
+    expect(readTimeline(person, ARI)[0]).toEqual({ ...named, thread: older.id, unreadable: [0] });
+    // A turn the file holds with no thread is named by its next save.
+    putTimeline(person, ARI, { ...older, thread: older.id });
+    expect(readTimeline(person, ARI)[1]).toEqual({ ...older, thread: older.id });
+  });
+
+  it('takes only a move as the page sends one: each turn once, with its thread, both by a turn\'s id', () => {
+    const [one, two] = [randomUUID(), randomUUID()];
+    expect(timelineMoves([{ turn: one, thread: two }, { turn: two, thread: two }])).toEqual([{ turn: one, thread: two }, { turn: two, thread: two }]);
+    expect(timelineMoves([])).toEqual([]);
+    for (const bad of [null, {}, 'moves', [7], [{ turn: one }], [{ turn: one, thread: 'thread-1' }], [{ turn: 'turn-1', thread: two }], [{ turn: one, thread: two, text: 'what is open?' }],
+      [{ turn: one, thread: two }, { turn: one, thread: one }]]) expect(timelineMoves(bad)).toBeNull();
+  });
+
+  it('says a write may have happened when the folder cannot be synced after the file took its new name, and only then', () => {
+    const [first, second] = [turn(2), turn(1)];
+    for (const each of [first, second]) putTimeline(person, ARI, { ...each, thread: each.id });
+    const real = vi.mocked(fsyncSync).getMockImplementation()!;
+    vi.mocked(fsyncSync).mockImplementationOnce(real).mockImplementationOnce(() => { throw new Error('EIO'); });
+    expect(() => moveTimeline(person, ARI, [{ turn: second.id, thread: first.id }])).toThrow(TimelineWriteUnsure);
+    // The file took it all the same.
+    expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
+    // A write that fails before the new file has its name leaves the file as it was, and says so plainly.
+    vi.mocked(renameSync).mockImplementationOnce(() => { throw new Error('EIO'); });
+    let thrown: unknown;
+    try { moveTimeline(person, ARI, [{ turn: second.id, thread: second.id }]); } catch (error) { thrown = error; }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(TimelineWriteUnsure);
+    expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
   });
 
   it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {

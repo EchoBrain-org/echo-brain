@@ -88,8 +88,10 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
 
 /**
  * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
- * turns and `timeline.read` reads them: in place, or at the end. A test reads
- * or seeds them, or deletes one as the host's own sign-out does.
+ * turns (in place, or at the end; one the file has in a thread stays in it),
+ * `timeline.move` moves them between threads (ADR-0056) and `timeline.read`
+ * reads them. A test reads or seeds them, or deletes one as the host's own
+ * sign-out does.
  */
 export const timelineFiles = new Map<string, TimelineTurn[]>();
 export const fileOf = (account: Expect) => `${account.authority} ${account.membership_id}`;
@@ -113,8 +115,16 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         const turn = structuredClone(params.turn as TimelineTurn);
         const kept = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
         const at = kept.findIndex(other => other.id === turn.id);
-        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? turn : other)) : [...kept, turn]);
+        const thread = kept[at]?.thread;
+        const put = thread === undefined ? turn : { ...turn, thread };
+        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
         return ok({});
+      }
+      case 'timeline.move': {
+        const to = new Map((params.moves as { turn: string; thread: string }[]).map(move => [move.turn, move.thread]));
+        const moved = (timelineFiles.get(fileOf(params.expect as Expect)) ?? []).map(turn => (to.has(turn.id) ? { ...turn, thread: to.get(turn.id)! } : turn));
+        timelineFiles.set(fileOf(params.expect as Expect), moved);
+        return ok({ turns: structuredClone(moved.filter(turn => to.has(turn.id))) });
       }
       case 'ask.check': return fail('not_supported');
       case 'projects.activity': return ok({ items: lists().active.map(project => ({ project_id: project.project_id, latest_at: null })) });

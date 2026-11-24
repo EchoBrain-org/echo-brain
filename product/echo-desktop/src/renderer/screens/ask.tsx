@@ -945,9 +945,10 @@ export function AskView({ state }: { state: State }) {
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     savePosition({ kind: 'bottom' });
   };
-  // A new question, answer, choice or failure scrolls to the bottom, and nothing else does: turns that join or leave the
-  // thread (a merge, its Undo, the timeline read again) change how many it has and leave the reading where it is.
-  useLayoutEffect(toBottom, [thread.seq, thread.asked.at(-1), thread.asking === null, thread.failed, thread.clarify]);
+  // A thread shown (its `asked` starts anew), a new question, answer, choice or failure scrolls to the bottom, and nothing
+  // else does: turns that join or leave the thread (a merge, its Undo, the timeline read again) change how many it has
+  // and leave the reading where it is, as does a move dropping a question still being prepared (`seq`).
+  useLayoutEffect(toBottom, [thread.asked, thread.asking === null, thread.failed, thread.clarify]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
