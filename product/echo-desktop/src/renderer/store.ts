@@ -4321,7 +4321,7 @@ export function mergeThread(id: string): void {
  */
 export function mergedLine(current: State = state): string | null {
   const merged = current.ask?.merged;
-  if (!merged || current.ask?.thread !== merged.into || !undoable(merged.moved, merged.into, current.timeline.turns)) return null;
+  if (!merged || current.ask?.thread !== merged.into || !undoable(merged.moved, merged.into, threadsAt(current).ids)) return null;
   return merged.names.length === 1 ? `Merged with ${merged.names[0]}` : `Merged ${merged.names.length} threads`;
 }
 

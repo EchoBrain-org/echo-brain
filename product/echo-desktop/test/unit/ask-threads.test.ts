@@ -313,11 +313,11 @@ describe('what an Ask carries of the threads (R3, R6, R7)', () => {
     const [b1, b2] = threadIn(GLOBAL, ['Who owns billing?', 2 * DAY], ['and when?', DAY]);
     const moved = [{ turn: b1!.id, from: b1!.id }, { turn: b2!.id, from: b1!.id }];
     const merged = [a1!, { ...b1!, thread: a1!.id }, { ...b2!, thread: a1!.id }];
-    expect(undoable(moved, a1!.id, merged)).toBe(true);
+    expect(undoable(moved, a1!.id, threadIds(merged))).toBe(true);
     // One moved again, one gone, and a merge that moved nothing.
-    expect(undoable(moved, a1!.id, [a1!, merged[1]!, { ...b2!, thread: b2!.id }])).toBe(false);
-    expect(undoable(moved, a1!.id, [a1!, merged[1]!])).toBe(false);
-    expect(undoable([], a1!.id, merged)).toBe(false);
+    expect(undoable(moved, a1!.id, threadIds([a1!, merged[1]!, { ...b2!, thread: b2!.id }]))).toBe(false);
+    expect(undoable(moved, a1!.id, threadIds([a1!, merged[1]!]))).toBe(false);
+    expect(undoable([], a1!.id, threadIds(merged))).toBe(false);
   });
 });
 

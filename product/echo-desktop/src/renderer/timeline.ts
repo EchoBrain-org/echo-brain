@@ -493,11 +493,11 @@ export interface MovedTurn {
 }
 
 /**
- * Whether a merge into `into` can still be undone: every turn it moved is still kept and still in that thread. One that
- * has gone, or moved again, means the merge is no longer what Undo would take back.
+ * Whether a merge into `into` can still be undone, given the thread each kept turn is in now (threadIds): every turn it
+ * moved is still kept and still in that thread. One that has gone, or moved again, means the merge is no longer what
+ * Undo would take back.
  */
-export function undoable(moved: readonly MovedTurn[], into: string, turns: readonly TimelineTurn[]): boolean {
-  const ids = threadIds(turns);
+export function undoable(moved: readonly MovedTurn[], into: string, ids: ReadonlyMap<string, string>): boolean {
   return moved.length > 0 && moved.every(({ turn }) => ids.get(turn) === into);
 }
 
