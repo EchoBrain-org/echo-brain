@@ -3855,7 +3855,8 @@ function askedBefore(turn: TimelineTurn): readonly TimelineTurn[] {
  * no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost between
  * this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
  * The one check covers the thread's older turns a follow-up carries too, so every sentence that goes was found readable
- * just now.
+ * just now. What a check says is good for five minutes from when it went (C5), here as everywhere: one that comes back
+ * later than that, its requests having taken so long, is as none, and the request goes with questions only.
  */
 async function questionOf(turn: TimelineTurn): Promise<Derived> {
   const chain: TimelineTurn[] = [];
@@ -3864,7 +3865,9 @@ async function questionOf(turn: TimelineTurn): Promise<Derived> {
     link = link.follows === null ? undefined : turnOf(link.follows);
   }
   const informed = [...new Set((chain.length > 0 ? chain : [turn]).flatMap(link => [link, ...askedBefore(link)]))];
-  const found = await checkTurns(informed);
+  const went = Date.now();
+  const checked = await checkTurns(informed);
+  const found = Date.now() - went < CHECK_FRESH_MS ? checked : null;
   // Whole only when the chain ends at a turn that followed none.
   const readable = found !== null && chain.at(-1)?.follows === null && informed.every(each => turnReadable(each, found[each.id]));
   const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);

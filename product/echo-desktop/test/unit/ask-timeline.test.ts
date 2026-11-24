@@ -1046,6 +1046,32 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       expect(JSON.stringify(sent(1).previous)).not.toContain(resolved);
     });
 
+    it('counts a check that comes back after its five minutes as none: the typed words go, with no sentence, however readable it found everything', async () => {
+      // The earlier turn cites more than one request can ask about: its check goes in two, one after the other.
+      const many = Array.from({ length: 5000 }, (_, at) => ticket(`THERM-${1000 + at}`, String(21000 + at)));
+      const earlier = turn(resolved, 2 * DAY, answerOf(resolved, many, [['THERM-1000 is open.', [0]]]), { text: typed, typed });
+      seed(earlier);
+      checks = allSame;
+      const store = await startStore();
+      await reopen(store);
+      const before = calls('ask.check').length;
+      const requests = [held.hold('ask.check'), held.hold('ask.check')];
+      const slow = store.ask('who owns it?');
+      await flush();
+      requests[0]!(allSame(calls('ask.check')[before]!.items as never));
+      await flush();
+      // The second request answers five minutes after the check went.
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      requests[1]!(allSame(calls('ask.check')[before + 1]!.items as never));
+      await slow;
+      expect(calls('ask.check')).toHaveLength(before + 2);
+      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [] });
+      // The same check answered in time: the resolved question goes, with the sentence found readable.
+      store.toggleTurn(earlier.id);
+      await store.ask('and since when?');
+      expect(sent(1).previous).toMatchObject({ purpose: 'follow_up', question: resolved, statements: [{ text: 'THERM-1000 is open.' }] });
+    });
+
     it('sends no stored choice once a source of the earlier turn is gone: it asks the person\'s own words again', async () => {
       const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
       rpc.mockImplementation(rpcFor(held, {
