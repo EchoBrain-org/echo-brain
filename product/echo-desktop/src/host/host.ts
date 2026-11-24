@@ -645,7 +645,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       const { expect, moves: given } = params as Params<'timeline.move'>;
       const moves = timelineMoves(given);
       if (moves === null) return code('invalid_request');
-      return onDevice(expect, directory => ({ turns: moveTimeline(directory, expect, moves) }));
+      return onDevice(expect, directory => moveTimeline(directory, expect, moves));
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

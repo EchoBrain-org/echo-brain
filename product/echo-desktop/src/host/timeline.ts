@@ -21,7 +21,7 @@ import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path';
 import {
   ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
-  type TimelineAnswer, type TimelineMove, type TimelineTurn,
+  type TimelineAnswer, type TimelineLabel, type TimelineMove, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -73,22 +73,26 @@ const stored = (value: unknown): value is StoredTurn => record(value) && typeof 
 /**
  * Every turn the account's file holds, oldest first, as it holds them, less
  * those an older desktop saved that no page draws now; each id once, its
- * first. A missing or unreadable file, or one that is not a timeline file,
- * holds none.
+ * first. A missing file holds none. One that cannot be read, or is not a
+ * timeline file, holds none too, to be replaced by the next put; read
+ * `strict`ly, as a move reads it, that is a failure instead.
  */
-function storedTurns(personDirectory: string, account: Expect): StoredTurn[] {
-  if (folder(personDirectory, 'read') === null) return [];
+function storedTurns(personDirectory: string, account: Expect, strict = false): StoredTurn[] {
+  const unread = (why: string): StoredTurn[] => { if (strict) throw new Error(why); return []; };
+  if (folder(personDirectory, 'read') === null) return unread('The Ask timeline folder cannot be read');
   const path = timelinePath(personDirectory, account);
   try {
     const found = lstatSync(path);
-    if (!found.isFile() || found.size > MAX_TIMELINE_FILE_BYTES) return [];
+    if (!found.isFile() || found.size > MAX_TIMELINE_FILE_BYTES) return unread('The Ask timeline is not a timeline file');
     const value = JSON.parse(readFileSync(path, 'utf8')) as unknown;
     const file = value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-    if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) return [];
+    if (Object.keys(file).sort().join() !== 'kind,schema_version,turns' || file.schema_version !== 1 || file.kind !== KIND || !Array.isArray(file.turns)) {
+      return unread('The Ask timeline is not a timeline file');
+    }
     const seen = new Set<string>();
     return file.turns.filter((turn): turn is StoredTurn => stored(turn) && !retired(turn) && !seen.has(turn.id) && Boolean(seen.add(turn.id)));
-  } catch {
-    return [];
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : unread('The Ask timeline could not be read');
   }
 }
 
@@ -133,16 +137,25 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
 }
 
 /**
- * A move between threads (ADR-0056), in one write: each turn named that the
- * file holds takes the thread named for it, and nothing else of it changes; a
- * turn the file does not hold is skipped. Answers the turns moved, as the file
- * now holds them.
+ * A move between threads (ADR-0056), compare-and-set, in one write. Only when
+ * every named turn the file holds is in the thread its group says the page
+ * believes (`from`, null for none) does each take its group's `to`, nothing
+ * else of it changing; otherwise nothing moves. A turn the file does not hold
+ * is skipped. Either way it answers whether it moved them, and the thread the
+ * file has each named turn it holds in now. The file is read strictly: one
+ * that cannot be read, or is not a timeline file, is a failure, never a file
+ * with nothing to move.
  */
-export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): TimelineTurn[] {
-  const to = new Map(moves.map(move => [move.turn, move.thread]));
-  const written = rewriteTimeline(personDirectory, account, turns => (turns.some(turn => to.has(turn.id))
-    ? turns.map(turn => (to.has(turn.id) ? { ...turn, thread: to.get(turn.id)! } : turn)) : null));
-  return written.filter(turn => to.has(turn.id)).map(timelineTurn).filter((turn): turn is TimelineTurn => turn !== null);
+export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): { moved: boolean; turns: TimelineLabel[] } {
+  const group = new Map(moves.flatMap(move => move.turns.map(turn => [turn, move] as const)));
+  const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' ? turn.thread : null);
+  let moved = true;
+  const turns = rewriteTimeline(personDirectory, account, (held) => {
+    const named = held.filter(turn => group.has(turn.id));
+    moved = named.every(turn => label(turn) === group.get(turn.id)!.from);
+    return moved && named.length > 0 ? held.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to } : turn)) : null;
+  }, true);
+  return { moved, turns: turns.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: label(turn) })) };
 }
 
 /**
@@ -156,14 +169,16 @@ export class TimelineWriteUnsure extends Error {}
  * this page cannot show included; null: nothing to change), then pruned and
  * written whole, as the person session's store writes its own: every byte and
  * then the new name on disk before it returns, so a crash leaves the old file
- * or the new one, never part of one. Answers the turns written, none when
- * nothing changed.
+ * or the new one, never part of one. Read `strict`ly (storedTurns) for a
+ * move. Answers the turns the file holds after: those written, or those read
+ * when nothing changed.
  */
-function rewriteTimeline(personDirectory: string, account: Expect, change: (turns: StoredTurn[]) => StoredTurn[] | null): StoredTurn[] {
+function rewriteTimeline(personDirectory: string, account: Expect, change: (turns: StoredTurn[]) => StoredTurn[] | null, strict = false): StoredTurn[] {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
-  const changed = change(storedTurns(personDirectory, account));
-  if (changed === null) return [];
+  const read = storedTurns(personDirectory, account, strict);
+  const changed = change([...read]);
+  if (changed === null) return read;
   const turns = pruneTurns(changed);
   const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns }), 'utf8');
   const path = timelinePath(personDirectory, account);
@@ -350,12 +365,17 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/** A move as the page sends one (ADR-0056): each turn once, with the thread it goes to, both by a turn's id; null for anything else. */
+/**
+ * A move as the page sends one (ADR-0056): groups of turns, each with the thread the page believes the file has them in
+ * (null: none) and the thread they go to, all by a turn's id, and each turn once in the whole move; null for anything else.
+ */
 export function timelineMoves(value: unknown): TimelineMove[] | null {
   if (!Array.isArray(value)) return null;
-  const moves = value.filter((move): move is TimelineMove => record(move) && Object.keys(move).sort().join() === 'thread,turn'
-    && string(move.turn) && ID.test(move.turn) && string(move.thread) && ID.test(move.thread));
-  return moves.length === value.length && new Set(moves.map(move => move.turn)).size === moves.length ? moves : null;
+  const id = (each: unknown): each is string => string(each) && ID.test(each);
+  const moves = value.filter((move): move is TimelineMove => record(move) && Object.keys(move).sort().join() === 'from,to,turns'
+    && (move.from === null || id(move.from)) && id(move.to) && Array.isArray(move.turns) && move.turns.length > 0 && move.turns.every(id));
+  const turns = moves.flatMap(move => move.turns);
+  return moves.length === value.length && new Set(turns).size === turns.length ? moves : null;
 }
 
 /** A turn as a put writes it, or null for anything else. */

@@ -273,10 +273,14 @@ interface PersonAnswerResponseV8 {
   Every turn saved from now on has it. The host accepts only a turn id there.
 - `'ask.run'` params gain `threads?`; `Answer` gains `thread?` and `merge?`,
   which are never saved on a turn.
-- A merge is one `timeline.move`: in one write the host sets only each moved
-  turn's thread to the open thread's id, and answers the turns moved. Undo is
-  one move back. A `timeline.put` keeps the thread the file has a turn in,
-  so only a move relabels a turn.
+- A merge is one `timeline.move` of `{ from, to, turns }` groups, `from`
+  being the thread the page has the turns in (null for none). It is
+  compare-and-set: in one write the host sets only each turn's thread, and
+  only when the file has every named turn in its group's `from`; otherwise it
+  moves nothing. Either way it answers where the file has each named turn it
+  holds, which the page then shows. Undo is one move back. A `timeline.put`
+  keeps the thread the file has a turn in, so only a move relabels a turn.
+- A turn records `carried`, the ids of the turns its request carried (R10).
 - A thread's sources are checked when it opens, as a place's thread is today,
   with the five-minute freshness kept per thread.
 - A list the host's validator refuses is not sent: the Ask goes without

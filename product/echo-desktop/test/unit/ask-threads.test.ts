@@ -1230,7 +1230,10 @@ describe('merging threads, and Undo', () => {
   /** Each turn's thread as the page holds it, by what was typed for it: to compare with the file's (filed). */
   const shown = (store: Store) => Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]));
   /** The moves each `timeline.move` asked for, in order. */
-  const moves = () => calls('timeline.move').map(params => params.moves as { turn: string; thread: string }[]);
+  const moves = () => calls('timeline.move').map(params => (params.moves as { from: string | null; to: string; turns: string[] }[])
+    .flatMap(group => group.turns.map(turn => ({ turn, thread: group.to }))));
+  /** The groups each `timeline.move` sent, as sent. */
+  const groups = () => calls('timeline.move').map(params => params.moves as { from: string | null; to: string; turns: string[] }[]);
   /** From here, a move is taken by the file at once and its reply waits until the returned function is called. */
   const gated = () => {
     let open!: (value?: unknown) => void;
@@ -1292,12 +1295,88 @@ describe('merging threads, and Undo', () => {
     const store = await opened();
     store.mergeThread(billing[0]!.id);
     await flush();
+    // Sent in groups by where the page has each turn, the file to have it there still: the older turn in none.
+    expect(groups()[0]).toEqual([{ from: billing[0]!.id, to: pilot[0]!.id, turns: [billing[0]!.id] }, { from: null, to: pilot[0]!.id, turns: [older.id] }]);
     expect(filed()['when is it due?']).toBe(pilot[0]!.id);
     await store.undoMerge();
     await flush();
-    expect(moves()[1]).toContainEqual({ turn: older.id, thread: billing[0]!.id });
+    expect(groups()[1]).toEqual([{ from: pilot[0]!.id, to: billing[0]!.id, turns: [billing[0]!.id, older.id] }]);
     expect(kept().find(each => each.id === older.id)!.thread).toBe(billing[0]!.id);
     expect(shown(store)).toEqual(filed());
+  });
+
+  it('moves nothing when the file has a turn elsewhere than the page shows it: the page then shows where the file has it, and says the questions had moved', async () => {
+    const ledger = threadIn(GLOBAL, ['Where is the ledger?', 6 * DAY]);
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 5 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 4 * DAY]);
+    seed(...ledger, ...billing, ...pilot);
+    const store = await startStore();
+    const { THREADS_MOVED, THREADS_UNCONFIRMED } = await import('../../src/renderer/store.js');
+    // The ledger's thread merged into billing's: the file takes it, and the reply is lost. The page shows nothing moved.
+    await store.openThread(billing[0]!.id);
+    await flush();
+    moveEnds = 'lost';
+    store.mergeThread(ledger[0]!.id);
+    await flush();
+    moveEnds = null;
+    expect(store.getState().toast).toBe(THREADS_UNCONFIRMED);
+    expect(filed()['Where is the ledger?']).toBe(billing[0]!.id);
+    expect(shown(store)['Where is the ledger?']).toBe(ledger[0]!.id);
+    // From the page as it stands, the ledger's thread merged into the pilot's: the file refuses, and moves nothing.
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    store.mergeThread(ledger[0]!.id);
+    await flush();
+    expect(groups().at(-1)).toEqual([{ from: ledger[0]!.id, to: pilot[0]!.id, turns: [ledger[0]!.id] }]);
+    expect(store.getState().toast).toBe(THREADS_MOVED);
+    expect(filed()['Where is the ledger?']).toBe(billing[0]!.id);
+    expect(shown(store)).toEqual(filed());
+    expect(store.askThread().map(each => each.text)).toEqual(['When does the pilot start?']);
+    expect(store.mergedLine()).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
+    // So no Undo can take the ledger back from where it was not: it stays in billing's thread.
+    await store.undoMerge();
+    await flush();
+    expect(filed()['Where is the ledger?']).toBe(billing[0]!.id);
+  });
+
+  it('takes away an earlier merge\'s Undo once a later move\'s outcome is not known: it would move turns the file may hold elsewhere', async () => {
+    const { billing, pilot } = seeded();
+    seed(...kept(), ...threadIn(GLOBAL, ['Where is the ledger?', HOUR]));
+    const ledger = kept().at(-1)!;
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    moveEnds = 'timeout';
+    store.mergeThread(ledger.id);
+    await flush();
+    expect(store.getState().ask?.merged).toBeNull();
+    expect(store.mergedLine()).toBeNull();
+    expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
+  });
+
+  it('says nothing moved when the file holds none of the turns a merge names: their answers were never saved', async () => {
+    const { pilot } = seeded();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    unsaved.add('What is the lunch order?');
+    const store = await startStore();
+    // A question of its own, from Home: its answer shows from memory only.
+    await store.ask('What is the lunch order?');
+    await flush();
+    const lunch = store.getState().timeline.turns.at(-1)!;
+    expect(kept().map(each => each.id)).not.toContain(lunch.id);
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    store.mergeThread(lunch.id);
+    await flush();
+    expect(groups().at(-1)).toEqual([{ from: lunch.id, to: pilot[0]!.id, turns: [lunch.id] }]);
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(store.threads().find(thread => thread.id === lunch.id)).toBeDefined();
+    expect(store.mergedLine()).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
   });
 
   it('never merges across homes, by hand or on an answer\'s word (R9): the thread of another home stays where it is, with no line and nothing moved', async () => {

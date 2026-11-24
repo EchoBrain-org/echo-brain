@@ -116,14 +116,17 @@ copy that a unit test proves equivalent.
   project's page), and Merge relabels a thread's turns into the open one.
   Every turn of a thread was asked in its home: a thread is asked in only
   there, and only threads of one home, every turn of them asked there,
-  merge. A merge or its Undo is one `timeline.move`, which sets only each
-  named turn's thread in one write and answers the turns moved; nothing shows
-  moved before that answer, and until it comes nothing else asks, jumps,
-  merges or undoes. A move the host refused moves nothing and the page says
-  so; one with no answer to go by (none in time, or none at all) changes
-  nothing on the page and says ECHO could not confirm it, since only reading
-  the file again, as a restart does, says what it holds. `timeline.put` keeps
-  the thread the file has a turn in, so a turn saved whole never takes a move
+  merge. A merge or its Undo is one compare-and-set `timeline.move`: groups
+  of turns with the thread the page has them in, which the host, reading the
+  file strictly, moves in one write only while the file has every named turn
+  there, answering where it has each; nothing shows moved before that
+  answer, and until it comes nothing else asks, jumps, merges or undoes. A
+  move the host refused moves nothing and the page says so (and shows where
+  the file has the turns, when they had moved); one with no answer to go by
+  (none in time, or none at all) changes nothing on the page, takes away any
+  Undo, and says ECHO could not confirm it, since only reading the file
+  again, as a restart does, says what it holds. `timeline.put` keeps the
+  thread the file has a turn in, so a turn saved whole never takes a move
   back. A person is in a
   thread once they have asked in it or picked it since Ask opened, its own row
   in the list included; the

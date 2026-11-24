@@ -448,18 +448,29 @@ export interface TimelineTurn {
   readonly carried?: readonly string[];
 }
 
-/** One turn of a move between threads (ADR-0056): the turn, and the thread it goes to, both by a turn's id. */
+/**
+ * One group of a move between threads (ADR-0056): turns, by id, the page believes the file has in thread `from` (null:
+ * in none, saved before threads), all going to thread `to`. Threads are named by a turn's id.
+ */
 export interface TimelineMove {
+  readonly from: string | null;
+  readonly to: string;
+  readonly turns: readonly string[];
+}
+
+/** A turn's thread as the file holds it: null for none. */
+export interface TimelineLabel {
   readonly turn: string;
-  readonly thread: string;
+  readonly thread: string | null;
 }
 
 /**
  * Transport: the most a put may send, one turn, whose answer is at most the
  * API's PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 (1 MiB) with its sources' citations
- * kept beside them, so four times the answer's bound. Every other call keeps
- * the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed renderer imports
- * this file; a test holds it above the API's bound.
+ * kept beside them, so four times the answer's bound; a move between threads
+ * takes the same, its ids naming a thread of any length the file holds. Every
+ * other call keeps the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed
+ * renderer imports this file; a test holds it above the API's bound.
  */
 export const MAX_TIMELINE_PUT_BYTES = 4 * 1024 * 1024;
 
@@ -781,8 +792,12 @@ export interface HostMethods {
    * it in one (only a move relabels a turn); then the oldest past the bounds go.
    */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
-  /** Moves turns between threads in one write (ADR-0056): sets only each named turn's thread; answers the turns moved, as kept. */
-  'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { turns: TimelineTurn[] } };
+  /**
+   * Moves turns between threads in one write (ADR-0056), compare-and-set: only when every named turn the file holds is in
+   * its group's `from`; then sets only each one's thread. Answers whether it moved them, and the threads the file has the
+   * named turns it holds in now; a turn it does not hold is left out.
+   */
+  'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { moved: boolean; turns: TimelineLabel[] } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -1085,11 +1100,12 @@ export function changesLogLine(params: unknown): string | null {
 
 /**
  * The most a call's parameters may take at the broker: a timeline put and
- * Copy answer each carry one whole answer, every other call (an Ask, a note)
- * the Authority's Person request bound, MAX_REQUEST_BYTES.
+ * Copy answer each carry one whole answer, and a timeline move takes as much,
+ * every other call (an Ask, a note) the Authority's Person request bound,
+ * MAX_REQUEST_BYTES.
  */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
+  return method === 'timeline.put' || method === 'timeline.move' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;

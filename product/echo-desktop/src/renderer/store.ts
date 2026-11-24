@@ -8,7 +8,7 @@ import type {
   AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
-  RunsResults, SourceEvidence, TimelineMove, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
+  RunsResults, SourceEvidence, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
 import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
@@ -4460,6 +4460,8 @@ function showThread(id: string, at: string | null, entered: boolean, forQuestion
 export const THREADS_NOT_SAVED = 'Some questions could not be moved on this computer, so they are where they were.';
 /** What the person is told when ECHO cannot tell whether a merge, or its Undo, was kept: the file says, once it is read again. */
 export const THREADS_UNCONFIRMED = 'ECHO could not confirm this change; it will show correctly after ECHO restarts.';
+/** What the person is told when a merge, or its Undo, found its questions elsewhere than the page had them: nothing moved. */
+export const THREADS_MOVED = 'That change could not be made because the questions had moved; they show where they are now.';
 
 /**
  * Whether Ask is busy: a question is on its way, or turns are moving between threads (TimelineState.moving). The one
@@ -4475,37 +4477,62 @@ function unconfirmed(failure: Failure): boolean {
   return failure.code === 'timeout' || failure.code === 'host_restarted' || failure.mutation_outcome === 'unknown';
 }
 
+/** A turn in the thread the file has it in (null: none, its thread worked out from what it followed), and otherwise as it was. */
+function labelled(turn: TimelineTurn, thread: string | null): TimelineTurn {
+  if (thread !== null) return turn.thread === thread ? turn : { ...turn, thread };
+  const { thread: _none, ...rest } = turn;
+  return rest;
+}
+
 /**
- * Moves turns between threads (ADR-0056), in one step the file confirms: the
- * host sets the thread of each turn named in one write, and answers the turns
- * it moved. Nothing shows moved before then. While it lasts the timeline is
- * `moving`, so no question, jump, merge or Undo starts (askBusy), and a
- * question still being prepared (Ask again's source check) is dropped with the
- * Ask it was prepared for (`ask.seq`). On the reply, for the same account and
- * move: a success names each turn moved with its thread here, and changes
- * nothing else of it, so what a save made of it meanwhile stays; a failure the
- * host answered moved nothing, and the page says so; with no answer to go by
- * (none in time, or none at all) nothing changes here either, and the page
- * says ECHO could not confirm it: only reading the file again, as a restart
- * does, says what it holds. Answers the turns moved, 'failed', or null when
- * not known (or for a timeline forgotten meanwhile).
+ * Moves turns between threads (ADR-0056), each by id to the thread it goes
+ * to, in one compare-and-set step the file confirms: the host moves them in
+ * one write only while it has each in the thread it has here (`from`), and
+ * answers where it has each now. Nothing shows moved before then. While it
+ * lasts the timeline is `moving`, so no question, jump, merge or Undo starts
+ * (askBusy), and a question still being prepared (Ask again's source check)
+ * is dropped with the Ask it was prepared for (`ask.seq`). On the reply, for
+ * the same account and move, the page takes where the file has each named turn
+ * (its `thread` alone, so what a save made of it meanwhile stays): moved, that
+ * is the move; refused because one was elsewhere than the page had it, nothing
+ * moved and the page says the questions had moved; a turn the file does not
+ * hold is skipped, and a move of none moved nothing and says so. A failure the
+ * host answered moved nothing either, and the page says so. With no answer to
+ * go by (none in time, or none at all) nothing changes here, any Undo goes,
+ * since it would move turns the file may hold elsewhere, and the page says
+ * ECHO could not confirm it: only reading the file again, as a restart does,
+ * says what it holds. Answers the turns moved, 'failed', or null when not
+ * known (or for a timeline forgotten meanwhile).
  */
-async function moveTurns(moves: readonly TimelineMove[]): Promise<readonly TimelineTurn[] | 'failed' | null> {
+async function moveTurns(moves: readonly { readonly turn: string; readonly to: string }[]): Promise<readonly string[] | 'failed' | null> {
   const account = expect();
-  if (!account || moves.length === 0) return null;
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  const groups = new Map<string, { from: string | null; to: string; turns: string[] }>();
+  for (const { turn, to } of moves) {
+    const from = byId.has(turn) ? byId.get(turn)!.thread ?? null : undefined;
+    if (from === undefined) continue;
+    const group = groups.get(`${from} ${to}`) ?? { from, to, turns: [] };
+    group.turns.push(turn);
+    groups.set(`${from} ${to}`, group);
+  }
+  if (!account || groups.size === 0) return null;
   const mine = ++moveSeq;
   setTimeline({ ...state.timeline, moving: true });
   if (state.ask) set({ ask: { ...state.ask, seq: ++seq } });
   try {
-    const result = await rpc('timeline.move', { expect: account, moves: [...moves] }).catch(() => null);
+    const result = await rpc('timeline.move', { expect: account, moves: [...groups.values()] }).catch(() => null);
     if (mine !== moveSeq || !sameAccount(account)) return null;
     if (result?.ok) {
-      const moved = new Map(result.value.turns.flatMap(turn => (turn.thread === undefined ? [] : [[turn.id, turn.thread] as const])));
-      setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => (moved.has(turn.id) ? { ...turn, thread: moved.get(turn.id)! } : turn)) });
-      return result.value.turns;
+      const { moved, turns } = result.value;
+      const held = new Map(turns.map(each => [each.turn, each.thread]));
+      setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => (held.has(turn.id) ? labelled(turn, held.get(turn.id)!) : turn)) });
+      if (moved && turns.length > 0) return turns.map(each => each.turn);
+      set({ toast: moved ? THREADS_NOT_SAVED : THREADS_MOVED });
+      return 'failed';
     }
     if (result !== null) accountLost(result.failure);
     const failed = result !== null && !unconfirmed(result.failure);
+    if (!failed && state.ask?.merged) set({ ask: { ...state.ask, merged: null } });
     set({ toast: failed ? THREADS_NOT_SAVED : THREADS_UNCONFIRMED });
     return failed ? 'failed' : null;
   } finally {
@@ -4528,12 +4555,13 @@ async function mergeInto(into: string, ids: readonly string[]): Promise<void> {
   const merging = ids.flatMap(id => threadOf(id) ?? []).filter(thread => mergeable(thread, target));
   const from = new Map(merging.flatMap(thread => thread.turns.map(turn => [turn.id, thread] as const)));
   if (from.size === 0) return;
-  const moved = await moveTurns([...from.keys()].map(turn => ({ turn, thread: into })));
+  const moved = await moveTurns([...from.keys()].map(turn => ({ turn, to: into })));
   const view = state.ask;
-  if (!Array.isArray(moved) || moved.length === 0 || !view || threadShown()?.id !== into) return;
-  const joined = merging.filter(thread => moved.some(turn => from.get(turn.id) === thread));
-  set({ ask: { ...view, merged: { into, moved: moved.map(turn => ({ turn: turn.id, from: from.get(turn.id)!.id })), names: joined.map(thread => thread.name) } } });
-  void checkTurns(moved.flatMap(turn => turnOf(turn.id) ?? []).filter(turn => freshChecksOf(turn) === undefined && !checking.has(turn.id)));
+  if (!Array.isArray(moved) || !view || threadShown()?.id !== into) return;
+  const joined = new Set(moved.map(id => from.get(id)!));
+  set({ ask: { ...view, merged: { into, moved: moved.map(id => ({ turn: id, from: from.get(id)!.id })), names: merging.filter(thread => joined.has(thread)).map(thread => thread.name) } } });
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  void checkTurns(moved.flatMap(id => byId.get(id) ?? []).filter(turn => freshChecksOf(turn) === undefined && !checking.has(turn.id)));
 }
 
 /**
@@ -4570,7 +4598,7 @@ export async function undoMerge(): Promise<void> {
   const merged = state.ask?.merged;
   if (!merged || askBusy()) return;
   if (mergedLine() === null) { set({ ask: { ...state.ask!, merged: null } }); return; }
-  const moved = await moveTurns(merged.moved.map(({ turn, from }) => ({ turn, thread: from })));
+  const moved = await moveTurns(merged.moved.map(({ turn, from }) => ({ turn, to: from })));
   if (moved !== 'failed' && state.ask?.merged === merged) set({ ask: { ...state.ask, merged: null } });
   // The pane may be on a turn that just left the thread.
   if (Array.isArray(moved) && state.ask) startSources();

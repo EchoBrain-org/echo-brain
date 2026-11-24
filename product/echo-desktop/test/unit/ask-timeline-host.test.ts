@@ -97,14 +97,57 @@ describe('the timeline file (C5)', () => {
     const third = turn(1);
     for (const each of [first, second, third]) putTimeline(person, ARI, { ...each, thread: first.id });
     vi.mocked(renameSync).mockClear();
-    const moved = moveTimeline(person, ARI, [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }, { turn: randomUUID(), thread: second.id }]);
+    const absent = randomUUID();
+    const moved = moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }]);
     expect(renameSync).toHaveBeenCalledTimes(1);
-    expect(moved).toEqual([{ ...second, thread: second.id }, { ...third, thread: second.id }]);
+    // The turn it does not hold is left out of the answer: skipped, and said so.
+    expect(moved).toEqual({ moved: true, turns: [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }] });
     expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }]);
-    // Nothing it holds named: nothing moves, and nothing is written.
+    // Nothing it holds named: nothing moves, nothing is written, and the answer names no turn.
     vi.mocked(renameSync).mockClear();
-    expect(moveTimeline(person, ARI, [{ turn: randomUUID(), thread: first.id }])).toEqual([]);
+    expect(moveTimeline(person, ARI, [{ from: first.id, to: first.id, turns: [absent] }])).toEqual({ moved: true, turns: [] });
     expect(renameSync).not.toHaveBeenCalled();
+  });
+
+  it('moves nothing when a named turn is not in the thread the page believes, and answers where the file has each named turn', () => {
+    const [first, second, older] = [turn(3), turn(2), turn(1)];
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, { ...second, thread: first.id });
+    // Saved before threads: in none, as far as the file goes.
+    putTimeline(person, ARI, older);
+    const before = readFileSync(timelinePath(person, ARI), 'utf8');
+    vi.mocked(renameSync).mockClear();
+    // The page believes the second is in its own thread: the file says otherwise, so the whole move is refused.
+    const refused = moveTimeline(person, ARI, [{ from: first.id, to: older.id, turns: [first.id] }, { from: second.id, to: older.id, turns: [second.id] }]);
+    expect(refused).toEqual({ moved: false, turns: [{ turn: first.id, thread: first.id }, { turn: second.id, thread: first.id }] });
+    expect(renameSync).not.toHaveBeenCalled();
+    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
+    // In none, a turn saved before threads moves from null, and the answer says where it is now.
+    expect(moveTimeline(person, ARI, [{ from: null, to: first.id, turns: [older.id] }])).toEqual({ moved: true, turns: [{ turn: older.id, thread: first.id }] });
+    expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
+  });
+
+  it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds nothing to move', () => {
+    const first = turn(1);
+    const move = [{ from: first.id, to: first.id, turns: [first.id] }];
+    expect(moveTimeline(person, ARI, move)).toEqual({ moved: true, turns: [] });
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    const path = timelinePath(person, ARI);
+    for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {
+      writeFileSync(path, text, { mode: 0o600 });
+      expect(() => moveTimeline(person, ARI, move)).toThrow();
+      expect(readFileSync(path, 'utf8')).toBe(text);
+    }
+    // A file no one may read: a move fails, where a read or a put takes it as empty.
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    chmodSync(path, 0o000);
+    try {
+      expect(() => moveTimeline(person, ARI, move)).toThrow();
+      expect(readTimeline(person, ARI)).toEqual([]);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
   });
 
   it('keeps, on a put, the thread the file has a turn in, so a save of the whole turn never takes back a move; one saved before threads takes the thread the put names', () => {
@@ -112,7 +155,7 @@ describe('the timeline file (C5)', () => {
     const older = turn(1);
     putTimeline(person, ARI, { ...named, thread: named.id });
     putTimeline(person, ARI, older);
-    moveTimeline(person, ARI, [{ turn: named.id, thread: older.id }]);
+    moveTimeline(person, ARI, [{ from: named.id, to: older.id, turns: [named.id] }]);
     // What a check found, saved from the turn as the page had it before the move: the move stays.
     putTimeline(person, ARI, { ...named, thread: named.id, unreadable: [0] });
     expect(readTimeline(person, ARI)[0]).toEqual({ ...named, thread: older.id, unreadable: [0] });
@@ -121,12 +164,14 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)[1]).toEqual({ ...older, thread: older.id });
   });
 
-  it('takes only a move as the page sends one: each turn once, with its thread, both by a turn\'s id', () => {
-    const [one, two] = [randomUUID(), randomUUID()];
-    expect(timelineMoves([{ turn: one, thread: two }, { turn: two, thread: two }])).toEqual([{ turn: one, thread: two }, { turn: two, thread: two }]);
+  it('takes only a move as the page sends one: groups of turns, each from a thread or none to a thread, all by a turn\'s id, each turn once', () => {
+    const [one, two, three] = [randomUUID(), randomUUID(), randomUUID()];
+    const good = [{ from: one, to: two, turns: [one, two] }, { from: null, to: two, turns: [three] }];
+    expect(timelineMoves(good)).toEqual(good);
     expect(timelineMoves([])).toEqual([]);
-    for (const bad of [null, {}, 'moves', [7], [{ turn: one }], [{ turn: one, thread: 'thread-1' }], [{ turn: 'turn-1', thread: two }], [{ turn: one, thread: two, text: 'what is open?' }],
-      [{ turn: one, thread: two }, { turn: one, thread: one }]]) expect(timelineMoves(bad)).toBeNull();
+    for (const bad of [null, {}, 'moves', [7], [{ from: one, to: two }], [{ from: one, to: two, turns: [] }], [{ from: 'thread-1', to: two, turns: [one] }],
+      [{ from: one, to: 'thread-1', turns: [one] }], [{ from: one, to: two, turns: ['turn-1'] }], [{ from: one, to: two, turns: [one], text: 'what is open?' }],
+      [{ from: one, to: two, turns: [one, one] }], [{ from: one, to: two, turns: [one] }, { from: two, to: one, turns: [one] }]]) expect(timelineMoves(bad)).toBeNull();
   });
 
   it('says a write may have happened when the folder cannot be synced after the file took its new name, and only then', () => {
@@ -134,17 +179,18 @@ describe('the timeline file (C5)', () => {
     for (const each of [first, second]) putTimeline(person, ARI, { ...each, thread: each.id });
     const real = vi.mocked(fsyncSync).getMockImplementation()!;
     vi.mocked(fsyncSync).mockImplementationOnce(real).mockImplementationOnce(() => { throw new Error('EIO'); });
-    expect(() => moveTimeline(person, ARI, [{ turn: second.id, thread: first.id }])).toThrow(TimelineWriteUnsure);
+    expect(() => moveTimeline(person, ARI, [{ from: second.id, to: first.id, turns: [second.id] }])).toThrow(TimelineWriteUnsure);
     // The file took it all the same.
     expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
     // A write that fails before the new file has its name leaves the file as it was, and says so plainly.
     vi.mocked(renameSync).mockImplementationOnce(() => { throw new Error('EIO'); });
     let thrown: unknown;
-    try { moveTimeline(person, ARI, [{ turn: second.id, thread: second.id }]); } catch (error) { thrown = error; }
+    try { moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id] }]); } catch (error) { thrown = error; }
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBeInstanceOf(TimelineWriteUnsure);
     expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
   });
+
 
   it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {
     const [first, second] = [turn(2), turn(1)];
