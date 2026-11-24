@@ -2,7 +2,8 @@
 
 **Status:** Current. Verified against `origin/main` at
 `aa92138e4a7d8386b2ff51a95c7d2f82e86236be` (2026-10-30); updated 2026-11-08
-for the lean-down (sweeps and per-note search hints retired).
+for the lean-down (sweeps and per-note search hints retired) and 2026-11-23
+for the removal of research budgets.
 
 Ask answers a person's question from everything that person can read in ECHO
 and in their own connected tools. The same research engine runs impact checks
@@ -81,12 +82,18 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |
 | `agentic-release-v1.ts` | The release step: final access check, audit, second check |
 
-Budgets (`agentic-research-v1.ts`):
+Research has no round, model-call or time budget
+([ADR-0055](../decisions/ADR-0055-a-limit-needs-a-reason.md)). A run goes on
+while it makes progress and stops only when something it waits on goes silent:
 
-| Profile | Rounds | Model calls | Deadline |
-| --- | --- | --- | --- |
-| Live Ask | 10 | 24 | 90 s |
-| Background (impact checks) | 20 | 48 | 300 s |
+| What goes silent | Silence period | Where it is set |
+| --- | --- | --- |
+| An evidence read or access check | 120 s | `AGENTIC_READ_SILENCE_MS_V1` in `agentic-ask-v1.ts` |
+| A model call; each piece of streamed output restarts it | 600 s | The OpenRouter generation profile's `timeout_ms` |
+
+The profile in `agentic-research-v1.ts` is a label only: `live` for Ask, where
+a person waits, and `background` for impact checks. The audit records it, and
+it sets no limit.
 
 ## Safeguards
 
@@ -94,8 +101,9 @@ Budgets (`agentic-research-v1.ts`):
   the model gate. It revalidates the asker's access, re-reading only evidence
   that is new since the last check
   ([ADR-0038](../decisions/ADR-0038-incremental-access-check-before-model-calls.md)),
-  enforces the request's call and time budget, records the call for the audit,
-  and allows one repair of a malformed reply.
+  stops a call that stays silent past its silence period, records the call for
+  the audit, and allows one repair of a malformed reply. It counts no calls
+  and keeps no clock.
 - **Names after the check.** Progress names a source only after the access
   check passed for it.
 - **Release step.** Before a result leaves, a final access check runs, one
