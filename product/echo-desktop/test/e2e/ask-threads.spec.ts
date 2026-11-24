@@ -472,6 +472,19 @@ test('back in Ask from the sidebar a question is placed among every thread, the 
   await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
 });
 
+test('an answer that does not say where a question asked with the threads belongs is refused, and nothing of it is kept', async () => {
+  // This Authority names the question and leaves out its place: with no previous turn there is no thread that could mean (T2).
+  run = await launch('ask-threads-unplaced');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('ask-field').fill('When does the pilot start?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('ask-error')).toHaveText('ECHO sent back something this app could not read. Try again, or update the app.');
+  await expect(page.getByTestId('turn')).toHaveCount(0);
+  expect(asks()).toEqual([{ schema_version: 3, question: 'When does the pilot start?', threads: [] }]);
+  expect(file()).toEqual([]);
+});
+
 test('from a person\'s only thread a new subject starts a second thread: the question carries an empty list', async () => {
   run = await launch('ask-threads');
   const { page } = run;

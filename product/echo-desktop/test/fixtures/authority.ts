@@ -740,12 +740,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
    * the request first ends the research, and `ask-stopped` holds the question it stopped.
    */
-  const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined): Response => {
+  const progressStream = (question: string, scope: Record<string, unknown>, signal: AbortSignal | undefined, placing: (response: object) => object): Response => {
     const format = api.formatPersonAskProgressEventV3;
     const items = progressItems();
     const searched = { type: 'searched', sources: [{ kind: 'meetings' }, { kind: 'documents' }, { kind: 'tickets', tool_id: 'jira' }], found: 3 };
     const [part] = desktop.answer.parts as Record<string, unknown>[];
-    const response = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] };
+    const response = placing({ ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, citations: items.slice(0, 2), parts: [{ ...part, question }] });
     const steps = [{ type: 'stage', stage: 'searching' }, searched, { type: 'stage', stage: 'reading', pending: items.length }, { type: 'read', items }];
     const receipt = { looked_through: items.length, elapsed_ms: 48_000, rows: [searched, { type: 'read', items }] };
     const encoder = new TextEncoder();
@@ -1780,8 +1780,13 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const scope = request.project_id !== undefined ? { kind: 'project', project_id: request.project_id } : { kind: 'global' };
       const question = request.question;
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
+      // To a request that carried threads (ADR-0056, T2) an answer names its question and, with no previous turn to
+      // continue, says the subject is new, as the Authority does. An answer that already says either keeps its own.
+      const placing = (response: object): object => (request.threads === undefined ? response
+        : { question, ...(request.previous === undefined ? { thread: { kind: 'new' } } : {}), ...response });
+      const placed = (response: object): Response => answered(placing(response));
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
-      if (mode === 'ask-timeline-unreadable') return answered(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      if (mode === 'ask-timeline-unreadable') return placed(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
       // `ask-threads` (ADR-0056) places the question among the threads the request carries (threadsAnswer). In
       // `ask-threads-checked` the source check answers too (timelineCheck), and a question about what was drafted is
       // answered from a follow-up, the one source that check never finds readable.
@@ -1792,23 +1797,29 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           : { ...answer, scope, parts: [{ ...part, question }] };
         return answered(threadsAnswer(request, plain));
       }
+      // `ask-threads-unplaced` answers as an Authority that does not hold T2 would: to a question asked with the threads
+      // and no previous turn it names the question and never says where it belongs.
+      if (mode === 'ask-threads-unplaced') {
+        const [part] = desktop.answer.parts as Record<string, unknown>[];
+        return answered({ ...answer, scope, parts: [{ ...part, question }], question });
+      }
       // `ask-progress` streams the Ask's steps, then its answer and receipt; every other mode streams its answer alone.
-      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined);
+      if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined, placing);
       // `ask-completion` answers what it can and says, typed, that it cannot make changes.
       if (mode === 'ask-completion') {
         const [original] = desktop.answer.parts as Record<string, unknown>[];
-        return answered({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
+        return placed({ ...answer, scope, outcome: 'partial', citations: desktop.answer.citations,
           parts: [{ question, status: 'partial', statements: original!.statements, blocks: original!.blocks,
             gap: 'The list did not reach the end. Unchecked entries and sentences did not fit.', gap_details: { unsupported_action: true } }],
         });
       }
       // `ask-ticket` answers from one Jira ticket read live.
       if (mode === 'ask-ticket') {
-        return answered({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
+        return placed({ ...answer, scope, outcome: 'answered', citations: [thermTicket('ECHO-7', 'Jira launch', '10007')],
           parts: [{ question, status: 'answered', statements: [{ text: 'ECHO-7 is titled Jira launch.', citation_indexes: [0], private: true }], blocks: [{ kind: 'text', statements: [0] }] }] });
       }
       // `ask-blocks` answers THERM's question in every block of answer layout v2 (ADR-0051).
-      if (mode === 'ask-blocks') return answered(blocksAnswer(question, scope));
+      if (mode === 'ask-blocks') return placed(blocksAnswer(question, scope));
       // `ask-follow-ups` (ADR-0053): the answer drafts one follow-up for the task asked about, saved unsent in Ari's own list
       // with no owner yet and a due date, as the Ask writer's sink saves one.
       if (mode === 'ask-follow-ups') {
@@ -1822,23 +1833,20 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           approver: ARI, owner: { ...ARI, match: 'approver' }, state: 'unsent', created_at: new Date().toISOString(), sent_at: null, state_set_at: null,
           state_set_by: null, owner_set_at: null, owner_set_by: null, send_included: null,
         });
-        return answered({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
+        return placed({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
       }
       if (mode === 'ask-scroll') {
         const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
           text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
           citation_indexes: [0], private: false,
         }));
-        return answered({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
+        return placed({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
-      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources. To a request that carried
-      // threads (ADR-0056) it names its question, and with no open thread to continue says the subject is new, as the
-      // Authority does.
+      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      const placed = request.threads === undefined ? {} : { question, ...(request.previous === undefined ? { thread: { kind: 'new' } } : {}) };
-      return answered({ ...answer, scope, parts: [{ ...part, question }], ...placed });
+      return placed({ ...answer, scope, parts: [{ ...part, question }] });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;

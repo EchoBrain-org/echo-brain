@@ -285,9 +285,12 @@ export function recordRead(value: unknown): RecordRead | null {
  * (ADR-0056) may say where the question belongs and which of them are on its subject, by their place among the
  * `threads` sent (how many; undefined when the Ask carried no list, which is not the same as an empty one): a place
  * past them names nothing the page offered, and an Ask that carried no list is told nothing of threads, so either
- * answer is not one.
+ * answer is not one. An Ask that carried the list is owed more (T2), as the client holds too: the question it answers,
+ * always; and, when it carried no previous turn (`continued` false), where the question belongs, since leaving that
+ * out means "the previous turn's thread" and there is none. An ordinary answer that does not say the subject is new,
+ * and a merge into no thread, are then not answers either.
  */
-export function answerView(raw: unknown, scope: AskScope, threads?: number): Answer {
+export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
   try {
     line = validatePersonAskProgressResultLineV3(raw);
@@ -302,6 +305,7 @@ export function answerView(raw: unknown, scope: AskScope, threads?: number): Ans
   const { thread, merge } = result;
   const placed = thread !== undefined || merge !== undefined;
   if ((placed && threads === undefined) || [...(thread?.kind === 'other' ? thread.threads : []), ...(merge ?? [])].some(place => place >= (threads ?? 0))) throw new ViewError();
+  if (threads !== undefined && (result.question === undefined || (!continued && thread === undefined))) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
