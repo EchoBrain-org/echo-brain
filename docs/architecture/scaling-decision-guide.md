@@ -28,9 +28,10 @@ are configuration limits, not a tested maximum customer count.
 
 - **Research:** 3 SDK sessions total, at most 2 background. Model calls: 6 total,
   at most 4 background. These are ECHO settings, not SDK service limits.
-- **Request duration:** Ask has 90 seconds including waiting, with 25 seconds
-  reserved for writing. Background research has 300 seconds. Ask allows 24
-  model requests; background research allows 48.
+- **Request duration:** no fixed limit since 2026-11-20. Ask and background
+  research run while they make progress, with no cap on rounds or model
+  requests. An evidence read or access check silent for 120 seconds, or a
+  model call silent for 600 seconds, stops the run.
 - **Intake:** 3 meeting-processing lanes; 4 running trigger jobs, which still
   share the smaller research limits. One document parser.
 - **Coverage:** upload-search V2/V3 endpoints consider the newest 1,000

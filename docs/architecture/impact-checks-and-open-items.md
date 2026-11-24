@@ -38,9 +38,10 @@ flowchart LR
    person retries it. Nothing starts once the app quits, and the server never
    starts a check without such a request.
 3. **Run.** `composition/person-trigger-runs-v1.ts` runs background research
-   as the approver, with the approver's access, at background model priority
-   (20 rounds, 48 model calls, 300 s). At most four checks run at once per
-   Authority.
+   as the approver, with the approver's access, at background model priority.
+   It has no round, call or time budget; only a silent read or model call
+   stops it ([Ask and research](ask-and-research.md#the-research-loop)). At
+   most four checks run at once per Authority.
 4. **Write.** The run stores pointers and judgments, never outside text
    (ADR-0032), and writes open items: one shared row per affected item, seen by
    the decision's audience

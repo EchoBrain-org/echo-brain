@@ -218,9 +218,8 @@ Owner: [meeting processing core and adapters](meeting-processing-core-and-adapte
 2. The client sends `POST /v7/person/ask`.
 3. The Authority binds an evidence desk to the asker: records, notes and
    documents, follow-ups, their workspace, and their own Jira and Confluence.
-4. The research loop searches, lists and opens evidence within a budget (10
-   rounds, 24 model calls, 90 s) and checks access again before every model
-   call.
+4. The research loop searches, lists and opens evidence for as long as it
+   makes progress, and checks access again before every model call.
 5. The writer composes the answer. The release step checks access once more,
    writes one content-free audit record, and checks again before handing over.
 6. Progress streams back as it happens. The desktop keeps the thread in its
@@ -235,8 +234,8 @@ Owner: [Ask and research](ask-and-research.md).
    `person runs` (`next`), and the Authority starts that person's oldest queued
    check with the request's token; the CLI can start one too. The server never
    starts a check without such a request, so nothing starts once the app quits.
-3. The check runs background research as the approver (20 rounds, 48 calls,
-   300 s) and writes follow-ups, one shared row per affected item.
+3. The check runs background research as the approver and writes follow-ups,
+   one shared row per affected item.
 4. The change check (`GET /v1/person/changes`) tells desktops what moved, and
    the desktop raises a notification.
 
