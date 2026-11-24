@@ -66,11 +66,7 @@ export type {
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
 // The follow-up resolution eval (ADR-0047) and the thread resolution eval (ADR-0056) run the product's resolver on its own.
-export {
-  resolveAgenticFollowUpOnceV1, resolveAgenticThreadOnceV1,
-  type AgenticFollowUpCarryV1, type AgenticFollowUpResolutionV1, type AgenticFollowUpResolvedV1,
-  type AgenticResolutionKeptV1, type AgenticThreadPlacementV1, type AgenticThreadResolvedV1,
-} from "./agentic-follow-up-resolver-v1.js";
+export { resolveAgenticFollowUpOnceV1, resolveAgenticThreadOnceV1, type AgenticFollowUpCarryV1, type AgenticResolutionKeptV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
  * How long an evidence read or access check may send nothing before the request treats it as stalled and stops with
@@ -292,10 +288,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
     /** The follow-ups an Ask answer drafted and its release saved (ADR-0053); absent for none. */
     readonly follow_ups?: readonly AskFollowUpDraftV1[];
   };
-  /**
-   * `asked`: what only an Ask carries beside its question. `previous`, the asker's previous turn (ADR-0047); `threads`,
-   * their other threads (ADR-0056); `follow_up`, the resolution of those kept between attempts.
-   */
   const request = async (input: AgenticResearchInputV1, render?: Pick<AgenticRenderedResearchInputV1<unknown, unknown>, "renderer" | "trigger_input">,
     asked: AskedWithV1 = {}): Promise<RequestOutput> => observeAgenticLifecycleV1<RequestOutput>('run', undefined, { trigger: input.trigger }, async () => {
       const { previous, threads, follow_up: followUp } = asked;
@@ -450,13 +442,11 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
                 case "clarify": return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices));
                 // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
                 case "resolved": {
-                  // Never reached: only a request with a previous turn is placed in the open thread, and a kept resolution is
-                  // used only with the turn it was made from. It fails here rather than research from no turn.
-                  if (previous === undefined) throw new AgenticAskOutputErrorV1("a resolved follow-up needs its previous turn");
+                  // Only a request with a previous turn is placed in the open thread, so `previous` is here.
                   resolvedQuestion = resolution.question;
                   researchBrief = Object.freeze({
                     ...brief, goal: Object.freeze({ kind: "question" as const, question: resolution.question }),
-                    starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous, resolution.about),
+                    starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous!, resolution.about),
                   });
                   if (runnableBrief(researchBrief) === null) throw new AgenticAskOutputErrorV1("question is invalid");
                   break;
@@ -580,7 +570,6 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
   }, value => ({ trigger: input.trigger, output_kind: value.response !== undefined ? 'answer' : value.rendered !== undefined ? 'rendered' : 'research', result: value.response ?? value.rendered ?? value.research }));
   const signalOf = (signal: AbortSignal | undefined) => signal === undefined ? {} : { signal };
   return Object.freeze({
-    /** `previous`: the asker's previous turn (ADR-0047); `threads`: their other threads (ADR-0056). */
     async answer(input: { readonly question: string; readonly signal?: AbortSignal } & AskedWithV1): Promise<PersonAnswerResponseV8> {
       return (await request({ trigger: "ask", brief: questionBrief(input.question, AGENTIC_RESEARCH_LIVE_BUDGET_V1), ...signalOf(input.signal) }, undefined, input)).response!;
     },
