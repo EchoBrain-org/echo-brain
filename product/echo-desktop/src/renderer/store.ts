@@ -4102,7 +4102,10 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
     const [only] = belongs;
     if (only !== undefined && answer.thread.threads.length === 1 && sameScope(only.home, scope)) {
       // One thread, living where the question was asked: Ask moves to it without a click, which never changes a scope
-      // (R5), and asks the same words again there as a plain follow-up that nothing can place elsewhere.
+      // (R5), and asks the same words again there as a plain follow-up that nothing can place elsewhere. It goes to the
+      // thread's home as a pick of it would: Home, from any other page, for one with no project; a project's question
+      // was asked from that project's page, which is its home already.
+      if (only.home.kind === 'global') goToHome(only.home, undefined);
       showThread(only.id, null, true, current.forQuestion);
       void askThere(only, text, same, scope);
       return;
@@ -4424,12 +4427,20 @@ async function jump(id: string, at: string | null, picked: boolean, toAsk: boole
     project = result.ok && result.value.status === 'active' ? result.value : undefined;
   }
   if (toAsk && home.kind === 'project' && !project) return 'unreachable';
+  goToHome(home, project);
+  showThread(id, at, picked);
+  return 'shown';
+}
+
+/**
+ * The page under Ask goes to a thread's home (`project` its project, when it is one the person can ask in): that
+ * project's page, its bar narrowed back when it was widened there; Home otherwise, from any other page.
+ */
+function goToHome(home: AskScope, project: ProjectSummary | undefined): void {
   if (project) {
     if (state.route.page !== 'project' || state.route.project.project_id !== project.project_id) void openProject(project);
     else if (!sameScope(state.barScope, home)) set({ barScope: home });
   } else if (state.route.page !== 'home' || state.barScope.kind !== 'global') goHome();
-  showThread(id, at, picked);
-  return 'shown';
 }
 
 /**

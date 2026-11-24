@@ -533,6 +533,22 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(pilot.map(each => filed()[each.text])).toEqual(Array(3).fill(pilot[0]!.id));
   });
 
+  it('puts Home under Ask when a question asked over another page is sent on to a thread with no project, as a pick of that thread would', async () => {
+    const { billing } = seeded();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    store.openTools();
+    expect(store.getState().route).toEqual({ page: 'tools' });
+    await store.ask('who approves the invoices?');
+    await flush();
+    expect(store.threadShown()?.id).toBe(billing[0]!.id);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(asked()[1]).toMatchObject({ question: 'who approves the invoices?', scope: GLOBAL, previous: { question: 'when is it due?' } });
+    // Back leaves Ask for Home, where the thread lives, not for the page it was asked over.
+    store.closeAsk();
+    expect(store.getState().route).toEqual({ page: 'home' });
+  });
+
   it('asks "Which one?" when the question could belong to several threads, and a pick jumps there and asks the typed words in it', async () => {
     const { billing, pilot } = seeded();
     script = params => (params.threads ? elsewhere(params, [placeOf(params, 'When does the pilot start?'), placeOf(params, 'Who owns billing?')]) : null);
