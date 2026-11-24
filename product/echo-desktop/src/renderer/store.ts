@@ -4054,9 +4054,9 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
       ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
-  // The thread the person's own question continues, as Ask shows it: its turns before the one continued ride behind it,
-  // checked with it in the one check.
-  const home = how.kind === 'typed' && from ? visibleTurns(homeTurns(threadOf(within), scope)) : [];
+  // The thread the person's own question continues, where it lives, as kept: its turns before the one continued ride
+  // behind it, each question once (earlierTurns), checked with it in the one check.
+  const home = how.kind === 'typed' && from ? homeTurns(threadOf(within), scope) : [];
   const older = how.kind === 'typed' && from ? earlierTurns(home, from) : [];
   if (how.kind === 'typed' && from) {
     derived = await questionOf(from, older);

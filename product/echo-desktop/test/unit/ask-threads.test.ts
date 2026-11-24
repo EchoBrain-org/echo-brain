@@ -1818,6 +1818,24 @@ describe('merging threads, and Undo', () => {
       expect(kept().at(-1)).toMatchObject({ thread: billing[0]!.id });
     });
 
+    it('carries the thread\'s own older turns behind the words asked again, though a turn that joined repeats the question they continue', async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY], ['Status?', 5 * DAY]);
+      const ledger = threadIn(GLOBAL, ['Status?', 4 * DAY]);
+      const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+      seed(...billing, ...ledger, ...pilot);
+      // The question belongs to billing's thread, and the ledger's, whose one question is billing's latest again, is on its subject.
+      script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')], { merge: [placeOf(params, 'Status?')] }) : null);
+      const store = await opened();
+      await store.ask('who approves them?');
+      await flush();
+      expect(kept().find(each => each.id === ledger[0]!.id)!.thread).toBe(billing[0]!.id);
+      // Asked again continuing billing's own "Status?", which the ledger's newer one now folds away on the page: what
+      // billing asked before it still rides behind it.
+      expect(asked()[1]).toMatchObject({ question: 'who approves them?', previous: { purpose: 'follow_up', question: 'Status?' } });
+      expect((asked()[1]!.previous as AskPrevious).earlier!.map(each => each.question)).toEqual(['Who owns billing?']);
+      expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id, follows: billing[1]!.id, carried: [billing[1]!.id, billing[0]!.id] });
+    });
+
     it.each([['refused', 'THREADS_NOT_SAVED'], ['timeout', 'THREADS_UNCONFIRMED']] as const)('asks the words again in that thread all the same when the move is %s, and the page says so over the question', async (ends, said) => {
       moveEnds = ends;
       const { store, first, again, billing, invoices, ledger } = await sent();
