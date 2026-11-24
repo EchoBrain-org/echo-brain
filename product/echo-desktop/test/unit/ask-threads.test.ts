@@ -7,7 +7,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskScope, AskThread, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_REQUEST_BYTES } from '../../src/shared/protocol.js';
 import {
-  askCarries, earlierOf, otherThreads, ownWords, threadGroups, threadIds, threadsOf, undoable, type AskEarlierTurn, type Thread,
+  askCarries, earlierOf, homeTurns, mergeable, otherThreads, ownWords, sameScope, threadGroups, threadIds, threadsOf, undoable, type AskEarlierTurn, type Thread,
 } from '../../src/renderer/timeline.js';
 import { paragraphs } from '../fixtures/authority.js';
 import {
@@ -74,8 +74,14 @@ let checks: ((items: readonly { asked_at: string; citation: { kind: string; tick
 let script: ((params: Record<string, unknown>) => unknown) | null;
 /** The turns a `timeline.put` fails for, by id. */
 let unsaved: Set<string>;
+/** The turns a `timeline.put` is taken for by the file and never answered, by id. */
+let unknown: Set<string>;
+/** Whether the timeline's file cannot be read. */
+let unread: boolean;
 let app: AppStatus;
 let active = [apollo, zephyr];
+/** The person's archived projects: read by id like any other. */
+let archived: (typeof apollo)[] = [];
 storeLifecycle(NOW);
 beforeEach(() => {
   ids = 0;
@@ -83,18 +89,28 @@ beforeEach(() => {
   checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
   script = null;
   unsaved = new Set();
+  unknown = new Set();
+  unread = false;
   app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   active = [apollo, zephyr];
+  archived = [];
   rpc.mockReset();
   const base = rpcFor(held, {
     'app.status': () => ok(app),
     'ask.run': params => script?.(params) ?? ok(answerOf(String(params.question), params.scope as AskScope)),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     'ask.record': () => fail('not_found'),
-    'projects.read': params => { const found = active.find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
-  }, () => ({ active, archived: [] }));
-  rpc.mockImplementation(async (method: string, params: Record<string, unknown>) =>
-    (method === 'timeline.put' && unsaved.has((params.turn as TimelineTurn).id) ? fail('invalid_output') : base(method, params)));
+    'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
+  }, () => ({ active, archived }));
+  rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === 'timeline.read' && unread) return fail('unavailable', { retryable: true });
+    if (method !== 'timeline.put') return base(method, params);
+    const { id } = params.turn as TimelineTurn;
+    if (unsaved.has(id)) return fail('invalid_output');
+    const reply = await base(method, params);
+    if (unknown.has(id)) throw new Error('the reply was lost');
+    return reply;
+  });
 });
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
@@ -152,11 +168,38 @@ describe('which thread a turn belongs to, and what a thread is (R8)', () => {
 
   it('gives a thread the home of its first turn, or of its oldest once that one is gone, wherever its other turns were asked', () => {
     const [a1, a2] = threadIn(inApollo, ['What is left in Apollo?', 3 * DAY], ['and who owns it?', 2 * DAY]);
-    const merged = turn('Asked at Home, merged in by hand', DAY, { thread: a1!.id });
-    expect(threadsOf([a1!, a2!, merged])[0]!.home).toEqual(inApollo);
+    // No desktop saves one so (R9); a file can still hold it.
+    const stray = turn('Asked at Home, kept in Apollo\'s thread', DAY, { thread: a1!.id });
+    expect(threadsOf([a1!, a2!, stray])[0]!.home).toEqual(inApollo);
     // The first turn gone (the file let its oldest go): the oldest left says where it lives.
-    expect(threadsOf([a2!, merged])[0]).toMatchObject({ id: a1!.id, home: inApollo });
-    expect(threadsOf([merged])[0]).toMatchObject({ id: a1!.id, home: GLOBAL });
+    expect(threadsOf([a2!, stray])[0]).toMatchObject({ id: a1!.id, home: inApollo });
+    expect(threadsOf([stray])[0]).toMatchObject({ id: a1!.id, home: GLOBAL });
+  });
+
+  it('lets a question build on a thread only where the thread lives, and only on its turns asked there (R9)', () => {
+    const [a1, a2] = threadIn(inApollo, ['What is left in Apollo?', 3 * DAY], ['and who owns it?', 2 * DAY]);
+    const stray = turn('Asked at Home, kept in Apollo\'s thread', DAY, { thread: a1!.id });
+    const [thread] = threadsOf([a1!, a2!, stray]);
+    expect(homeTurns(thread, inApollo).map(each => each.id)).toEqual([a1!.id, a2!.id]);
+    // Anywhere else, and with no thread, there is nothing to build on.
+    for (const scope of [GLOBAL, inZephyr]) expect(homeTurns(thread, scope)).toEqual([]);
+    expect(homeTurns(undefined, GLOBAL)).toEqual([]);
+    // What is sent of the thread is what was typed in its home: the stray turn's words never ride into Apollo's requests.
+    expect(thread!.questions).toEqual(['What is left in Apollo?', 'and who owns it?']);
+  });
+
+  it('lets a thread merge only into another that lives where it does (R9)', () => {
+    const { 'What is left in Apollo?': left, 'Which tests fail?': tests, 'Who owns billing?': billing, 'What is blocked?': blocked } = named([
+      ...threadIn(inApollo, ['What is left in Apollo?', 3 * DAY]), ...threadIn(inApollo, ['Which tests fail?', 2 * DAY]),
+      ...threadIn(GLOBAL, ['Who owns billing?', DAY]), ...threadIn(inZephyr, ['What is blocked?', HOUR])]);
+    expect(mergeable(tests!, left)).toBe(true);
+    for (const other of [billing!, blocked!]) {
+      expect(mergeable(other, left)).toBe(false);
+      expect(mergeable(left!, other)).toBe(false);
+    }
+    // Never into itself, and never with no thread open.
+    expect(mergeable(left!, left)).toBe(false);
+    expect(mergeable(tests!, undefined)).toBe(false);
   });
 
   it('names a thread by the first question typed in it, never by a question a model wrote (R2)', () => {
@@ -514,6 +557,67 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: inApollo, thread: tests[0]!.id });
   });
 
+  it.each([
+    ['one the person is no longer in', () => { active = [zephyr]; }],
+    ['archived', () => { active = [zephyr]; archived = [{ ...apollo, status: 'archived' }]; }],
+    ['archived, on a page of projects the sidebar has not read', () => { active = numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })); archived = [{ ...apollo, status: 'archived' }]; }],
+    ['gone, with projects the sidebar has not read', () => { active = numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })); }],
+  ] as const)('asks nothing in a thread whose project is %s: the pick moves nothing and says so, and the other buttons and "New question" stay (R9)', async (_why, lose) => {
+    const { tests } = seeded();
+    lose();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    await store.ask('are they fixed?');
+    await flush();
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Who owns billing?']);
+    const before = store.getState().ask!.seq;
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    // Nothing was asked, the person is where they were, and "Which one?" still waits, without that thread.
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().barScope).toEqual(GLOBAL);
+    expect(store.getState().ask).toMatchObject({ seq: before, thread: null, asking: null });
+    const { THREAD_OUT_OF_REACH } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(THREAD_OUT_OF_REACH);
+    const clarify = byTestId(await page(store), 'clarify')[0]!;
+    expect(byTestId(clarify, 'choice').map(text)).toEqual(['Who owns billing?', 'New question']);
+    // A second click on what is no longer offered does nothing.
+    await store.chooseThread(tests[0]!.id);
+    expect(asked()).toHaveLength(1);
+    // "New question" asks the words where they were typed, and nothing joins Apollo's thread.
+    click(byTestId(clarify, 'choice').at(-1));
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: GLOBAL });
+    for (const key of ['previous', 'threads']) expect(asked()[1]).not.toHaveProperty(key);
+    expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: GLOBAL, thread: kept().at(-1)!.id });
+    expect(kept().filter(each => each.thread === tests[0]!.id).map(each => each.text)).toEqual(['Which tests fail?']);
+  });
+
+  it('keeps the thread\'s button when its project could not be read: the page says why, nothing is asked, and the pick can be made again', async () => {
+    const { tests } = seeded();
+    // Apollo is the person's oldest project: on a page of them the sidebar has not read.
+    active = [...numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })), { ...apollo, created_at: '2026-08-01T00:00:00.000Z' }];
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    expect(store.getState().projects.items.map(each => each.project_id)).not.toContain(apollo.project_id);
+    await store.ask('are they fixed?');
+    await flush();
+    const reading = held.hold('projects.read');
+    const pick = store.chooseThread(tests[0]!.id);
+    reading(fail('unavailable', { retryable: true }));
+    await pick;
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Who owns billing?']);
+    // Read this time, the project opens and the words are asked in it.
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { question: 'Which tests fail?' } });
+  });
+
   it('"New question" asks the typed words where they were typed with nothing carried, and its answer starts a thread there', async () => {
     const { tests } = seeded();
     seed(...kept(), ...threadIn(inApollo, ['What is left in Apollo?', HOUR]));
@@ -758,7 +862,19 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
     store.cancelAsk();
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
     await back();
-    // Its row in the list.
+    // Its own row in the list, when it is the thread shown; refused, like every row, while a question is on its way.
+    const onItsWay = held.hold('ask.run');
+    void store.ask('Something else?');
+    await flush();
+    store.enterThread();
+    expect(store.getState().ask?.thread).toEqual({ id: pilot[0]!.id, entered: false });
+    store.cancelAsk();
+    onItsWay(fail('unavailable', { retryable: true }));
+    await flush();
+    store.enterThread();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    await back();
+    // Another thread's row in the list.
     await store.openThread(billing[0]!.id);
     expect(open(store)).toEqual({ id: billing[0]!.id, entered: true });
     // A suggestion of one of its questions.
@@ -771,6 +887,7 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
     store.mergeThread(billing[0]!.id);
     store.widenScope();
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    await flush();
     // Asking in it is: the answer to a question placed there lands there.
     script = params => (params.threads ? elsewhere(params, [0]) : null);
     await store.ask('and the budget?');
@@ -829,7 +946,7 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     expect(asked()[0]).toMatchObject({ scope: inApollo, previous: { question: 'Which tests fail?' } });
   });
 
-  it('lists the threads under the name, the open one marked, and a row jumps while Merge joins that thread to the open one', async () => {
+  it('lists the threads under the name, the open one marked, and a row jumps while Merge, only on a row of the open thread\'s home, joins that thread to it', async () => {
     const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
     const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY]);
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
@@ -842,13 +959,33 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     const screens = await import('../../src/renderer/screens/ask.js');
     const list = () => render(screens.ThreadList({ state: store.getState(), onDone: () => undefined }));
     expect(byTestId(list(), 'thread-group').map(text)).toEqual(['No project', 'Apollo']);
+    // A dialog the name opens: the name says so, and names it as what it controls only while it is there.
+    const dialog = byTestId(list(), 'thread-list')[0]!;
+    expect([dialog.props.role, dialog.props['aria-label']]).toEqual(['dialog', 'Threads']);
+    const name = byTestId(await page(store), 'thread-name')[0]!;
+    expect([name.props['aria-haspopup'], name.props['aria-expanded'], name.props['aria-controls']]).toEqual(['dialog', false, undefined]);
     const rows = byTestId(list(), 'thread-row');
     expect(rows.map(row => text((row.props.children as unknown[])[0]))).toEqual(['When does the pilot start?', 'Who owns billing?', 'Which tests fail?']);
     expect(rows.map(row => row.props['aria-current'])).toEqual(['true', undefined, undefined]);
-    // The open thread's row does nothing, and has no Merge; every other has one.
-    expect(rows[0]!.props.onClick).toBeUndefined();
-    expect(byTestId(list(), 'thread-merge').map(button => button.props['aria-label'])).toEqual(['Merge into this thread', 'Merge into this thread']);
+    // The open thread's own row picks that thread: shown by the sidebar's Ask the person was not in it, and now is, with
+    // nothing else of Ask changed. A second pick changes nothing at all.
+    const shown = store.getState().ask!;
+    expect(shown.thread).toEqual({ id: pilot[0]!.id, entered: false });
+    click(rows[0]);
+    expect(store.getState().ask).toEqual({ ...shown, thread: { id: pilot[0]!.id, entered: true } });
+    const entered = store.getState().ask;
+    click(byTestId(list(), 'thread-row')[0]);
+    expect(store.getState().ask).toBe(entered);
+    // It has no Merge; every other row of its home has one, and Apollo's none (R9).
+    const merges = byTestId(list(), 'thread-merge');
+    expect(merges.map(button => button.props['aria-label'])).toEqual(['Merge into this thread']);
     expect(byTestId(list(), 'thread-find')[0]!.props.placeholder).toBe('Find a thread');
+    // The one Merge is billing's: the other thread with no project.
+    click(merges[0]);
+    await flush();
+    expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'Which tests fail?': tests[0]!.id });
+    store.undoMerge();
+    await flush();
     // A row jumps, moving to the thread's place.
     click(rows[2]);
     await flush();
@@ -864,6 +1001,46 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     expect(byTestId(list(), 'thread-row').map(row => row.props.disabled)).toEqual([true, true, true]);
     release(ok(answerOf('Another subject?', inApollo)));
     await flush();
+  });
+
+  it('puts the thread\'s own page under Ask on a jump, whatever the bar asks: Home for a thread with no project, even from a project\'s page with its bar widened', async () => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY]);
+    const blocked = threadIn(inZephyr, ['What is blocked?', 3 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
+    seed(...tests, ...blocked, ...pilot);
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.openThread(tests[0]!.id);
+    store.widenScope();
+    expect(store.getState().barScope).toEqual(GLOBAL);
+    // The bar asks all context already, and Apollo's page is still not where the pilot's thread lives.
+    expect(await store.openThread(pilot[0]!.id)).toBe(true);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+    // So with the sidebar's Ask, which opens the thread asked in last.
+    await store.openProject(apollo);
+    store.widenScope();
+    store.returnToAsk();
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    // On its own project's page a thread stays there, and a widened bar narrows back.
+    await store.openProject(apollo);
+    store.widenScope();
+    const route = store.getState().route;
+    await store.openThread(tests[0]!.id);
+    expect(store.getState().route).toBe(route);
+    expect(store.getState().barScope).toEqual(inApollo);
+    // Another project's thread opens that project, however the bar was widened.
+    store.widenScope();
+    await store.openThread(blocked[0]!.id);
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: zephyr.project_id } });
+    expect(store.getState().barScope).toEqual(inZephyr);
+    // A page that is no project's stays under a thread with no project.
+    store.openTools();
+    const tools = store.getState().route;
+    await store.openThread(pilot[0]!.id);
+    expect(store.getState().route).toBe(tools);
+    expect(store.threadShown()?.id).toBe(pilot[0]!.id);
   });
 
   it('reads a project the sidebar has not loaded before it jumps, and drops the jump when Ask moved on meanwhile', async () => {
@@ -892,6 +1069,19 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     again(ok(later));
     expect(await second).toBe(false);
     expect(store.getState().ask).toBeNull();
+    // Started with Ask closed (the sidebar's Ask, a suggestion), and the person opened another page meanwhile: the jump
+    // does not take them from it, whether that page is another project, or Home opened again.
+    for (const leave of [() => void store.openProject(active[0]!), () => store.goHome(), () => store.openTools()]) {
+      const reading = held.hold('projects.read');
+      const third = store.openThread(far[0]!.id);
+      leave();
+      const route = store.getState().route;
+      reading(ok(later));
+      expect(await third).toBe(false);
+      expect(store.getState().ask).toBeNull();
+      expect(store.getState().route).toBe(route);
+    }
+    store.goHome();
     // Left alone, it reads the project and moves there.
     store.returnToAsk();
     await flush();
@@ -945,14 +1135,23 @@ describe('merging threads, and Undo', () => {
     expect(store.getState().ask?.merged).toBeNull();
   });
 
-  it('merges a thread from another home by hand: its turns keep where they were asked, and the thread stays where it lives', async () => {
+  it('never merges across homes, by hand or on an answer\'s word (R9): the thread of another home stays where it is, with no line and nothing saved', async () => {
     const { tests, pilot } = seeded();
     const store = await opened();
+    const puts = calls('timeline.put').length;
     store.mergeThread(tests[0]!.id);
     await flush();
-    expect(kept().find(each => each.id === tests[0]!.id)).toMatchObject({ thread: pilot[0]!.id, scope: inApollo });
-    expect(store.threadShown()).toMatchObject({ id: pilot[0]!.id, home: GLOBAL });
-    expect(store.mergedLine()).toBe('Merged with Which tests fail?');
+    expect(calls('timeline.put')).toHaveLength(puts);
+    expect(filed()['Which tests fail?']).toBe(tests[0]!.id);
+    expect(store.mergedLine()).toBeNull();
+    expect(store.getState().ask?.merged).toBeNull();
+    // The other way round, from Apollo's thread on Apollo's page: neither thread with no project merges into it.
+    await store.openThread(tests[0]!.id);
+    await flush();
+    store.mergeThread(pilot[0]!.id);
+    await flush();
+    expect(calls('timeline.put')).toHaveLength(puts);
+    expect(store.threads().map(thread => [thread.name, thread.home])).toEqual([['Who owns billing?', GLOBAL], ['Which tests fail?', inApollo], ['When does the pilot start?', GLOBAL]]);
   });
 
   it.each(['the next question', 'a jump', 'closing Ask'] as const)('offers Undo until %s, and then drops it', async (leave) => {
@@ -960,6 +1159,7 @@ describe('merging threads, and Undo', () => {
     const store = await opened();
     store.mergeThread(billing[0]!.id);
     expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    await flush();
     if (leave === 'the next question') await store.ask('and the budget?');
     if (leave === 'a jump') { await store.openThread(tests[0]!.id); await store.openThread(pilot[0]!.id); }
     if (leave === 'closing Ask') { store.closeAsk(); store.returnToAsk(); }
@@ -990,51 +1190,178 @@ describe('merging threads, and Undo', () => {
     expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
   });
 
-  it('puts back a turn the file did not take, says so, and leaves Undo for what did move: the page never shows a merge the file does not hold', async () => {
+  /** Each turn's thread as the page holds it, by what was typed for it: to compare with the file's (filed). */
+  const shown = (store: Store) => Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]));
+  const reads = () => calls('timeline.read').length;
+
+  it('reads the file again when a save of the merge did not go through, and shows what it holds: no line, no Undo, and the page says so', async () => {
     const { billing, pilot } = seeded();
     const store = await opened();
-    unsaved.add(billing[1]!.id);
-    store.mergeThread(billing[0]!.id);
-    // Until the file answers, the page shows the merge it asked for.
-    expect(store.askThread().map(each => each.text)).toContain('when is it due?');
-    await flush();
     const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    unsaved.add(billing[1]!.id);
+    const read = reads();
+    store.mergeThread(billing[0]!.id);
+    // Until the saves settle the page shows the merge it asked for, and the timeline is moving.
+    expect(store.askThread().map(each => each.text)).toContain('when is it due?');
+    expect(store.getState().timeline.moving).toBe(true);
+    await flush();
+    expect(reads()).toBe(read + 1);
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
-    // Memory and the file agree: the first turn moved, the second is where it was.
-    const inMemory = Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]));
-    expect(inMemory).toEqual(filed());
+    expect(store.getState().timeline.moving).toBe(false);
+    // The page and the file agree: the first turn moved, the second is where it was.
+    expect(shown(store)).toEqual(filed());
     expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
     expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'When does the pilot start?', 'did that change?']);
-    // The line tells of what moved, and Undo takes back exactly that.
-    expect(store.getState().ask?.merged?.moved).toEqual([{ turn: billing[0]!.id, from: billing[0]!.id }]);
-    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
-    unsaved.clear();
+    // A merge that did not all go through is not one Undo can take back: the line is gone, and Undo moves nothing.
+    expect(store.getState().ask?.merged).toBeNull();
+    expect(byTestId(await page(store), 'thread-merged')).toEqual([]);
+    const puts = calls('timeline.put').length;
     store.undoMerge();
     await flush();
-    expect(filed()).toMatchObject({ 'Who owns billing?': billing[0]!.id, 'when is it due?': billing[0]!.id });
-    // Nothing moved at all: no line, and the page says why.
+    expect(calls('timeline.put')).toHaveLength(puts);
+    // Nothing moved at all: the same.
     unsaved = new Set(billing.map(each => each.id));
     store.mergeThread(billing[0]!.id);
     await flush();
-    expect(store.mergedLine()).toBeNull();
     expect(store.getState().ask?.merged).toBeNull();
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
-    expect(store.askThread().map(each => each.text)).toEqual(['When does the pilot start?', 'did that change?']);
+    expect(shown(store)).toEqual(filed());
+    expect(filed()['when is it due?']).toBe(billing[0]!.id);
   });
 
-  it('keeps a turn merged, and says so, when Undo could not save it back', async () => {
+  it('shows what the file holds when a save never answered: a turn the file took stays moved, with no Undo', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    // The file took the turn, and the reply was lost on its way back.
+    unknown.add(billing[1]!.id);
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': pilot[0]!.id });
+    expect(shown(store)).toEqual(filed());
+    expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'when is it due?', 'When does the pilot start?', 'did that change?']);
+    expect(store.getState().ask?.merged).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('reads the file again when Undo could not save a turn back, and shows it still merged', async () => {
     const { billing, pilot } = seeded();
     const store = await opened();
     store.mergeThread(billing[0]!.id);
     await flush();
     unsaved.add(billing[0]!.id);
+    const read = reads();
     store.undoMerge();
     await flush();
     const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(reads()).toBe(read + 1);
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
     expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
-    expect(Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]))).toEqual(filed());
+    expect(shown(store)).toEqual(filed());
     expect(store.mergedLine()).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('puts back what was not saved when the file cannot be read again either, so the page says no more than it knows', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    unsaved.add(billing[1]!.id);
+    unread = true;
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(shown(store)).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
+    expect(shown(store)).toEqual(filed());
+    expect(store.getState().ask?.merged).toBeNull();
+    // The move is over all the same: Ask is not left busy.
+    expect(store.getState().timeline.moving).toBe(false);
+    unread = false;
+    await store.ask('and the budget?');
+    expect(asked()).toHaveLength(1);
+  });
+
+  it('moves one thing at a time: until a merge or its Undo has settled, no other merge, Undo, jump or question starts, and the page offers none', async () => {
+    const { billing, tests, pilot } = seeded();
+    seed(...kept(), ...threadIn(GLOBAL, ['Where is the ledger?', HOUR]));
+    const ledger = kept().at(-1)!;
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    const screens = await import('../../src/renderer/screens/ask.js');
+    vi.stubGlobal('document', { getElementById: () => null, activeElement: null });
+    const list = () => render(screens.ThreadList({ state: store.getState(), onDone: () => undefined }));
+    const saves = [held.hold('timeline.put'), held.hold('timeline.put')];
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    const before = store.getState();
+    expect(before.timeline.moving).toBe(true);
+    expect(store.askBusy()).toBe(true);
+    // Everything that asks, jumps, merges or undoes is refused, and nothing changes.
+    store.mergeThread(ledger.id);
+    store.undoMerge();
+    expect(await store.openThread(tests[0]!.id)).toBe(false);
+    store.returnToAsk();
+    await store.ask('and the budget?');
+    store.askAgain(pilot[0]!.id);
+    store.setBarText('and the budget?');
+    store.submitBar();
+    await flush();
+    expect(store.getState().barText).toBe('and the budget?');
+    expect({ ...store.getState(), barText: '' }).toEqual({ ...before, barText: '' });
+    expect(asked()).toEqual([]);
+    expect(calls('timeline.put')).toHaveLength(2);
+    // The page offers none of it: the rows and their Merge, Undo, and the bar's Ask are still.
+    expect(byTestId(list(), 'thread-row').filter(row => row.props['aria-current'] !== 'true').map(row => row.props.disabled)).toEqual([true, true]);
+    expect(byTestId(list(), 'thread-merge').map(button => button.props.disabled)).toEqual([true]);
+    expect(byTestId(await page(store), 'thread-undo')[0]!.props.disabled).toBe(true);
+    // Settled, each goes through again.
+    for (const save of saves) save(ok({}));
+    await flush();
+    expect(store.getState().timeline.moving).toBe(false);
+    expect(store.askBusy()).toBe(false);
+    expect(byTestId(await page(store), 'thread-undo')[0]!.props.disabled).toBe(false);
+    store.submitBar();
+    await flush();
+    expect(store.getState().barText).toBe('');
+    expect(asked()).toHaveLength(1);
+    expect(kept().at(-1)).toMatchObject({ text: 'and the budget?', thread: pilot[0]!.id });
+  });
+
+  it('ends a move with the timeline: signed out while its saves are on their way, their replies say nothing and Ask is not left busy', async () => {
+    const { billing } = seeded();
+    const store = await opened();
+    const saves = [held.hold('timeline.put'), held.hold('timeline.put')];
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.getState().timeline.moving).toBe(true);
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    expect(store.getState().timeline).toEqual({ turns: [], checks: {}, moving: false });
+    const read = reads();
+    for (const save of saves) save(fail('signed_out'));
+    await flush();
+    expect(store.getState().toast).toBeNull();
+    expect(reads()).toBe(read);
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('lets go of the merged line whenever the timeline is read again: its Undo was of the turns as they were', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    // Signed out and in again as the same person, Ask still open behind the sign-in page.
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().timeline.turns).toHaveLength(5);
+    expect(store.getState().ask?.merged ?? null).toBeNull();
+    expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
   });
 
   it('merges on its own the threads an answer says are on the open thread\'s subject, in the same home only, with the same line and Undo', async () => {
@@ -1052,40 +1379,309 @@ describe('merging threads, and Undo', () => {
     expect(filed()).toMatchObject({ 'and the budget?': pilot[0]!.id, 'Who owns billing?': billing[0]!.id, 'when is it due?': billing[0]!.id });
   });
 
-  it('merges beside a jump: the threads on the subject of the one the question belongs to join it after the jump, and the line stays while it is asked there', async () => {
-    const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
-    const invoices = threadIn(GLOBAL, ['Who signs invoices?', 5 * DAY]);
-    const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
+  describe('beside a jump', () => {
+    /** Four threads with no project, Ask on the pilot's; a question the answer sends to billing's, naming two more on its subject. */
+    const sent = async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const invoices = threadIn(GLOBAL, ['Who signs invoices?', 5 * DAY]);
+      const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
+      const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+      seed(...billing, ...invoices, ...ledger, ...pilot);
+      const store = await opened();
+      const release = held.hold('ask.run');
+      const first = store.ask('who approves them?');
+      await flush();
+      const again = held.hold('ask.run');
+      release(elsewhere(asked()[0]!, [placeOf(asked()[0]!, 'Who owns billing?')], { merge: [placeOf(asked()[0]!, 'Who signs invoices?'), placeOf(asked()[0]!, 'Where is the ledger?')] }));
+      await flush();
+      return { store, first, again, billing, invoices, ledger, pilot };
+    };
+    /** Whether every kept turn that followed one is in the thread of the turn it followed. */
+    const followsHold = () => {
+      const ids = threadIds(kept());
+      return kept().every(each => each.follows == null || ids.get(each.follows) === ids.get(each.id));
+    };
+
+    it('joins the threads on the subject once the answer has landed, never before: the words asked again continue the thread\'s own latest turn', async () => {
+      const { store, first, again, billing, invoices, ledger, pilot } = await sent();
+      // Jumped, and asking again there. Nothing has moved yet, and no line offers an Undo.
+      expect(store.threadShown()?.id).toBe(billing[0]!.id);
+      expect(store.getState().ask?.asking).toMatchObject({ question: 'who approves them?', thread: billing[0]!.id });
+      expect(store.mergedLine()).toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      // It continues billing's own turn, though the ledger's is newer, with nothing riding that could place it again.
+      expect(asked()[1]).toMatchObject({ previous: { question: 'Who owns billing?' } });
+      expect(asked()[1]).not.toHaveProperty('threads');
+      again(ok(answerOf('who approves them?')));
+      await first;
+      await flush();
+      expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id, follows: billing[0]!.id });
+      expect(store.mergedLine()).toBe('Merged 2 threads');
+      expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id, 'When does the pilot start?': pilot[0]!.id });
+      expect(followsHold()).toBe(true);
+      // Undo takes the two threads back out, and the answer still follows a turn of its own thread.
+      store.undoMerge();
+      await flush();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id, 'who approves them?': billing[0]!.id });
+      expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'who approves them?']);
+      expect(followsHold()).toBe(true);
+      // The next question continues the answer, in billing's thread.
+      await store.ask('and since when?');
+      expect(asked().at(-1)).toMatchObject({ previous: { question: 'who approves them?' } });
+      expect(kept().at(-1)).toMatchObject({ thread: billing[0]!.id });
+    });
+
+    it('moves nothing when the words asked again fail: there is nothing to undo, Try again asks them the same way, and the threads join when that answer lands', async () => {
+      const { store, first, again, billing, invoices, ledger } = await sent();
+      again(fail('unavailable', { retryable: true }));
+      await first;
+      await flush();
+      expect(store.getState().ask).toMatchObject({ thread: { id: billing[0]!.id, entered: true }, merged: null, failed: { question: 'who approves them?', thread: billing[0]!.id } });
+      const puts = calls('timeline.put').length;
+      store.undoMerge();
+      await flush();
+      expect(calls('timeline.put')).toHaveLength(puts);
+      expect(store.getState().ask?.failed).not.toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      store.retryAsk();
+      await flush();
+      expect(asked()[2]).toMatchObject({ question: 'who approves them?', previous: { question: 'Who owns billing?' } });
+      expect(asked()[2]).not.toHaveProperty('threads');
+      expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id, follows: billing[0]!.id });
+      expect(store.mergedLine()).toBe('Merged 2 threads');
+      store.undoMerge();
+      await flush();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id, 'who approves them?': billing[0]!.id });
+      expect(followsHold()).toBe(true);
+    });
+
+    it('moves nothing when the words asked again are cancelled', async () => {
+      const { store, again, billing, invoices, ledger } = await sent();
+      store.cancelAsk();
+      again(ok(answerOf('who approves them?')));
+      await flush();
+      expect(kept()).toHaveLength(4);
+      expect(store.mergedLine()).toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      expect(store.threadShown()?.id).toBe(billing[0]!.id);
+    });
+
+    it('joins them after a pick of "Which one?" too, once the picked thread\'s answer lands, and only those that live where it does', async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+      const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+      seed(...billing, ...tests, ...flaky);
+      // One thread named, in another home, so the page asks (R5); two more are said to be on its subject.
+      script = params => (params.threads
+        ? elsewhere(params, [placeOf(params, 'Which tests fail?')], { merge: [placeOf(params, 'Which tests are flaky?'), placeOf(params, 'Who owns billing?')] }) : null);
+      const store = await startStore();
+      await store.ask('are they fixed?');
+      await flush();
+      expect(store.getState().ask?.clarify).toMatchObject({ kind: 'threads', threads: [tests[0]!.id], merge: [flaky[0]!.id, billing[0]!.id] });
+      const release = held.hold('ask.run');
+      const pick = store.chooseThread(tests[0]!.id);
+      await flush();
+      // Jumped to Apollo and asking there, continuing the picked thread's own turn: nothing has moved yet.
+      expect(asked()[1]).toMatchObject({ scope: inApollo, previous: { question: 'Which tests fail?' } });
+      expect(filed()['Which tests are flaky?']).toBe(flaky[0]!.id);
+      expect(store.mergedLine()).toBeNull();
+      release(ok(answerOf('are they fixed?', inApollo)));
+      await pick;
+      await flush();
+      expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: inApollo, thread: tests[0]!.id, follows: tests[0]!.id });
+      // Apollo's other thread joined; the one with no project lives elsewhere, and stays (R9).
+      expect(store.mergedLine()).toBe('Merged with Which tests are flaky?');
+      expect(filed()).toMatchObject({ 'Which tests are flaky?': tests[0]!.id, 'Who owns billing?': billing[0]!.id });
+    });
+  });
+});
+
+describe('a question a model wrote goes only while every turn that could have informed it is readable', () => {
+  /** What only the other thread's source says: a name no one typed. */
+  const NAME = 'Mina Park';
+  /** The other thread: one turn, whose answer names Mina Park from ORION-7, a ticket the pilot's thread never cited. */
+  const orion = () => {
+    const question = 'Who leads the other team?';
+    const statements = [said(`${NAME} leads it.`, [0])];
+    return turn(question, 6 * DAY, { answer: { scope: GLOBAL, sources: [ticket('ORION-7', '30007')], outcome: 'answered', parts: [{ question, status: 'answered', statements, blocks: paragraphs(statements) }] } });
+  };
+  /** Access to ORION-7 is gone; everything else reads the same. */
+  const orionGone = () => { checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '30007' ? 'unreadable' : 'same' })) }); };
+  /** The pilot's thread with the other merged into it, and a follow-up answered there whose full question the resolver wrote with the name. */
+  const merged = async () => {
+    const other = orion();
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
-    seed(...billing, ...invoices, ...ledger, ...pilot);
-    const store = await opened();
-    const release = held.hold('ask.run');
-    const first = store.ask('who approves them?');
+    seed(other, ...pilot);
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    store.mergeThread(other.id);
     await flush();
-    release(elsewhere(asked()[0]!, [placeOf(asked()[0]!, 'Who owns billing?')], { merge: [placeOf(asked()[0]!, 'Who signs invoices?'), placeOf(asked()[0]!, 'Where is the ledger?')] }));
-    const again = held.hold('ask.run');
+    const rewrite = `Who signs off the pilot that ${NAME} leads?`;
+    script = params => (params.question === 'and who signs it off?' ? ok({ ...answerOf(String(params.question)), question: rewrite }) : null);
+    await store.ask('and who signs it off?');
     await flush();
-    // Jumped, merged, and asking again there: the line shows while the question is on its way.
-    expect(store.threadShown()?.id).toBe(billing[0]!.id);
-    expect(store.getState().ask?.asking?.question).toBe('who approves them?');
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id, 'When does the pilot start?': pilot[0]!.id });
-    // It continues the merged thread's latest turn, with nothing riding that could place it again.
-    expect(asked()[1]).toMatchObject({ previous: { question: 'Where is the ledger?' } });
-    expect(asked()[1]).not.toHaveProperty('threads');
-    // Undo waits for the answer, as every thread action does while a question is on its way.
+    // It followed the pilot's own turn: the merged turn is not one it followed, only one asked before it in its thread.
+    const followUp = kept().at(-1)!;
+    expect(followUp).toMatchObject({ typed: 'and who signs it off?', question: rewrite, follows: pilot[0]!.id, thread: pilot[0]!.id });
+    expect((asked()[0]!.previous as AskPrevious).earlier!.map(each => each.question)).toEqual(['Who leads the other team?']);
+    return { store, other, pilot, followUp, rewrite };
+  };
+
+  it('sends the earlier question a model wrote only while the merged turn it may have drawn on is still readable; once it is not, the typed words go and nothing of that turn', async () => {
+    const { store, followUp, rewrite } = await merged();
+    // Access to the other thread's source goes. The rewrite carries what that source said, so the next follow-up names
+    // the turn it continues by the words typed for it, and the turn that lost its source rides with no sentence.
+    orionGone();
+    await store.ask('and where?');
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+    const previous = asked()[1]!.previous as AskPrevious;
+    expect(previous).toMatchObject({ purpose: 'follow_up', question: 'and who signs it off?' });
+    expect(previous.statements).toHaveLength(2);
+    expect(previous.earlier!.map(each => [each.question, each.statements.length])).toEqual([['Who leads the other team?', 0], ['When does the pilot start?', 2]]);
+    // Readable again, a follow-up of that same turn names its question in full, as before.
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    store.toggleTurn(followUp.id);
+    await store.ask('and by when?');
+    expect(asked()[2]!.previous).toMatchObject({ purpose: 'follow_up', question: rewrite });
+    expect((asked()[2]!.previous as AskPrevious).earlier!.map(each => each.statements.length)).toEqual([1, 2]);
+  });
+
+  it('holds for Ask again, and for a choice of "Which one?", which is asked only while the turn it was offered for passes the same check', async () => {
+    const { store, followUp } = await merged();
+    orionGone();
+    // Ask again of the turn whose question was rewritten: its typed words are asked, and name it.
+    store.askAgain(followUp.id);
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: 'and who signs it off?', previous: { purpose: 'ask_again', question: 'and who signs it off?' } });
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+    // A follow-up that could mean several things: the choices are a model's, written with the thread before it.
+    const choices = [{ label: NAME, question: `What does ${NAME} still have to approve?` }, { label: 'The sponsor', question: 'What does the sponsor still have to approve?' }];
+    script = params => (params.question === 'what is left for them?'
+      ? ok({ scope: GLOBAL, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'what is left for them?', choices }) : null);
+    await store.ask('what is left for them?');
+    await flush();
+    expect(store.getState().ask?.clarify).toMatchObject({ kind: 'choices', typed: 'what is left for them?' });
+    store.chooseClarified(choices[0]!);
+    await flush();
+    // The person's own follow-up is asked again instead of the choice.
+    expect(asked().at(-1)).toMatchObject({ question: 'what is left for them?' });
+    expect(JSON.stringify(asked().at(-1))).not.toContain(NAME);
+    // Readable again, a choice is asked as its full question.
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    store.chooseClarified(choices[1]!);
+    await flush();
+    expect(asked().at(-1)).toMatchObject({ question: 'What does the sponsor still have to approve?' });
+  });
+
+  it('counts the turns before a turn it followed in another thread: an answer that started a thread was still written with the thread it was asked in', async () => {
+    const other = orion();
+    const pilot = turn('When does the pilot start?', 3 * DAY);
+    // The other thread's turn was merged into the pilot's: it is before the pilot's own turn, and not a turn that one followed.
+    seed({ ...other, thread: pilot.id }, pilot);
+    const rewrite = `What does ${NAME} want for lunch?`;
+    script = params => (params.question === 'and for lunch?' ? ok({ ...answerOf(String(params.question)), question: rewrite, thread: { kind: 'new' } }) : null);
+    const store = await startStore();
+    await store.openThread(pilot.id);
+    await flush();
+    await store.ask('and for lunch?');
+    await flush();
+    const lunch = kept().at(-1)!;
+    expect(lunch).toMatchObject({ question: rewrite, follows: pilot.id, thread: lunch.id });
+    orionGone();
+    await store.ask('and tomorrow?');
+    expect(asked()[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and for lunch?' });
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+  });
+});
+
+describe('every turn of a thread was asked in its home (R9)', () => {
+  /** The turns kept in a thread that lives somewhere other than where they were asked, in memory and in the file. */
+  const strays = (store: Store) => [store.getState().timeline.turns, kept()].map(turns =>
+    threadsOf(turns).flatMap(thread => thread.turns.filter(each => !sameScope(each.scope, thread.home)).map(each => each.text)));
+  /** A question Apollo had nothing on: the one kind of turn Ask everywhere is offered on. */
+  const notFound: Partial<TimelineTurn> = { scope: inApollo, answer: { scope: inApollo, sources: [], parts: [], outcome: 'not_found' } };
+
+  it('holds through a question, a pick, a jump, Ask again, Ask everywhere, a merge and its Undo', async () => {
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY], ['when is it due?', 5 * DAY]);
+    const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY]);
+    const budget = turn('Is there a budget?', 3 * DAY, notFound);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
+    seed(...billing, ...tests, budget, ...pilot);
+    const store = await startStore();
+    // A jump to Apollo's thread, then the bar widened: the question is asked everywhere, so it joins no thread of Apollo's.
+    await store.openThread(tests[0]!.id);
+    store.widenScope();
+    await store.ask('and across everything?');
+    await flush();
+    expect(kept().at(-1)).toMatchObject({ scope: GLOBAL, follows: null, thread: kept().at(-1)!.id });
+    expect(strays(store)).toEqual([[], []]);
+    // A pick of "Which one?" at Home: the words are asked again in Apollo, where the thread lives, and land in it.
+    script = params => (params.question === 'are they fixed?' && params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?')]) : null);
+    store.goHome();
+    await store.ask('are they fixed?');
+    await flush();
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: inApollo, thread: tests[0]!.id });
+    expect(strays(store)).toEqual([[], []]);
+    // Ask again asks where its turn was asked, whatever the bar asks; Ask everywhere starts a thread with no project.
+    store.goHome();
+    store.askAgain(billing[1]!.id);
+    await flush();
+    expect(kept().at(-1)).toMatchObject({ again_of: billing[1]!.id, scope: GLOBAL, thread: billing[0]!.id });
+    await store.openThread(budget.id);
+    store.askEverywhere(budget.id);
+    await flush();
+    expect(kept().at(-1)).toMatchObject({ text: 'Is there a budget?', scope: GLOBAL, thread: kept().at(-1)!.id });
+    expect(strays(store)).toEqual([[], []]);
+    // A merge, by hand and on an answer's word, and its Undo: only threads of one home ever join.
+    await store.openThread(pilot[0]!.id);
+    for (const other of [billing[0]!, tests[0]!, budget]) store.mergeThread(other.id);
+    await flush();
+    expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'Which tests fail?': tests[0]!.id });
+    expect(kept().find(each => each.id === budget.id)!.thread).toBe(budget.id);
+    expect(strays(store)).toEqual([[], []]);
     store.undoMerge();
     await flush();
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id });
-    again(ok(answerOf('who approves them?')));
-    await first;
+    expect(filed()['Who owns billing?']).toBe(billing[0]!.id);
+    script = params => (params.threads ? ok({ ...answerOf(String(params.question)), merge: (params.threads as AskThread[]).map((_, place) => place) }) : null);
+    await store.ask('and the budget?');
     await flush();
-    expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id });
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    // The person's next question ends the offer.
-    await store.ask('and since when?');
-    expect(store.mergedLine()).toBeNull();
+    // Every thread was named: those with no project joined, Apollo's two did not.
+    expect(store.threads().map(thread => [thread.name, thread.home, thread.turns.length])).toEqual([
+      ['When does the pilot start?', GLOBAL, 7], ['Which tests fail?', inApollo, 2], ['Is there a budget?', inApollo, 1]]);
+    expect(strays(store)).toEqual([[], []]);
+    store.undoMerge();
+    await flush();
+    expect(strays(store)).toEqual([[], []]);
+  });
+
+  it('builds nothing on a turn a file keeps in a thread of another home: a follow-up continues the thread\'s own latest, and Ask again of that turn starts a thread where it was asked', async () => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY], ['and who fixes them?', 3 * DAY]);
+    // Asked with no project, and kept in Apollo's thread: no desktop saves one so, and a file may still hold it.
+    const stray = turn('What did the board decide?', DAY, { thread: tests[0]!.id, follows: tests[1]!.id });
+    seed(...tests, stray);
+    const store = await startStore();
+    await store.openThread(tests[0]!.id);
+    await flush();
+    expect(store.getState().barScope).toEqual(inApollo);
+    await store.ask('since when?');
+    await flush();
+    // The stray turn is the thread's newest, and nothing of it goes into Apollo's request.
+    const previous = asked()[0]!.previous as AskPrevious;
+    expect(previous).toMatchObject({ purpose: 'follow_up', question: 'and who fixes them?' });
+    expect(previous.earlier!.map(each => each.question)).toEqual(['Which tests fail?']);
+    expect(JSON.stringify(asked()[0])).not.toContain('board');
+    expect(kept().at(-1)).toMatchObject({ text: 'since when?', scope: inApollo, thread: tests[0]!.id, follows: tests[1]!.id });
+    // Ask again of it asks with no project, carrying the turn itself, and its answer starts a thread there.
+    store.askAgain(stray.id);
+    await flush();
+    expect(asked()[1]).toMatchObject({ scope: GLOBAL, previous: { purpose: 'ask_again', question: 'What did the board decide?' } });
+    const again = kept().at(-1)!;
+    expect(again).toMatchObject({ again_of: stray.id, scope: GLOBAL, thread: again.id });
+    expect(store.threadShown()).toMatchObject({ id: again.id, home: GLOBAL });
+    // Only the turn the file came with is out of place.
+    expect(strays(store)).toEqual([['What did the board decide?'], ['What did the board decide?']]);
   });
 });
 

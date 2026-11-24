@@ -113,13 +113,25 @@ copy that a unit test proves equivalent.
   thread of the turn it followed in the same place. Ask shows one thread, and
   the list under the thread's name is the way to another: a row jumps to a
   thread at its place (Home, or its project's page), and Merge relabels a
-  thread's turns into the open one with `timeline.put`. A person is in a
-  thread once they have asked in it or picked it since Ask opened; the
+  thread's turns into the open one with `timeline.put`. Every turn of a
+  thread was asked in its home: a thread is asked in only there, and only
+  threads of one home merge. Turns move one move at a time: until a merge's
+  or an Undo's saves have settled nothing else asks, jumps, merges or undoes,
+  and when a save fails or never answers the page reads `timeline.read` again
+  and shows what the file holds. A person is in a
+  thread once they have asked in it or picked it since Ask opened, its own row
+  in the list included; the
   sidebar's Ask only shows the thread they last used. In a thread, `ask.run`
   carries the previous turn, the thread's older turns and the other threads,
   as the questions the person typed. Otherwise it carries no previous turn and
   every thread the question may be placed in, the one shown included. The
-  answer says when the question belongs to another thread or starts one.
+  answer says when the question belongs to another thread or starts one, and
+  the host refuses one that leaves out what an Ask with threads is owed: its
+  question, and with no previous turn, where it belongs. A turn's full
+  question, which a model may have written, is sent again only while a fresh
+  check finds every turn that could have informed it readable: the turns it
+  followed and every turn asked before it in its thread. Otherwise the typed
+  words go.
 
 ## Updates
 

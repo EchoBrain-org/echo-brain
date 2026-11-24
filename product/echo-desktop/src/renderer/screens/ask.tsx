@@ -13,8 +13,8 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askAgainOffered, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
-  chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
+  chooseThread, clarifyThreads, closeSources, copyAnswer, enterThread, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
   toggleTurn, turnOf, undoMerge, widenScope,
@@ -22,7 +22,7 @@ import {
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, behindEarlierLine, mergeable, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Caret, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -111,7 +111,7 @@ export function Bar({ state }: { state: State }) {
           onInput={event => { setSuggesting(CLOSED); setBarText((event.target as HTMLInputElement).value); }}
         />
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
-          disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
+          disabled={text.trim() === '' || askBusy(state)}><Up /></button>
       </form>
     </div>
   );
@@ -587,7 +587,7 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
         ) : <span data-testid="foot-label">{label}</span>)}
         <span class="foot-actions">
           {again && (
-            <button type="button" class="foot-action" data-testid="ask-again" disabled={Boolean(state.ask?.asking)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
+            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
           )}
           {copy && <CopyAnswer turn={turn} />}
         </span>
@@ -683,7 +683,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
  * place asked, jumps there and asks the same words in it; "New question", last, asks them as a thread of their own.
  */
 function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
-  const asking = Boolean(state.ask?.asking);
+  const asking = askBusy(state);
   return (
     <div class="turn" data-testid="clarify">
       <div class="question selectable" data-testid="question">{clarify.question}</div>
@@ -707,11 +707,20 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   );
 }
 
+/** The thread list's id on the page, for the name that opens it to say what it controls. */
+const THREAD_LIST_ID = 'ask-thread-list';
+
 /**
  * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
- * first. A row jumps to its thread; the open thread's own is marked and does nothing. With a thread open every other row
- * has Merge, which merges that thread into the open one. The arrow keys move through the rows from the field, and Return
- * there jumps to the first. While a question is on its way nothing here moves Ask.
+ * first. A row jumps to its thread. The open thread's own row is marked, and picking it is picking that thread: the
+ * person is in it from there, which Ask merely showing it is not. With a thread open every other row of its home has
+ * Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another home has none.
+ * The arrow keys move through the rows from the field, and Return there picks the first row, the open thread's too.
+ * While Ask is busy (askBusy) nothing here moves it.
+ *
+ * It is a dialog the name opens, not a menu or a listbox: it holds a field to type in, focus really moves from row to
+ * row, and a row has a second button beside it. So each home is a list, a row a button in a list item, and the open
+ * thread's row is the current one.
  */
 export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
   const [find, setFind] = useState('');
@@ -719,7 +728,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { field.current?.focus(); }, []);
   const open = threadShown(state);
-  const busy = Boolean(state.ask?.asking);
+  const busy = askBusy(state);
   // Either way the list closes and the caret goes back to the bar, for the next question.
   const then = (act: () => void) => () => { onDone(); act(); document.getElementById('ask-field')?.focus(); };
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>('[data-testid="thread-row"]') ?? []);
@@ -733,28 +742,29 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
       next?.focus();
     } else if (event.key === 'Enter' && event.target === field.current) {
       event.preventDefault();
-      all.find(row => row.getAttribute('aria-current') !== 'true' && !row.disabled)?.click();
+      all.find(row => !row.disabled)?.click();
     }
   };
   return (
-    <div class="menu thread-list" data-testid="thread-list" role="group" aria-label="Threads" aria-live="off" ref={list} onKeyDown={onKeyDown}>
+    <div class="menu thread-list" id={THREAD_LIST_ID} data-testid="thread-list" role="dialog" aria-label="Threads" aria-live="off" tabIndex={-1} ref={list} onKeyDown={onKeyDown}>
       <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find a thread" aria-label="Find a thread" data-testid="thread-find"
         value={find} onInput={event => setFind((event.target as HTMLInputElement).value)} />
       <div class="thread-groups">
         {threadList(state, find).map((group) => {
           const heading = group.home.kind === 'project' ? scopeName(group.home, state) : 'No project';
+          // Each home is a list named by its heading, which is then not read a second time.
           return (
-            <div class="thread-group" role="group" aria-label={heading} key={group.home.kind === 'project' ? group.home.project_id : ''}>
-              <div class="menu-label" data-testid="thread-group">{heading}</div>
+            <div class="thread-group" role="list" aria-label={heading} key={group.home.kind === 'project' ? group.home.project_id : ''}>
+              <div class="menu-label" data-testid="thread-group" aria-hidden="true">{heading}</div>
               {group.threads.map((thread) => {
                 const current = thread.id === open?.id;
                 return (
-                  <div class="thread-item" key={thread.id}>
-                    <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy && !current}
-                      title={thread.name} onClick={current ? undefined : then(() => void openThread(thread.id))}>
+                  <div class="thread-item" role="listitem" key={thread.id}>
+                    <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy}
+                      title={thread.name} onClick={then(current ? enterThread : () => void openThread(thread.id))}>
                       <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
                     </button>
-                    {open !== undefined && !current && (
+                    {mergeable(thread, open) && (
                       <button type="button" class="link-button thread-merge" data-testid="thread-merge" aria-label="Merge into this thread" disabled={busy}
                         onClick={then(() => mergeThread(thread.id))}>Merge</button>
                     )}
@@ -771,34 +781,52 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
 
 /**
  * Ask's first line (ADR-0056): the open thread's name, the first question typed in it, on one line; "New thread" with
- * none open. It opens the thread list under it, which Escape or a click elsewhere closes; whether the list is open is
- * this line's own, and goes with Ask. Under it, after a merge, one faint line says so, with Undo.
+ * none open. It opens the thread list under it; whether the list is open is this line's own, and goes with Ask. The
+ * list closes on Escape pressed inside this line or the list, on a click outside them, when the keyboard's focus
+ * leaves them (Tab past the last row), when a question starts, and when Ask shows another thread. What "Find a thread"
+ * held goes with it. Under the name, after a merge, one faint line says so, with Undo.
  */
 function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  // Listening from the frame the list shows in: an Escape pressed at once must close the list, not Ask.
+  // The list is of what Ask showed when it opened. A question started, or another thread shown under it (an answer that
+  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find.
+  const shown = threadShown(state)?.id ?? null;
+  const asking = Boolean(state.ask?.asking);
+  useLayoutEffect(() => { setOpen(false); }, [shown]);
+  useLayoutEffect(() => { if (asking) setOpen(false); }, [asking]);
   useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
-    // Escape closes the list only: the window's Escape would close Ask.
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); name.current?.focus(); } };
     document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key, true); };
+    return () => document.removeEventListener('mousedown', away);
   }, [open]);
+  // Escape here closes the list and goes no further: the window's Escape would close Ask. Only an Escape pressed in the
+  // name or the list is the list's; one pressed anywhere else on the page is never taken from it.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!open || event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(false);
+    name.current?.focus();
+  };
+  // Focus gone to something outside the name and the list: the list is no longer where the person is.
+  const onFocusOut = (event: FocusEvent) => {
+    if (open && event.relatedTarget instanceof Node && !head.current?.contains(event.relatedTarget)) setOpen(false);
+  };
   const merged = mergedLine(state);
   return (
-    <div class="thread-head" ref={head}>
-      <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <div class="thread-head" ref={head} onKeyDown={onKeyDown} onFocusOut={onFocusOut}>
+      <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="dialog" aria-expanded={open}
+        aria-controls={open ? THREAD_LIST_ID : undefined} onClick={() => setOpen(!open)}>
         <span class="name">{threadShown(state)?.name ?? 'New thread'}</span><Caret />
       </button>
       {open && <ThreadList state={state} onDone={() => setOpen(false)} />}
       {merged !== null && (
         <div class="thread-merged" data-testid="thread-merged" role="status">
           <span class="name">{merged}</span>
-          <button type="button" class="link-button inline" data-testid="thread-undo" disabled={Boolean(state.ask?.asking)} onClick={undoMerge}>Undo</button>
+          <button type="button" class="link-button inline" data-testid="thread-undo" disabled={askBusy(state)} onClick={undoMerge}>Undo</button>
         </div>
       )}
     </div>
@@ -917,8 +945,9 @@ export function AskView({ state }: { state: State }) {
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     savePosition({ kind: 'bottom' });
   };
-  // A new question, answer, choice or failure scrolls to the bottom.
-  useLayoutEffect(toBottom, [thread.seq, turns.length, thread.asking === null, thread.failed, thread.clarify]);
+  // A new question, answer, choice or failure scrolls to the bottom, and nothing else does: turns that join or leave the
+  // thread (a merge, its Undo, the timeline read again) change how many it has and leave the reading where it is.
+  useLayoutEffect(toBottom, [thread.seq, thread.asked.at(-1), thread.asking === null, thread.failed, thread.clarify]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;

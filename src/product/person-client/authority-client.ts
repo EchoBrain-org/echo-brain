@@ -402,7 +402,10 @@ function askHeaders(): Readonly<Record<string, string>> {
  * Every Ask answer must echo the requested scope, and only an answer to an Ask that sent the previous turn may say what
  * is different since or ask which one (ADR-0047). Only an answer to an Ask that sent the asker's threads may place the
  * question or name a merge (ADR-0056), by indexes into the threads sent. An answer names its question to an Ask that
- * sent either: a question that belongs to another thread names the question asked, previous turn or not.
+ * sent either: a question that belongs to another thread names the question asked, previous turn or not. To an Ask that
+ * sent the threads it must (T2): the question it answers, always; and, when the Ask sent no previous turn to continue,
+ * where the question belongs, since leaving that out means "the previous turn's thread" and there is none. So an
+ * ordinary answer that does not say the subject is new, and a merge into no thread, are not answers to that Ask.
  */
 function inAskScope<T extends { readonly scope: unknown; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[] }>(
   response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]): T {
@@ -416,6 +419,9 @@ function inAskScope<T extends { readonly scope: unknown; readonly thread?: Perso
   const named = [...(response.thread?.kind === 'other' ? response.thread.threads : []), ...(response.merge ?? [])];
   if (threads === undefined ? response.thread !== undefined || response.merge !== undefined : named.some(index => index >= threads.length)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority named a thread the Ask did not send');
+  }
+  if (threads !== undefined && (!Object.hasOwn(response, 'question') || (previous === undefined && response.thread === undefined))) {
+    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority did not place a question the Ask sent threads for');
   }
   return response;
 }

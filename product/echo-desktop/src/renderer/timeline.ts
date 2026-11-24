@@ -394,7 +394,10 @@ export interface Thread {
   readonly id: string;
   /** Its turns, oldest first, as the timeline keeps them. */
   readonly turns: readonly TimelineTurn[];
-  /** Where it lives, one project or none: the scope of its first turn, or of its oldest once that one is gone. */
+  /**
+   * Where it lives, one project or none: the scope of its first turn, or of its oldest once that one is gone. Every turn
+   * of a thread was asked there (R9): a thread is asked in only in its home's scope, and no merge crosses homes.
+   */
   readonly home: AskScope;
   /**
    * What the page calls it: the question typed for its first turn (R2), which a merge does not change, or else the first
@@ -418,12 +421,33 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
     if (own) own.push(turn); else grouped.set(id, [turn]);
   }
   return [...grouped].map(([id, own]) => {
-    const questions = visibleTurns(own).flatMap(turn => sentWords(turn) ?? []);
     // Its first turn, the one it is named after, then the others oldest first: turns a merge brought in may be older.
     const first = own.find(turn => turn.id === id) ?? own[0]!;
     const worded = [first, ...own].find(turn => ownWords(turn)?.trim());
-    return { id, turns: own, home: first.scope, name: (worded ? ownWords(worded)! : first.text).trim(), questions, asked_at: own.at(-1)!.asked_at };
+    const home = first.scope;
+    // Only what was typed in its home is ever sent of it.
+    const questions = visibleTurns(homeTurns({ home, turns: own }, home)).flatMap(turn => sentWords(turn) ?? []);
+    return { id, turns: own, home, name: (worded ? ownWords(worded)! : first.text).trim(), questions, asked_at: own.at(-1)!.asked_at };
   });
+}
+
+/**
+ * The turns of a thread a question asked in `scope` may build on (R9), the one check of it: the thread's turns where the
+ * thread lives, and none anywhere else. So a question continues a turn, carries the thread's older turns, and has its
+ * answer join the thread only in the thread's home, and nothing asked outside a request's scope rides on it (R3). A turn
+ * kept in a thread that was not asked in the thread's home is never one of them: none is saved so, and one can only be
+ * left from before merges were held to one home.
+ */
+export function homeTurns(thread: Pick<Thread, 'home' | 'turns'> | undefined, scope: AskScope): readonly TimelineTurn[] {
+  return thread !== undefined && sameScope(thread.home, scope) ? thread.turns.filter(turn => sameScope(turn.scope, scope)) : [];
+}
+
+/**
+ * Whether `thread` may merge into `into` (R9): another thread, living where it does. The one rule for every merge, by
+ * hand or ECHO's own, and for the row that offers it.
+ */
+export function mergeable(thread: Thread, into: Thread | undefined): boolean {
+  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home);
 }
 
 /** Threads, the one asked in most recently first. */

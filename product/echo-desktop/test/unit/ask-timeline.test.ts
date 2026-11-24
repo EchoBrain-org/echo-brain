@@ -1046,6 +1046,32 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       expect(JSON.stringify(sent(1).previous)).not.toContain(resolved);
     });
 
+    it('counts a check that comes back after its five minutes as none: the typed words go, with no sentence, however readable it found everything', async () => {
+      // The earlier turn cites more than one request can ask about: its check goes in two, one after the other.
+      const many = Array.from({ length: 5000 }, (_, at) => ticket(`THERM-${1000 + at}`, String(21000 + at)));
+      const earlier = turn(resolved, 2 * DAY, answerOf(resolved, many, [['THERM-1000 is open.', [0]]]), { text: typed, typed });
+      seed(earlier);
+      checks = allSame;
+      const store = await startStore();
+      await reopen(store);
+      const before = calls('ask.check').length;
+      const requests = [held.hold('ask.check'), held.hold('ask.check')];
+      const slow = store.ask('who owns it?');
+      await flush();
+      requests[0]!(allSame(calls('ask.check')[before]!.items as never));
+      await flush();
+      // The second request answers five minutes after the check went.
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      requests[1]!(allSame(calls('ask.check')[before + 1]!.items as never));
+      await slow;
+      expect(calls('ask.check')).toHaveLength(before + 2);
+      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [] });
+      // The same check answered in time: the resolved question goes, with the sentence found readable.
+      store.toggleTurn(earlier.id);
+      await store.ask('and since when?');
+      expect(sent(1).previous).toMatchObject({ purpose: 'follow_up', question: resolved, statements: [{ text: 'THERM-1000 is open.' }] });
+    });
+
     it('sends no stored choice once a source of the earlier turn is gone: it asks the person\'s own words again', async () => {
       const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
       rpc.mockImplementation(rpcFor(held, {
@@ -1107,38 +1133,42 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       expect(sent(3).question).toBe(typed);
     });
 
-    it('needs the turn and every turn back along what it followed to have sources, all readable; with no typed words, nothing goes', async () => {
+    it('needs the turn, every turn back along what it followed and every turn asked before it in its thread to have sources, all readable; with no typed words, nothing goes', async () => {
       const name = 'Who is Mina Park?';
-      // A has sources. B followed it, resolved a name from it, and found nothing: no sources of its own.
-      const a = turn('Who is on the launch?', 3 * DAY, status());
+      // A has sources. C followed it and has sources of its own.
+      const a = turn('Who is on the launch?', 4 * DAY, status());
+      const c = turn(resolved, 3 * DAY, status(), { text: typed, typed, follows: a.id });
+      // B followed A too, resolved a name from it, and found nothing: no sources of its own.
       const b = turn(name, 2 * DAY, answerOf(name, [], [], { outcome: 'not_found', parts: [{ question: name, status: 'not_found', statements: [] }] }),
         { text: 'and her?', typed: 'and her?', follows: a.id });
-      // C followed A and has sources of its own; an orphan followed a turn no longer kept; a legacy turn kept neither field.
-      const c = turn(resolved, DAY, status(), { text: typed, typed, follows: a.id });
+      // D followed A after B was asked: B is not a turn it followed, and is still a turn of its thread asked before it.
+      const d = turn(resolved, DAY, status(), { text: typed, typed, follows: a.id });
+      // An orphan followed a turn no longer kept; a legacy turn kept neither field.
       const orphan = turn(resolved, DAY, status(), { text: typed, typed, follows: '00000000-0000-4000-8000-00000000ffff' });
       const { typed: _typed, follows: _follows, ...legacy } = turn(resolved, DAY, status());
-      seed(a, b, c, orphan, legacy);
+      seed(a, c, b, d, orphan, legacy);
       checks = allSame;
       const store = await startStore();
-      for (const again of [b, c, orphan, legacy]) {
+      for (const again of [b, c, d, orphan, legacy]) {
         store.askAgain(again.id);
         await flush();
       }
-      // Every source read the same: only C's chain is whole with sources throughout; the legacy turn has no words to send.
-      expect(calls('ask.run').map(call => call.question)).toEqual(['and her?', resolved, typed]);
+      // Every source read the same: only C has sources throughout, along what it followed and before it in its thread. The
+      // legacy turn has no words to send.
+      expect(calls('ask.run').map(call => call.question)).toEqual(['and her?', resolved, typed, typed]);
       expect(store.askAgainOffered(legacy)).toBe(false);
       expect(store.askAgainOffered(c)).toBe(true);
       // A source of C gone: its typed words go, naming the earlier turn by them.
       checks = someGone;
       store.askAgain(c.id);
       await flush();
-      expect(sent(3)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
+      expect(sent(4)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
       // A follow-up of the legacy turn with a source gone carries no earlier turn at all.
       store.closeAsk();
       store.pickSuggestion({ question: resolved, turn: legacy.id });
       await flush();
       await store.ask('who owns it?');
-      expect(sent(4)).not.toHaveProperty('previous');
+      expect(sent(5)).not.toHaveProperty('previous');
     });
 
     it('decides on the result of the check it made itself, never another check\'s from the same moment', async () => {

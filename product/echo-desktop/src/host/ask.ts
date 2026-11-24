@@ -59,6 +59,26 @@ export function askThreads(value: unknown, question: string, previous: AskPrevio
   return checks(validatePersonAnswerRequestV3, request) ? value as AskThread[] : null;
 }
 
+/**
+ * What an Ask of `question` (already askText's) in `scope` carries of what the
+ * page sent with it: the earlier turn (askPrevious) and the asker's other
+ * threads (askThreads). Both are context, not the question: one the client
+ * would refuse is left out, and the Ask goes on. The page lists the threads
+ * for a question that continues that turn, with the turn's own thread left
+ * out. Without the turn that list would place the question among every thread
+ * but the one it was typed in, so a refused turn takes the list with it, and
+ * the answer then places the question nowhere. `refused`: what was left out.
+ */
+export function askContext(earlier: unknown, others: unknown, question: string, scope: AskScope):
+  { readonly previous?: AskPrevious; readonly threads?: AskThread[]; readonly refused: readonly ('previous' | 'threads')[] } {
+  const previous = earlier === undefined ? undefined : askPrevious(earlier, question, scope);
+  const threads = others === undefined || previous === null ? null : askThreads(others, question, previous);
+  return {
+    ...(previous ? { previous } : {}), ...(threads ? { threads } : {}),
+    refused: [...(previous === null ? ['previous' as const] : []), ...(others !== undefined && threads === null ? ['threads' as const] : [])],
+  };
+}
+
 /** The request a check sends (C1), as the API's own validator takes it, or null when the page's items are not one. */
 export function askCheckRequest(items: unknown): string | null {
   const request = { schema_version: 1, kind: PERSON_ASK_CHECK_REQUEST_KIND_V1, items };

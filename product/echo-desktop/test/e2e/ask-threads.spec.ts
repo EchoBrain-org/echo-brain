@@ -3,7 +3,7 @@
 // on this computer's file, a question that belongs elsewhere asked again where it belongs, "Which one?" between threads,
 // and what of the threads a request carries.
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -91,12 +91,25 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   const name = page.getByTestId('thread-name');
   const list = page.getByTestId('thread-list');
   const rows = list.getByTestId('thread-row');
+  await expect(name).toHaveAttribute('aria-haspopup', 'dialog');
+  await expect(name).toHaveAttribute('aria-expanded', 'false');
+  await expect(name).not.toHaveAttribute('aria-controls');
   await name.click();
   await expect(name).toHaveAttribute('aria-expanded', 'true');
+  // What the name opens is what it says it controls: a dialog, a list a home, a row a button in it, the open thread's the current one.
+  const dialog = page.getByRole('dialog', { name: 'Threads' });
+  await expect(dialog).toHaveAttribute('id', (await name.getAttribute('aria-controls'))!);
+  await expect(dialog.getByRole('searchbox', { name: 'Find a thread' })).toBeFocused();
+  await expect(dialog.getByRole('list')).toHaveCount(2);
+  await expect(dialog.getByRole('list', { name: 'Apollo' }).getByRole('listitem')).toHaveCount(1);
+  await expect(dialog.getByRole('list', { name: 'No project' }).getByRole('listitem')).toHaveCount(2);
+  await expect(dialog.getByRole('list', { name: 'Apollo' }).getByRole('button', { name: /Which tests fail\?/u })).toHaveAttribute('aria-current', 'true');
   await expect(list.getByTestId('thread-group')).toHaveText(['Apollo', 'No project']);
   await expect(rows.locator('.name')).toHaveText(['Which tests fail?', 'When does the pilot start?', 'Who owns billing?']);
   await expect(rows.nth(0)).toHaveAttribute('aria-current', 'true');
   await expect(list.getByTestId('thread-find')).toBeFocused();
+  // No merge crosses homes (R9): the open thread is Apollo's only one, so no row offers Merge.
+  await expect(list.getByTestId('thread-merge')).toHaveCount(0);
   await picture(page, 'ask-thread-list');
   // Find a thread, by any question typed in it, in any case.
   await list.getByTestId('thread-find').fill('PILOT');
@@ -111,13 +124,35 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(list).toBeVisible();
   await page.getByTestId('ask-field').click();
   await expect(list).toHaveCount(0);
-  // The open thread's row does nothing.
+  // A click on the list's own edge keeps the keyboard in it: Escape still closes the list, and not Ask.
+  await name.click();
+  await list.click({ position: { x: 3, y: 3 } });
+  await expect(list).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  // The keyboard leaving closes it too: back from the field to the name it stays, and past the name it is gone.
+  await name.click();
+  await expect(list.getByTestId('thread-find')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(name).toBeFocused();
+  await expect(list).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  // With the list closed, Escape is the window's again: Ask closes.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await page.getByTestId('sidebar-ask').click();
+  await expect(name).toHaveText('Which tests fail?');
+  // The open thread's own row picks that thread: nothing moves, the list closes, and the caret is back in the bar.
   await name.click();
   await rows.nth(0).click();
-  await expect(list).toBeVisible();
+  await expect(list).toHaveCount(0);
   await expect(name).toHaveText('Which tests fail?');
+  await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
+  await expect(page.getByTestId('ask-field')).toBeFocused();
   // The arrow keys move through the rows, and Return jumps: to the pilot's thread, at Home, where the bar asks all context.
-  await page.keyboard.press('Escape');
   await name.click();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -128,8 +163,10 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(page.getByTestId('ask-field')).toBeFocused();
-  // A click jumps to Apollo's thread, on Apollo's page: the chip names it, and a question typed there is asked in Apollo.
+  // From a thread with no project, only the other thread with no project offers Merge: Apollo's row has none.
   await name.click();
+  await expect(list.locator('.thread-item').filter({ has: page.getByTestId('thread-merge') }).locator('.name')).toHaveText(['Who owns billing?']);
+  // A click jumps to Apollo's thread, on Apollo's page: the chip names it, and a question typed there is asked in Apollo.
   await rows.filter({ hasText: 'Which tests fail?' }).click();
   await expect(name).toHaveText('Which tests fail?');
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
@@ -139,6 +176,16 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   expect(asks().at(-1)!.threads).toEqual([]);
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?',
     'Which tests fail?': 'Which tests fail?', 'and who fixes them?': 'Which tests fail?' });
+  // With the bar widened by ×, Apollo's page asks all context, and is still not where a thread with no project lives: a
+  // jump to one puts Home under Ask.
+  await page.getByTestId('scope-clear').click();
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  await name.click();
+  await rows.filter({ hasText: 'Who owns billing?' }).click();
+  await expect(name).toHaveText('Who owns billing?');
+  await back(page);
+  await expect(page.getByTestId('home')).toBeVisible();
+  await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 });
 
 test('Merge joins a thread to the open one in this computer\'s file, and Undo puts it back', async () => {
@@ -176,6 +223,38 @@ test('Merge joins a thread to the open one in this computer\'s file, and Undo pu
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
   await page.getByTestId('thread-name').click();
   await expect(page.getByTestId('thread-row')).toHaveCount(2);
+});
+
+test('a merge this computer could not save is not shown as made: the questions are where they were, with no Undo, and the page says so', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  const before = { 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' };
+  await expect.poll(filed).toEqual(before);
+  // The timeline's folder becomes a link, which the host neither writes through nor reads: every save of the merge fails.
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  renameSync(folder, `${folder}.kept`);
+  symlinkSync(`${folder}.kept`, folder);
+  try {
+    await page.getByTestId('thread-name').click();
+    const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
+    await billing.hover();
+    await billing.getByTestId('thread-merge').click();
+    await expect(page.getByTestId('toast')).toHaveText('Some questions could not be moved on this computer, so they are where they were.');
+    // The page shows no merge the file does not hold.
+    await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+    await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+    await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
+    await page.getByTestId('thread-name').click();
+    await expect(page.getByTestId('thread-row').locator('.name')).toHaveText(['When does the pilot start?', 'Who owns billing?']);
+  } finally {
+    rmSync(folder);
+    renameSync(`${folder}.kept`, folder);
+  }
+  expect(filed()).toEqual(before);
 });
 
 test('a question that belongs to one other thread jumps there and is asked again in it, and no question a model wrote is ever sent as a thread\'s', async () => {
@@ -218,6 +297,72 @@ test('a question that belongs to one other thread jumps there and is asked again
   await expect.poll(filed).toMatchObject({ 'Who owns billing?': 'When does the pilot start?', 'who approves billing invoices?': 'When does the pilot start?' });
   await page.getByTestId('thread-undo').click();
   await expect.poll(filed).toMatchObject({ 'Who owns billing?': 'Who owns billing?', 'did the date slip, same as billing?': 'When does the pilot start?' });
+});
+
+test('the threads on the subject of the one a question jumps to join it when the answer lands there, and Undo takes them back out', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  await back(page);
+  await askAtHome(page, 'Is the ledger closed?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  // Typed in the pilot's thread: it belongs to billing's, and the answer says the ledger's is on the same subject.
+  const question = 'who approves billing invoices, same as ledger?';
+  await page.getByTestId('ask-field').fill(question);
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('thread-name')).toHaveText('Who owns billing?');
+  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText(question);
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Is the ledger closed\?\s*Undo$/u);
+  // Asked again as a follow-up of billing's own turn, before the ledger's thread joined: nothing of that thread rode on it.
+  expect(asks().at(-1)).toMatchObject({ question, previous: { purpose: 'follow_up', question: 'Who owns billing?' } });
+  expect(asks().at(-1)!.previous).not.toHaveProperty('earlier');
+  await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Who owns billing?', [question]: 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
+  // The ledger's question joined as an earlier line, between billing's own turn and the answer, both in full.
+  await expect(page.getByTestId('timeline-question')).toHaveText(['Is the ledger closed?']);
+  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
+  // Undo takes the ledger's thread back out; the answer stays with the turn it followed.
+  await page.getByTestId('thread-undo').click();
+  await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
+  await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Is the ledger closed?', [question]: 'Who owns billing?' });
+});
+
+test('a question a model wrote is sent again only while every turn of its thread before it is still readable, one a merge brought in included', async () => {
+  // In this mode the source check answers, and never finds the follow-up that an answer about what was drafted cites.
+  run = await launch('ask-threads-checked');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'What was drafted last week?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  // A follow-up in the pilot's thread: its answer names the full question a resolver wrote.
+  await ask(page, 'and who decided?');
+  const rewrite = `${RESOLVED} and who decided? (after "When does the pilot start?")`;
+  // Everything in the thread is readable: the next follow-up names that question in full, as it always did.
+  await ask(page, 'and since when?');
+  expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: rewrite, earlier: [{ question: 'When does the pilot start?' }] } });
+  // The other thread joins by hand. Its one turn cites what this person can no longer read, and is now a turn asked
+  // before every question in this thread: any of them a model wrote could have drawn on it.
+  await page.getByTestId('thread-name').click();
+  const drafted = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'What was drafted last week?' });
+  await drafted.hover();
+  await drafted.getByTestId('thread-merge').click();
+  await expect(page.getByTestId('thread-merged')).toBeVisible();
+  const before = asks().length;
+  await ask(page, 'and by whom?');
+  await ask(page, 'and why?');
+  const [first, second] = asks().slice(before) as { previous: { question: string; earlier: { question: string; statements: unknown[] }[] } }[];
+  // Each names the turn it continues by the words typed for it, and the merged turn rides with no sentence.
+  expect(first!.previous.question).toBe('and since when?');
+  expect(second!.previous.question).toBe('and by whom?');
+  expect(first!.previous.earlier.map(each => [each.question, each.statements.length])).toEqual([
+    ['What was drafted last week?', 0], ['When does the pilot start?', 1], ['and who decided?', 1]]);
+  expect(JSON.stringify([first, second])).not.toContain(RESOLVED);
+  expect(JSON.stringify([first, second])).not.toContain('Confirm the trace');
 });
 
 test('a question that could belong to several threads asks which one: a thread in a project names it, and picking it opens the project\'s page and asks there; "New question" starts a thread', async () => {
@@ -276,6 +421,36 @@ test('a question that could belong to several threads asks which one: a thread i
   await expect.poll(filed).toMatchObject({ 'who audits the ledger?': 'who audits the ledger?', 'Is the ledger closed?': 'Is the ledger closed?' });
 });
 
+test('a thread whose project the person can no longer ask in is never asked in from "Which one?": the pick says so, moves nothing, and "New question" stays', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await askInApollo(page, 'Where is the Apollo ledger kept?');
+  await back(page);
+  // Apollo is archived: its thread stays on this computer, and Apollo is no longer a project to ask in.
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-archive').click();
+  await page.getByTestId('project-settings-confirm').click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
+  await page.getByTestId('sidebar-home').click();
+  await page.getByTestId('ask-field').fill('what changed in the ledger?');
+  await page.getByTestId('ask-field').press('Enter');
+  const choices = page.getByTestId('clarify').getByTestId('choice');
+  await expect(choices).toHaveText([/^Where is the Apollo ledger kept\?/u, 'New question']);
+  const sent = asks().length;
+  await choices.nth(0).click();
+  // Nothing is asked outside the thread's home (R9), and the person is not moved to a page they did not choose.
+  await expect(page.getByTestId('toast')).toHaveText('This is no longer available to you.');
+  await expect(choices).toHaveText(['New question']);
+  await expect(page.getByTestId('thread-name')).toHaveText('New thread');
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  expect(asks()).toHaveLength(sent);
+  await choices.click();
+  await expect(page.getByTestId('thread-name')).toHaveText('what changed in the ledger?');
+  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'what changed in the ledger?' });
+  await expect.poll(filed).toEqual({ 'Where is the Apollo ledger kept?': 'Where is the Apollo ledger kept?', 'what changed in the ledger?': 'what changed in the ledger?' });
+});
+
 test('back in Ask from the sidebar a question is placed among every thread, the one shown included; asked in a thread it continues it', async () => {
   run = await launch('ask-threads');
   const { page } = run;
@@ -328,6 +503,66 @@ test('back in Ask from the sidebar a question is placed among every thread, the 
   expect(again).not.toHaveProperty('threads');
   expect(asks()).toHaveLength(before + 2);
   await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
+
+  // Back once more, and the thread that is showing is picked from the list, by Return on it as the one found: the
+  // person is in it, so the next question continues it, in one request.
+  await back(page);
+  await page.getByTestId('sidebar-ask').click();
+  await page.getByTestId('thread-name').click();
+  await page.getByTestId('thread-find').fill('PILOT');
+  await expect(page.getByTestId('thread-row')).toHaveCount(1);
+  await expect(page.getByTestId('thread-row')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('thread-list')).toHaveCount(0);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
+  const picked = asks().length;
+  await ask(page, 'and who runs it?');
+  expect(asks()).toHaveLength(picked + 1);
+  expect(asks().at(-1)).toMatchObject({ question: 'and who runs it?', previous: { purpose: 'follow_up', question: 'is the pilot still on?' } });
+  await expect.poll(filed).toMatchObject({ 'and who runs it?': 'When does the pilot start?' });
+});
+
+test('the thread list closes when Ask shows another thread under it, and opens again with nothing to find', async () => {
+  // This Authority holds each answer until the test lets it go.
+  run = await launch('ask-progress');
+  const { page } = run;
+  const release = join(run.home, 'release-ask');
+  writeFileSync(release, '');
+  await ask(page, 'When does the pilot start?');
+  await back(page);
+  // A second question, from the page: on its way it belongs to no thread yet, and the list can be opened meanwhile.
+  rmSync(release);
+  await page.getByTestId('ask-field').fill('Who owns billing?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('asking')).toBeVisible();
+  const name = page.getByTestId('thread-name');
+  const list = page.getByTestId('thread-list');
+  await expect(name).toHaveText('New thread');
+  await name.click();
+  await list.getByTestId('thread-find').fill('pilot');
+  await expect(list.getByTestId('thread-row')).toHaveCount(1);
+  // While the question is on its way no row moves Ask.
+  await expect(list.getByTestId('thread-row')).toBeDisabled();
+  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone.
+  writeFileSync(release, '');
+  await expect(name).toHaveText('Who owns billing?');
+  await expect(list).toHaveCount(0);
+  await name.click();
+  await expect(list.getByTestId('thread-find')).toHaveValue('');
+  await expect(list.getByTestId('thread-row')).toHaveCount(2);
+});
+
+test('an answer that does not say where a question asked with the threads belongs is refused, and nothing of it is kept', async () => {
+  // This Authority names the question and leaves out its place: with no previous turn there is no thread that could mean (T2).
+  run = await launch('ask-threads-unplaced');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('ask-field').fill('When does the pilot start?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('ask-error')).toHaveText('ECHO sent back something this app could not read. Try again, or update the app.');
+  await expect(page.getByTestId('turn')).toHaveCount(0);
+  expect(asks()).toEqual([{ schema_version: 3, question: 'When does the pilot start?', threads: [] }]);
+  expect(file()).toEqual([]);
 });
 
 test('from a person\'s only thread a new subject starts a second thread: the question carries an empty list', async () => {

@@ -110,6 +110,25 @@ describe('the asker\'s threads on the Person client (ADR-0056)', () => {
     await expect(client(replying(elsewhere([1], { merge: [0] }))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, THREADS)).resolves.toMatchObject({ thread: { kind: 'other', threads: [1] } });
   });
 
+  it('refuses an answer that leaves out what an Ask that sent the threads is owed (T2): the question it answers, and with no previous turn, where that belongs', async () => {
+    const asked = (answer: unknown, previous?: PersonAnswerPreviousV1, threads = THREADS) => client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, previous, threads);
+    // No question named: not an answer to an Ask that sent the threads, with a previous turn or without.
+    await expect(asked(answered(), PREVIOUS)).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(asked(answered())).rejects.toMatchObject({ code: 'invalid_response' });
+    // With no previous turn there is no thread to continue: an ordinary answer must say the subject is new, and a merge
+    // has nothing to merge into.
+    await expect(asked(answered({ question: QUESTION }))).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(asked(answered({ question: QUESTION, merge: [0] }))).rejects.toMatchObject({ code: 'invalid_response' });
+    // An empty list is a list sent, and is owed the same.
+    await expect(asked(answered({ question: QUESTION }), undefined, [])).rejects.toMatchObject({ code: 'invalid_response' });
+    await expect(asked(answered({ question: QUESTION, thread: { kind: 'new' } }), undefined, [])).resolves.toMatchObject({ thread: { kind: 'new' } });
+    // With a previous turn the same answers continue its thread, and a merge joins that one.
+    await expect(asked(answered({ question: QUESTION }), PREVIOUS)).resolves.toMatchObject({ question: QUESTION });
+    await expect(asked(answered({ question: QUESTION, merge: [0] }), PREVIOUS)).resolves.toMatchObject({ merge: [0] });
+    // An Ask that sent no threads is owed neither, as before.
+    await expect(client(replying(answered())).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS)).resolves.toMatchObject({ outcome: 'answered' });
+  });
+
   it('with threads and no previous turn, takes a named question but still no since and no choices', async () => {
     // A question that belongs to another thread names the question asked.
     await expect(client(replying(elsewhere([0]))).askWithLiveSources(QUESTION, undefined, undefined, undefined, THREADS)).resolves.toMatchObject({ question: QUESTION });
@@ -182,5 +201,9 @@ describe('person ask --threads (ADR-0056)', () => {
     const unsent = cli(replying(answered({ question: QUESTION, thread: { kind: 'new' } })));
     expect(await unsent.run(['ask', `--question=${QUESTION}`])).toBe(1);
     expect(lines(unsent.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
+    // And when the answer does not place a question the threads were sent for.
+    const unplaced = cli(replying(answered({ question: QUESTION })));
+    expect(await unplaced.run(['ask', `--question=${QUESTION}`, '--progress', `--threads=${JSON.stringify(THREADS)}`])).toBe(1);
+    expect(lines(unplaced.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
   });
 });

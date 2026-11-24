@@ -766,11 +766,12 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   });
 
   it('reads where an answer says the question belongs among the threads the Ask sent, and which are on its subject (ADR-0056)', () => {
-    // A new subject is an ordinary answer; one that continues the open thread says nothing of threads. Either names its question.
+    // A new subject is an ordinary answer; one that continues the open thread (the Ask carried a previous turn) says
+    // nothing of threads. Either names its question.
     const question = 'Who owns ECHO-7?';
     expect(answerView(line({ question, thread: { kind: 'new' } }), scope, 3).thread).toEqual({ kind: 'new' });
-    expect(answerView(line({ question, merge: [0, 2] }), scope, 3)).toMatchObject({ outcome: 'answered', merge: [0, 2] });
-    for (const key of ['thread', 'merge']) expect(answerView(line({ question }), scope, 3)).not.toHaveProperty(key);
+    expect(answerView(line({ question, merge: [0, 2] }), scope, 3, true)).toMatchObject({ outcome: 'answered', merge: [0, 2] });
+    for (const key of ['thread', 'merge']) expect(answerView(line({ question }), scope, 3, true)).not.toHaveProperty(key);
     // One that belongs to other threads answers nothing: "Which one?", without choices.
     const elsewhere = (threads: number[], extra: Record<string, unknown> = {}) => line({ outcome: 'clarify', citations: [], parts: [], question: 'did that change?',
       thread: { kind: 'other', threads }, ...extra });
@@ -789,6 +790,26 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     expect(() => answerView(line({ question, thread: { kind: 'new' } }), scope)).toThrow(ViewError);
     expect(() => answerView(line({ question, merge: [0] }), scope)).toThrow(ViewError);
     expect(() => answerView(elsewhere([0]), scope)).toThrow(ViewError);
+  });
+
+  it('refuses an answer that leaves out what an Ask that carried the threads is owed (T2): its question, and with no previous turn, where that belongs', () => {
+    const question = 'Who owns ECHO-7?';
+    // No question named, with a previous turn or without, to a list of any size.
+    for (const continued of [true, false]) for (const threads of [0, 3]) expect(() => answerView(line({}), scope, threads, continued)).toThrow(ViewError);
+    // With no previous turn there is no thread to continue: an ordinary answer must say the subject is new, and a merge
+    // has no thread to join.
+    expect(() => answerView(line({ question }), scope, 3)).toThrow(ViewError);
+    expect(() => answerView(line({ question }), scope, 0)).toThrow(ViewError);
+    expect(() => answerView(line({ question, merge: [0] }), scope, 3)).toThrow(ViewError);
+    expect(answerView(line({ question, thread: { kind: 'new' } }), scope, 0)).toMatchObject({ question, thread: { kind: 'new' } });
+    const elsewhere = line({ outcome: 'clarify', citations: [], parts: [], question: 'did that change?', thread: { kind: 'other', threads: [1] } });
+    expect(answerView(elsewhere, scope, 3)).toMatchObject({ outcome: 'clarify', thread: { kind: 'other', threads: [1] } });
+    // With a previous turn the same answers continue its thread.
+    expect(answerView(line({ question }), scope, 3, true)).toMatchObject({ question });
+    expect(answerView(line({ question, merge: [0] }), scope, 3, true)).toMatchObject({ merge: [0] });
+    // An Ask that carried no list is owed neither, with a previous turn or without.
+    expect(answerView(line({}), scope)).not.toHaveProperty('question');
+    expect(answerView(line({}), scope, undefined, true)).not.toHaveProperty('question');
   });
 
   it('reads a source check (C1): a state per item asked, in order; anything else is not its output', () => {
