@@ -424,3 +424,34 @@ test('a latest citation chosen at the end while a question is on its way opens i
   writeFileSync(join(home, 'release-ask'), '');
   await expect(page.getByTestId('asking')).toHaveCount(0);
 });
+
+test('a merge and its Undo leave the reading where it was: only a new question, answer, choice or failure goes to the end', async () => {
+  run = await launch('ask-scroll');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  // Two threads with no project: a short one, then a long answer in a thread of its own.
+  await ask(page, 'Quick status');
+  await page.getByTestId('back').click();
+  await ask(page, 'Long readout');
+  const view = page.getByTestId('ask-view');
+  const bottom = () => view.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
+  await expect.poll(bottom).toBeLessThan(1);
+  // The person reads from the top of the long answer.
+  await view.evaluate((element) => { element.scrollTop = 0; });
+  await settled(page);
+  expect(await bottom()).toBeGreaterThan(100);
+  // The short thread joins from the list: its question shows as one line above, and the reading stays put.
+  await page.getByTestId('thread-name').click();
+  const quick = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Quick status' });
+  await quick.hover();
+  await quick.getByTestId('thread-merge').click();
+  await expect(page.getByTestId('thread-merged')).toBeVisible();
+  await expect(page.getByTestId('timeline-question')).toHaveText(['Quick status']);
+  await settled(page);
+  expect(await bottom()).toBeGreaterThan(100);
+  // Undo takes it back out, and the reading is still where it was.
+  await page.getByTestId('thread-undo').click();
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await settled(page);
+  expect(await bottom()).toBeGreaterThan(100);
+});
