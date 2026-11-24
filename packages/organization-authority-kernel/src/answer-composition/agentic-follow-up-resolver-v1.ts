@@ -135,13 +135,14 @@ export interface AgenticFollowUpCarryV1 {
 }
 
 /**
- * What a resolution was made from, compared whole: the question, the previous turn as the Authority checked it for
- * this attempt (its older turns with it), and the asker's other threads as sent. A resolution's `about`, `threads` and
- * `merge` are indexes into exactly these, so it stands only for an attempt in which all three are the same. The key is
- * their digest: it carries none of their text.
+ * What a resolution was made from, compared whole: everything the resolver is shown. The question, the previous turn
+ * as the Authority checked it for this attempt (its older turns with it), the asker's other threads as sent, and the
+ * day and time zone the turns' days are named in. A resolution's `about`, `threads` and `merge` are indexes into
+ * exactly these, so it stands only for an attempt in which all of them are the same. The key is their digest: it
+ * carries none of their text.
  */
-export function agenticResolutionKeyV1(question: string, previous: PersonAnswerPreviousV1 | undefined, threads: readonly PersonAnswerThreadV1[] | undefined): Sha256Digest {
-  return sha256Digest(JSON.stringify([question, previous ?? null, threads ?? null]));
+export function agenticResolutionKeyV1(asked: Pick<AgenticThreadResolverInputV1, "question" | "previous" | "threads" | "today" | "time_zone">): Sha256Digest {
+  return sha256Digest(JSON.stringify([asked.question, asked.previous ?? null, asked.threads ?? null, asked.today, asked.time_zone]));
 }
 
 export const FOLLOW_UP_RESOLVER_PROMPT = [

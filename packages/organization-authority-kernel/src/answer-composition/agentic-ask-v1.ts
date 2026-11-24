@@ -418,14 +418,15 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         let placed: Pick<PersonAnswerResponseV8, "thread" | "merge"> = {};
         // An Ask again asks one earlier question again where it was asked: nothing resolves or places it.
         if (goal.kind === "question" && (previous?.purpose === "follow_up" || (previous === undefined && threads !== undefined))) {
-          // A resolution an earlier attempt of this request already paid for is used as it is, only when it was made from
-          // this attempt's own question, checked previous turn and threads; any other attempt resolves anew.
-          const key = agenticResolutionKeyV1(goal.question, previous, threads);
-          const kept = followUp?.resolved?.key === key ? followUp.resolved.value : undefined;
-          const resolved = kept ?? await resolveAgenticThreadV1({
-            gate, question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC", signal: activeSignal,
+          // What the resolver is shown. A resolution an earlier attempt of this request already paid for is used as it
+          // is, only when it was made from exactly this; any other attempt resolves anew.
+          const asking = {
+            question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC",
             ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }),
-          });
+          };
+          const key = agenticResolutionKeyV1(asking);
+          const kept = followUp?.resolved?.key === key ? followUp.resolved.value : undefined;
+          const resolved = kept ?? await resolveAgenticThreadV1({ gate, signal: activeSignal, ...asking });
           if (kept === undefined) followUp?.on_resolved?.(Object.freeze({ key, value: resolved }));
           const { placement } = resolved;
           placed = agenticThreadFieldsV1(placement);

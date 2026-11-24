@@ -117,6 +117,9 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
       (({ thread: _thread, ...rest }) => rest)(elsewhere([1])), (({ question: _question, ...rest }) => rest)(elsewhere([1])),
       elsewhere([]), elsewhere([1, 1]), elsewhere([-1]), elsewhere([1], { thread: { kind: 'other' } }), elsewhere([1], { thread: { kind: 'other', threads: [1], extra: 1 } }),
       answered({ thread: { kind: 'open' } }), answered({ thread: { kind: 'new', threads: [1] } }), answered({ thread: 'new' }), answered({ thread: null }),
+      // An answer that says anything of threads names its question, and is never an Ask again's.
+      (({ question: _question, ...rest }) => rest)(answered({ thread: { kind: 'new' } })), (({ question: _question, ...rest }) => rest)(answered({ merge: [1] })),
+      answered({ thread: { kind: 'new' }, since: { statements: [] } }), answered({ merge: [1], since: { statements: [] } }),
     ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();
   });
 });

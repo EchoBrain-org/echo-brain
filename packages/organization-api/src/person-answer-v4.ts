@@ -510,6 +510,9 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   // without choices. A new subject is an ordinary answer.
   const elsewhere = result.thread?.kind === 'other' ? result.thread.threads : undefined;
   if ((elsewhere !== undefined) !== (clarify && !previous.includes('choices')) || (result.thread?.kind === 'new' && clarify)) fail('Ask response thread is inconsistent');
+  // An answer that says anything of threads answers a request that carried them, so it names its question; and it is
+  // never an Ask again's, the one answer that says what is different since, which carries none.
+  if (placed.length > 0 && (!previous.includes('question') || previous.includes('since'))) fail('Ask response thread is inconsistent');
   // A merge names other threads on the subject of the one the question belongs to: the open thread, or the one other
   // thread named. A new subject has none, and neither has a question that could belong to several. An answer that
   // offers choices has none either: the question is asked again once one is chosen, and that answer names them.

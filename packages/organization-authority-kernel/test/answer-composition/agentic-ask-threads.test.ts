@@ -389,7 +389,7 @@ describe("a resolution kept between the attempts of one request (ADR-0056)", () 
   it("reports what it resolved with the key of the question, the checked previous turn and the threads it was made from", async () => {
     const first = await attempt(SENT, [ELSEWHERE]);
     expect(first.resolverCalls).toBe(1);
-    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1(QUESTION, PREVIOUS, THREADS), value: { placement: { thread: "other", threads: [1, 0], merge: [] }, fallback: false } }]);
+    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1({ question: QUESTION, previous: PREVIOUS, threads: THREADS, today: "2026-11-23", time_zone: "America/Los_Angeles" }), value: { placement: { thread: "other", threads: [1, 0], merge: [] }, fallback: false } }]);
     // What is held between attempts for a question that belongs elsewhere is a digest and thread numbers: none of the
     // question's, the turn's or the threads' text.
     expect(first.reported[0]!.key).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -409,7 +409,7 @@ describe("a resolution kept between the attempts of one request (ADR-0056)", () 
   it("keeps a fallback as it keeps any resolution: the call and its repair are not paid for again, and it stays the open thread as asked", async () => {
     const first = await attempt(SENT, [{ thread: "elsewhere" }, { thread: "other", threads: [9] }]);
     expect(first.resolverCalls).toBe(2);
-    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1(QUESTION, PREVIOUS, THREADS), value: { placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true } }]);
+    expect(first.reported).toEqual([{ key: agenticResolutionKeyV1({ question: QUESTION, previous: PREVIOUS, threads: THREADS, today: "2026-11-23", time_zone: "America/Los_Angeles" }), value: { placement: { thread: "open", resolution: { resolution: "same" }, merge: [] }, fallback: true } }]);
     const second = await attempt(SENT, [], first.reported[0]);
     expect(second.resolverCalls).toBe(0);
     expect(second.response).toMatchObject({ outcome: "answered", question: QUESTION });

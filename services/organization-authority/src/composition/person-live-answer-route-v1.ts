@@ -163,7 +163,7 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     input.signal?.throwIfAborted();
     // What the request's resolver settled (what a follow-up refers to, and where the question belongs), a paid call, held
     // between the attempts of this request with the key of what it was made from. The Ask itself decides whether a later
-    // attempt may use it: only one whose question, checked previous turn and threads are the same (agenticResolutionKeyV1).
+    // attempt may use it: only one shown exactly what that call was shown (agenticResolutionKeyV1).
     // A snapshot restart whose check keeps any other sentence therefore resolves anew.
     let resolved: AgenticResolutionKeptV1 | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.

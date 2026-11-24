@@ -381,19 +381,25 @@ describe("the open thread's citations as one list, and what an answer says of th
     expect(() => validatePersonAnswerResponseV8({ ...clarified, merge: [0] })).toThrow("Ask response merge is inconsistent");
   });
 
-  it("keys a kept resolution by exactly what it was made from: the question, the checked previous turn and the threads", () => {
-    const key = agenticResolutionKeyV1(QUESTION, PREVIOUS, THREADS);
-    expect(agenticResolutionKeyV1(QUESTION, structuredClone(PREVIOUS), structuredClone(THREADS))).toBe(key);
+  it("keys a kept resolution by exactly what it was made from: the question, the checked previous turn, the threads and the day", () => {
+    const when = { today: "2026-11-23", time_zone: "America/Los_Angeles" };
+    const keyOf = (question: string, previous: PersonAnswerPreviousV1 | undefined, threads: readonly PersonAnswerThreadV1[] | undefined, on = when) =>
+      agenticResolutionKeyV1({ question, ...on, ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }) });
+    const key = keyOf(QUESTION, PREVIOUS, THREADS);
+    expect(keyOf(QUESTION, structuredClone(PREVIOUS), structuredClone(THREADS))).toBe(key);
     const fewer = { ...PREVIOUS, earlier: [{ ...PREVIOUS.earlier![0]!, statements: PREVIOUS.earlier![0]!.statements.slice(1) }, PREVIOUS.earlier![1]!] };
     const changed = [
-      agenticResolutionKeyV1("what about that ticket?", PREVIOUS, THREADS),
-      agenticResolutionKeyV1(QUESTION, fewer, THREADS),
-      agenticResolutionKeyV1(QUESTION, { ...PREVIOUS, statements: [] }, THREADS),
-      agenticResolutionKeyV1(QUESTION, undefined, THREADS),
-      agenticResolutionKeyV1(QUESTION, PREVIOUS, THREADS.slice(1)),
-      agenticResolutionKeyV1(QUESTION, PREVIOUS, [THREADS[1]!, THREADS[0]!, THREADS[2]!]),
-      agenticResolutionKeyV1(QUESTION, PREVIOUS, [{ ...THREADS[0]!, questions: [THREADS[0]!.questions[0]!] }, THREADS[1]!, THREADS[2]!]),
-      agenticResolutionKeyV1(QUESTION, PREVIOUS, undefined),
+      keyOf("what about that ticket?", PREVIOUS, THREADS),
+      keyOf(QUESTION, fewer, THREADS),
+      keyOf(QUESTION, { ...PREVIOUS, statements: [] }, THREADS),
+      keyOf(QUESTION, undefined, THREADS),
+      keyOf(QUESTION, PREVIOUS, THREADS.slice(1)),
+      keyOf(QUESTION, PREVIOUS, [THREADS[1]!, THREADS[0]!, THREADS[2]!]),
+      keyOf(QUESTION, PREVIOUS, [{ ...THREADS[0]!, questions: [THREADS[0]!.questions[0]!] }, THREADS[1]!, THREADS[2]!]),
+      keyOf(QUESTION, PREVIOUS, undefined),
+      // The resolver is shown today's date and the day each turn was asked in the request's zone: another day or zone is another call.
+      keyOf(QUESTION, PREVIOUS, THREADS, { ...when, today: "2026-11-24" }),
+      keyOf(QUESTION, PREVIOUS, THREADS, { ...when, time_zone: "UTC" }),
     ];
     for (const other of changed) expect(other).not.toBe(key);
     expect(new Set(changed).size).toBe(changed.length);
