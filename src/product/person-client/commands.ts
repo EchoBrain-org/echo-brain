@@ -707,11 +707,7 @@ function askPreviousOf(values: Record<Option, string | boolean | undefined>): Pe
   }
 }
 
-/**
- * `--threads` as the Ask request would carry it (ADR-0056), checked on its own; anything wrong with it is an
- * AskPreviousError. An Ask again carries none: that is the request's rule, so the request's validator reads the two
- * together, with the question the turn already checked.
- */
+/** `--threads` (ADR-0056) as the request would carry it; beside an Ask again it is refused by the request's own rule. */
 function askThreadsOf(values: Record<Option, string | boolean | undefined>, previous: PersonAnswerPreviousV1 | undefined): readonly PersonAnswerThreadV1[] {
   let threads: unknown;
   try { threads = JSON.parse(requiredText(values, "threads")); }
@@ -1115,8 +1111,7 @@ export async function runPersonClientCli(
     print(stderr, {
       ok: false,
       error: (error as Error).message,
-      // A previous turn or a list of threads this client refuses fails as one an Authority refuses (ADR-0047), so a
-      // caller can ask without it.
+      // Refused here as an Authority would refuse it (ADR-0047), so a caller can ask without it.
       ...(error instanceof AskPreviousError ? { action, code: "invalid_request" } : {}),
       ...(error instanceof PersonQueryInputError ? { action, code: error.code } : {}),
       ...(employeeMutation

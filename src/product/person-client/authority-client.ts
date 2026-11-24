@@ -382,9 +382,8 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 type AskScope = ProjectIdV1 | undefined;
 
 /**
- * The Ask's V3 request, which may carry the asker's previous turn (ADR-0047) and other threads (ADR-0056). Its question
- * is sent as personQuestionToSend makes it; the Authority alone applies the question rule and says which rule a question
- * breaks.
+ * The Ask's V3 request, with any previous turn and threads: the Authority alone applies the question rule and says which
+ * rule a question breaks.
  */
 function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]) {
   return { schema_version: 3, question: personQuestionToSend(question),
@@ -399,10 +398,8 @@ function askHeaders(): Readonly<Record<string, string>> {
 }
 
 /**
- * Every Ask answer must echo the requested scope, and only an answer to an Ask that sent the previous turn may say what
- * is different since or ask which one (ADR-0047). An answer names its question to an Ask that sent the previous turn or
- * the asker's threads; what it may say of the threads, and what an Ask that sent them is owed (T2), is
- * personAnswerThreadsProblemV1's (ADR-0056).
+ * An answer echoes the requested scope; since and choices come only to an Ask that sent its previous turn, its question
+ * also to one that sent threads (ADR-0047), and the rest of T2 is personAnswerThreadsProblemV1's.
  */
 function inAskScope<T extends { readonly scope: unknown; readonly question?: string; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[] }>(
   response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]): T {
