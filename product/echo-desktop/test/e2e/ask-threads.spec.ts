@@ -188,44 +188,7 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 });
 
-test('Merge joins a thread to the open one in this computer\'s file, and Undo puts it back', async () => {
-  run = await launch('ask-threads');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await ask(page, 'Who owns billing?');
-  await back(page);
-  await askAtHome(page, 'When does the pilot start?');
-  await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
-  await page.getByTestId('thread-name').click();
-  const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
-  // Merge shows on the row the pointer is on; the open thread's own row has none.
-  await expect(page.getByTestId('thread-merge')).toHaveCount(1);
-  await billing.hover();
-  await expect(billing.getByTestId('thread-merge')).toHaveCSS('opacity', '1');
-  await expect(billing.getByTestId('thread-merge')).toHaveAccessibleName('Merge into this thread');
-  await picture(page, 'ask-thread-merge-row');
-  await billing.getByTestId('thread-merge').click();
-  await expect(page.getByTestId('thread-list')).toHaveCount(0);
-  // One faint line says so. The thread keeps its name, and the merged question joins it in time order, above.
-  const merged = page.getByTestId('thread-merged');
-  await expect(merged).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
-  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
-  await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
-  await picture(page, 'ask-thread-merged');
-  await expect.poll(filed).toEqual({ 'Who owns billing?': 'When does the pilot start?', 'When does the pilot start?': 'When does the pilot start?' });
-  // One thread is left to list.
-  await page.getByTestId('thread-name').click();
-  await expect(page.getByTestId('thread-row')).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await merged.getByRole('button', { name: 'Undo' }).click();
-  await expect(merged).toHaveCount(0);
-  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
-  await page.getByTestId('thread-name').click();
-  await expect(page.getByTestId('thread-row')).toHaveCount(2);
-});
-
-test('a merge this computer refuses is not shown as made: the questions stay where they were and the page says so; the same merge then goes through, and an Undo it refuses keeps its Undo', async () => {
+test('Merge joins a thread to the open one in this computer\'s file, and Undo puts it back; each, refused by this computer, moves nothing, says so, and can be tried again', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -247,14 +210,11 @@ test('a merge this computer refuses is not shown as made: the questions stay whe
     }
   };
   const refused = 'Some questions could not be moved on this computer, so they are where they were.';
-  const merge = async () => {
+  const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
+  await refusing(async () => {
     await page.getByTestId('thread-name').click();
-    const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
     await billing.hover();
     await billing.getByTestId('thread-merge').click();
-  };
-  await refusing(async () => {
-    await merge();
     await expect(page.getByTestId('toast')).toHaveText(refused);
     // The page shows no merge the file does not hold, and offers no Undo.
     await expect(page.getByTestId('thread-merged')).toHaveCount(0);
@@ -262,24 +222,42 @@ test('a merge this computer refuses is not shown as made: the questions stay whe
     await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
     expect(filed()).toEqual(before);
   });
-  // Nothing is left half done, and Ask is not left busy: the same merge goes through now.
-  await merge();
-  await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
+  // Nothing is left half done, and Ask is not left busy: the same merge goes through now. Merge shows on the row the
+  // pointer is on; the open thread's own row has none.
+  await page.getByTestId('thread-name').click();
+  await expect(page.getByTestId('thread-merge')).toHaveCount(1);
+  await billing.hover();
+  await expect(billing.getByTestId('thread-merge')).toHaveCSS('opacity', '1');
+  await expect(billing.getByTestId('thread-merge')).toHaveAccessibleName('Merge into this thread');
+  await picture(page, 'ask-thread-merge-row');
+  await billing.getByTestId('thread-merge').click();
+  await expect(page.getByTestId('thread-list')).toHaveCount(0);
+  // One faint line says so. The thread keeps its name, and the merged question joins it in time order, above.
+  const merged = page.getByTestId('thread-merged');
+  await expect(merged).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
   await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
+  await picture(page, 'ask-thread-merged');
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'When does the pilot start?', 'When does the pilot start?': 'When does the pilot start?' });
+  // One thread is left to list.
+  await page.getByTestId('thread-name').click();
+  await expect(page.getByTestId('thread-row')).toHaveCount(1);
+  await page.keyboard.press('Escape');
   // Its Undo refused, the merge stays, and so do the line and its Undo, to be tried again.
   await expect(page.getByTestId('toast')).toHaveCount(0, { timeout: 15_000 });
   await refusing(async () => {
-    await page.getByTestId('thread-undo').click();
+    await merged.getByRole('button', { name: 'Undo' }).click();
     await expect(page.getByTestId('toast')).toHaveText(refused);
-    await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
+    await expect(merged).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
     await expect(page.getByTestId('thread-undo')).toBeEnabled();
     await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
   });
-  await page.getByTestId('thread-undo').click();
-  await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+  await merged.getByRole('button', { name: 'Undo' }).click();
+  await expect(merged).toHaveCount(0);
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect.poll(filed).toEqual(before);
+  await page.getByTestId('thread-name').click();
+  await expect(page.getByTestId('thread-row')).toHaveCount(2);
 });
 
 test('a question that belongs to one other thread jumps there and is asked again in it, and no question a model wrote is ever sent as a thread\'s', async () => {

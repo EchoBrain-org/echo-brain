@@ -74,9 +74,10 @@ function cli(fetch: typeof globalThis.fetch) {
   return { output, run };
 }
 const lines = (text: string) => text.split('\n').filter(line => line !== '').map(line => JSON.parse(line) as Record<string, unknown>);
+const choices = { ...(({ thread: _thread, ...clarify }) => clarify)(elsewhere([0])), choices: [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }] };
 
 describe('the asker\'s threads on the Person client (ADR-0056)', () => {
-  it('sends the other threads and the thread\'s earlier turns on /v7, and returns where the answer says the question belongs', async () => {
+  it('sends the other threads and the thread\'s earlier turns on /v7 as given, and returns where the answer says the question belongs', async () => {
     const previous = { ...PREVIOUS, earlier: [EARLIER] };
     const fetch = replying(elsewhere([1], { merge: [0] }));
     const result = await client(fetch).askWithLiveProgress(QUESTION, undefined, undefined, () => undefined, previous, undefined, THREADS);
@@ -84,126 +85,92 @@ describe('the asker\'s threads on the Person client (ADR-0056)', () => {
     const [url, init] = fetch.mock.calls[0]!;
     expect(new URL(String(url)).pathname).toBe('/v7/person/ask');
     expect(bodyOf(init)).toEqual({ schema_version: 3, question: QUESTION, previous, threads: THREADS });
-    // With no previous turn the request carries the threads alone, and its answer says the subject is new.
-    const alone = replying(answered({ question: QUESTION, thread: { kind: 'new' } }));
-    await expect(client(alone).askWithLiveSources(QUESTION, undefined, undefined, undefined, THREADS)).resolves.toMatchObject({ thread: { kind: 'new' } });
-    expect(bodyOf(alone.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, threads: THREADS });
-    // An Ask that carries neither sends neither.
-    const plain = replying(answered());
-    await client(plain).askWithLiveSources(QUESTION);
-    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION });
-  });
-
-  it('refuses an answer that places the question or names a merge when the Ask sent no threads', async () => {
-    for (const answer of [answered({ question: QUESTION, thread: { kind: 'new' } }), answered({ question: QUESTION, merge: [0] }), elsewhere([0])]) {
-      await expect(client(replying(answer)).askWithLiveSources(QUESTION), JSON.stringify(answer)).rejects.toMatchObject({ code: 'invalid_response' });
-      // A previous turn alone does not make them answerable either.
-      await expect(client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS), JSON.stringify(answer)).rejects.toMatchObject({ code: 'invalid_response' });
+    // With no previous turn the request carries the threads alone; an Ask that carries neither sends neither.
+    for (const [threads, sent] of [[THREADS, { threads: THREADS }], [undefined, {}]] as const) {
+      const reply = replying(threads === undefined ? answered() : answered({ question: QUESTION, thread: { kind: 'new' } }));
+      await client(reply).askWithLiveSources(QUESTION, undefined, undefined, undefined, threads);
+      expect(bodyOf(reply.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, ...sent });
     }
   });
 
-  it('refuses an index past the threads it sent, in the placement or the merge', async () => {
-    for (const answer of [elsewhere([2]), elsewhere([0, 2]), elsewhere([0], { merge: [2] }), answered({ question: QUESTION, merge: [1, 2] })]) {
-      await expect(client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, THREADS), JSON.stringify(answer)).rejects.toMatchObject({ code: 'invalid_response' });
-    }
-    // The last thread sent is in range.
-    await expect(client(replying(elsewhere([1], { merge: [0] }))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, THREADS)).resolves.toMatchObject({ thread: { kind: 'other', threads: [1] } });
-  });
-
-  it('refuses an answer that leaves out what an Ask that sent the threads is owed (T2): the question it answers, and with no previous turn, where that belongs', async () => {
-    const asked = (answer: unknown, previous?: PersonAnswerPreviousV1, threads = THREADS) => client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, previous, threads);
-    // No question named: not an answer to an Ask that sent the threads, with a previous turn or without.
-    await expect(asked(answered(), PREVIOUS)).rejects.toMatchObject({ code: 'invalid_response' });
-    await expect(asked(answered())).rejects.toMatchObject({ code: 'invalid_response' });
-    // With no previous turn there is no thread to continue: an ordinary answer must say the subject is new, and a merge
-    // has nothing to merge into.
-    await expect(asked(answered({ question: QUESTION }))).rejects.toMatchObject({ code: 'invalid_response' });
-    await expect(asked(answered({ question: QUESTION, merge: [0] }))).rejects.toMatchObject({ code: 'invalid_response' });
-    // An empty list is a list sent, and is owed the same.
-    await expect(asked(answered({ question: QUESTION }), undefined, [])).rejects.toMatchObject({ code: 'invalid_response' });
-    await expect(asked(answered({ question: QUESTION, thread: { kind: 'new' } }), undefined, [])).resolves.toMatchObject({ thread: { kind: 'new' } });
+  it.each([
+    // An answer that places the question or names a merge answers an Ask that sent threads, a previous turn alone or not.
+    ['a new subject to an Ask that sent no threads', answered({ question: QUESTION, thread: { kind: 'new' } }), undefined, undefined, false],
+    ['a new subject to an Ask that sent a previous turn alone', answered({ question: QUESTION, thread: { kind: 'new' } }), PREVIOUS, undefined, false],
+    ['a merge to an Ask that sent no threads', answered({ question: QUESTION, merge: [0] }), undefined, undefined, false],
+    ['a merge to an Ask that sent a previous turn alone', answered({ question: QUESTION, merge: [0] }), PREVIOUS, undefined, false],
+    ['other threads to an Ask that sent no threads', elsewhere([0]), undefined, undefined, false],
+    ['other threads to an Ask that sent a previous turn alone', elsewhere([0]), PREVIOUS, undefined, false],
+    // Indexes are into the threads sent.
+    ['a thread past those sent', elsewhere([2]), PREVIOUS, THREADS, false],
+    ['threads one of which is past those sent', elsewhere([0, 2]), PREVIOUS, THREADS, false],
+    ['a merge past those sent, beside another thread', elsewhere([0], { merge: [2] }), PREVIOUS, THREADS, false],
+    ['a merge past those sent, beside the open thread', answered({ question: QUESTION, merge: [1, 2] }), PREVIOUS, THREADS, false],
+    ['the last thread sent, and a merge', elsewhere([1], { merge: [0] }), PREVIOUS, THREADS, true],
+    ['a thread, to an empty list sent', elsewhere([0]), PREVIOUS, [], false],
+    ['a merge, to an empty list sent', answered({ question: QUESTION, merge: [0] }), PREVIOUS, [], false],
+    // What an Ask that sent the threads is owed (T2): the question it answers, and with no previous turn, where that belongs.
+    ['no question, to threads and a previous turn', answered(), PREVIOUS, THREADS, false],
+    ['no question, to threads alone', answered(), undefined, THREADS, false],
+    ['no place, to threads alone', answered({ question: QUESTION }), undefined, THREADS, false],
+    ['a merge with no place, to threads alone', answered({ question: QUESTION, merge: [0] }), undefined, THREADS, false],
+    ['no place, to an empty list alone', answered({ question: QUESTION }), undefined, [], false],
+    ['a new subject, to an empty list alone', answered({ question: QUESTION, thread: { kind: 'new' } }), undefined, [], true],
+    ['other threads, to threads alone', elsewhere([0]), undefined, THREADS, true],
+    ['a new subject, to threads alone', answered({ question: QUESTION, thread: { kind: 'new' } }), undefined, THREADS, true],
     // With a previous turn the same answers continue its thread, and a merge joins that one.
-    await expect(asked(answered({ question: QUESTION }), PREVIOUS)).resolves.toMatchObject({ question: QUESTION });
-    await expect(asked(answered({ question: QUESTION, merge: [0] }), PREVIOUS)).resolves.toMatchObject({ merge: [0] });
-    // An Ask that sent no threads is owed neither, as before.
-    await expect(client(replying(answered())).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS)).resolves.toMatchObject({ outcome: 'answered' });
-  });
-
-  it('with threads and no previous turn, takes a named question but still no since and no choices', async () => {
-    // A question that belongs to another thread names the question asked.
-    await expect(client(replying(elsewhere([0]))).askWithLiveSources(QUESTION, undefined, undefined, undefined, THREADS)).resolves.toMatchObject({ question: QUESTION });
-    await expect(client(replying(answered({ question: QUESTION, thread: { kind: 'new' } }))).askWithLiveSources(QUESTION, undefined, undefined, undefined, THREADS)).resolves.toMatchObject({ question: QUESTION });
-    const { thread: _thread, ...clarify } = elsewhere([0]);
-    const choices = { ...clarify, choices: [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }] };
-    for (const answer of [answered({ question: QUESTION, since: { statements: [] } }), choices]) {
-      await expect(client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, undefined, THREADS), JSON.stringify(answer)).rejects.toMatchObject({ code: 'invalid_response' });
-    }
+    ['the open thread, to threads and a previous turn', answered({ question: QUESTION }), PREVIOUS, THREADS, true],
+    ['the open thread and a merge, to threads and a previous turn', answered({ question: QUESTION, merge: [0] }), PREVIOUS, THREADS, true],
+    // An Ask that sent no threads is owed neither, as before; one with threads and no previous turn still takes no since and no choices.
+    ['an answer as before, to a previous turn alone', answered(), PREVIOUS, undefined, true],
+    ['what is different since, to threads alone', answered({ question: QUESTION, since: { statements: [] } }), undefined, THREADS, false],
+    ['choices, to threads alone', choices, undefined, THREADS, false],
+  ] as const)('takes %s only as it fits what the Ask sent (T2)', async (_name, answer, previous, threads, fits) => {
+    const asked = client(replying(answer)).askWithLiveSources(QUESTION, undefined, undefined, previous, threads);
+    if (fits) await expect(asked).resolves.toEqual(answer);
+    else await expect(asked).rejects.toMatchObject({ code: 'invalid_response' });
   });
 });
 
 describe('person ask --threads (ADR-0056)', () => {
-  it('sends the validated list and prints the answer it gets, with or without progress and a previous turn', async () => {
-    const previous = { ...PREVIOUS, earlier: [EARLIER] };
-    const streamed = replying(elsewhere([1]));
-    const progress = cli(streamed);
-    expect(await progress.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify(THREADS)}`])).toBe(0);
-    expect(validatePersonAskProgressResultLineV3(lines(progress.output.stdout).at(-1))).toMatchObject({ result: { outcome: 'clarify', thread: { kind: 'other', threads: [1] } } });
-    expect(bodyOf(streamed.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous, threads: THREADS });
-    const plain = replying(answered({ question: QUESTION, thread: { kind: 'new' } }));
-    const once = cli(plain);
-    expect(await once.run(['ask', `--question=${QUESTION}`, `--threads=${JSON.stringify(THREADS)}`])).toBe(0);
-    expect(lines(once.output.stdout).at(-1)).toMatchObject({ ok: true, result: { thread: { kind: 'new' } } });
-    expect(bodyOf(plain.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, threads: THREADS });
+  it.each([
+    ['with progress and a previous turn with earlier turns', ['--progress', `--previous=${JSON.stringify({ ...PREVIOUS, earlier: [EARLIER] })}`, `--threads=${JSON.stringify(THREADS)}`],
+      elsewhere([1]), { previous: { ...PREVIOUS, earlier: [EARLIER] }, threads: THREADS }],
+    ['alone', [`--threads=${JSON.stringify(THREADS)}`], answered({ question: QUESTION, thread: { kind: 'new' } }), { threads: THREADS }],
+    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
+    ['empty, with a previous turn', [`--previous=${JSON.stringify(PREVIOUS)}`, '--threads=[]'], answered({ question: QUESTION, thread: { kind: 'new' } }), { previous: PREVIOUS, threads: [] }],
+  ] as const)('sends the validated list, %s, and prints the answer it gets', async (_name, argv, answer, sent) => {
+    const fetch = replying(answer);
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, ...argv])).toBe(0);
+    const [last, progress] = [lines(run.output.stdout).at(-1), (argv as readonly string[]).includes('--progress')];
+    expect(progress ? validatePersonAskProgressResultLineV3(last) : last).toMatchObject(progress ? { result: answer } : { ok: true, result: answer });
+    expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, ...sent });
   });
 
-  it('sends an empty list too: the asker has no other thread, and the answer may still say the question starts one', async () => {
-    const first = replying(answered({ question: QUESTION, thread: { kind: 'new' } }));
-    const run = cli(first);
-    expect(await run.run(['ask', `--question=${QUESTION}`, `--previous=${JSON.stringify(PREVIOUS)}`, '--threads=[]'])).toBe(0);
-    expect(lines(run.output.stdout).at(-1)).toMatchObject({ ok: true, result: { thread: { kind: 'new' } } });
-    expect(bodyOf(first.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous: PREVIOUS, threads: [] });
-    // With none sent, every thread an answer names is one the Ask did not send.
-    await expect(client(replying(elsewhere([0]))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, [])).rejects.toMatchObject({ code: 'invalid_response' });
-    await expect(client(replying(answered({ question: QUESTION, merge: [0] }))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, [])).rejects.toMatchObject({ code: 'invalid_response' });
-  });
-
-  it('refuses a list it cannot send before anything is sent, as invalid_request, so a caller can ask without it', async () => {
-    for (const threads of ['{not json', '{}', JSON.stringify([{ questions: [], asked_at: THREADS[0]!.asked_at }]), JSON.stringify([{ ...THREADS[0], title: 'Billing' }]),
-      JSON.stringify([{ questions: [' padded '], asked_at: THREADS[0]!.asked_at }]), JSON.stringify([{ questions: ['When?'], asked_at: '2026-10-23' }])]) {
-      const fetch = vi.fn<typeof globalThis.fetch>();
-      const run = cli(fetch);
-      expect(await run.run(['ask', `--question=${QUESTION}`, '--progress', `--threads=${threads}`]), threads).toBe(2);
-      expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask threads (JSON )?is invalid/u) });
-      expect(fetch).not.toHaveBeenCalled();
-    }
-  });
-
-  it('refuses threads, or earlier turns, beside an Ask again before anything is sent', async () => {
-    const again = { ...PREVIOUS, purpose: 'ask_again' };
+  it.each([
+    ...['{not json', '{}', JSON.stringify([{ questions: [], asked_at: THREADS[0]!.asked_at }]), JSON.stringify([{ ...THREADS[0], title: 'Billing' }]),
+      JSON.stringify([{ questions: [' padded '], asked_at: THREADS[0]!.asked_at }]), JSON.stringify([{ questions: ['When?'], asked_at: '2026-10-23' }])]
+      .map(threads => [`--threads=${threads}`, ['--progress', `--threads=${threads}`], /^Ask threads (JSON )?is invalid/u] as const),
+    ['threads beside an Ask again', [`--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`, `--threads=${JSON.stringify(THREADS)}`], /^Ask threads is invalid: .*Ask again carries no threads$/u],
+    ['earlier turns beside an Ask again', [`--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again', earlier: [EARLIER] })}`], /^Ask previous is invalid: .*Ask again carries no earlier turns$/u],
+    ['an earlier turn that breaks a previous turn\'s rule', [`--previous=${JSON.stringify({ ...PREVIOUS, earlier: [{ ...EARLIER, purpose: 'follow_up' }] })}`], /^Ask previous is invalid/u],
+  ] as const)('refuses %s before anything is sent, as invalid_request, so a caller can ask without it', async (_name, argv, error) => {
     const fetch = vi.fn<typeof globalThis.fetch>();
-    const threads = cli(fetch);
-    expect(await threads.run(['ask', `--question=${PREVIOUS.question}`, `--previous=${JSON.stringify(again)}`, `--threads=${JSON.stringify(THREADS)}`])).toBe(2);
-    expect(lines(threads.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask threads is invalid: .*Ask again carries no threads$/u) });
-    const earlier = cli(fetch);
-    expect(await earlier.run(['ask', `--question=${PREVIOUS.question}`, `--previous=${JSON.stringify({ ...again, earlier: [EARLIER] })}`])).toBe(2);
-    expect(lines(earlier.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(/^Ask previous is invalid: .*Ask again carries no earlier turns$/u) });
-    // An earlier turn that breaks a previous turn's rule is refused the same way.
-    const bad = cli(fetch);
-    expect(await bad.run(['ask', `--question=${QUESTION}`, `--previous=${JSON.stringify({ ...PREVIOUS, earlier: [{ ...EARLIER, purpose: 'follow_up' }] })}`])).toBe(2);
-    expect(lines(bad.output.stderr).at(-1)).toMatchObject({ code: 'invalid_request', error: expect.stringMatching(/^Ask previous is invalid/u) });
+    const run = cli(fetch);
+    const question = argv.some(arg => arg.includes('ask_again')) ? PREVIOUS.question : QUESTION;
+    expect(await run.run(['ask', `--question=${question}`, ...argv])).toBe(2);
+    expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(error) });
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('fails the Ask as invalid_response when the answer names a thread that was not sent', async () => {
-    const run = cli(replying(elsewhere([2])));
-    expect(await run.run(['ask', `--question=${QUESTION}`, '--progress', `--threads=${JSON.stringify(THREADS)}`])).toBe(1);
+  it.each([
+    ['names a thread that was not sent', elsewhere([2]), ['--progress', `--threads=${JSON.stringify(THREADS)}`]],
+    ['places a question no threads were sent for', answered({ question: QUESTION, thread: { kind: 'new' } }), []],
+    ['does not place a question the threads were sent for', answered({ question: QUESTION }), ['--progress', `--threads=${JSON.stringify(THREADS)}`]],
+  ] as const)('fails the Ask as invalid_response when the answer %s', async (_name, answer, argv) => {
+    const run = cli(replying(answer));
+    expect(await run.run(['ask', `--question=${QUESTION}`, ...argv])).toBe(1);
     expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
-    const unsent = cli(replying(answered({ question: QUESTION, thread: { kind: 'new' } })));
-    expect(await unsent.run(['ask', `--question=${QUESTION}`])).toBe(1);
-    expect(lines(unsent.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
-    // And when the answer does not place a question the threads were sent for.
-    const unplaced = cli(replying(answered({ question: QUESTION })));
-    expect(await unplaced.run(['ask', `--question=${QUESTION}`, '--progress', `--threads=${JSON.stringify(THREADS)}`])).toBe(1);
-    expect(lines(unplaced.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
   });
 });

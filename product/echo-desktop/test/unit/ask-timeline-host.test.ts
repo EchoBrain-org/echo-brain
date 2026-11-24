@@ -91,55 +91,37 @@ describe('the timeline file (C5)', () => {
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('moves turns between threads in one write, setting only their thread, and none of them when the file does not hold one it names (ADR-0056)', () => {
-    const first = turn(3, {});
-    const second = turn(2, { unreadable: [0] });
-    const third = turn(1);
+  it('moves turns between threads in one compare-and-set write, setting only their thread, and none of them unless the file holds each where the page believes (ADR-0056)', () => {
+    const [first, second, third, older, odd] = [turn(5, {}), turn(4, { unreadable: [0] }), turn(3), turn(2), turn(1)];
     for (const each of [first, second, third]) putTimeline(person, ARI, { ...each, thread: first.id });
+    // Saved before threads: in none, as far as the file goes. And a thread that is not a turn's id, written by something
+    // other than a put (which takes only a turn's id there): taken as none.
+    putTimeline(person, ARI, older);
+    putTimeline(person, ARI, { ...odd, thread: 'thread-1' });
     const before = readFileSync(timelinePath(person, ARI), 'utf8');
     vi.mocked(renameSync).mockClear();
-    // A turn it does not hold: the whole move is refused, nothing is written, and the answer says where each one it holds is.
+    // Refused whole, nothing written: a turn it does not hold, or one it holds in another thread than the page believes.
+    // The answer says where the file has each named turn it holds.
     const absent = randomUUID();
-    expect(moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }]))
-      .toEqual({ moved: false, turns: [{ turn: second.id, thread: first.id }, { turn: third.id, thread: first.id }] });
-    expect(moveTimeline(person, ARI, [{ from: first.id, to: first.id, turns: [absent] }])).toEqual({ moved: false, turns: [] });
+    for (const [moves, turns] of [
+      [[{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }], [{ turn: second.id, thread: first.id }, { turn: third.id, thread: first.id }]],
+      [[{ from: first.id, to: first.id, turns: [absent] }], []],
+      [[{ from: first.id, to: older.id, turns: [first.id] }, { from: second.id, to: older.id, turns: [second.id] }], [{ turn: first.id, thread: first.id }, { turn: second.id, thread: first.id }]],
+      [[{ from: 'thread-1', to: second.id, turns: [odd.id] }], [{ turn: odd.id, thread: null }]],
+    ] as const) expect(moveTimeline(person, ARI, moves)).toEqual({ moved: false, turns });
     expect(renameSync).not.toHaveBeenCalled();
     expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
-    // Every one it names, in the thread the page believes: they move together.
+    // Every one it names, where the page believes: they move together, in one write.
     expect(moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id] }]))
       .toEqual({ moved: true, turns: [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }] });
     expect(renameSync).toHaveBeenCalledTimes(1);
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }]);
-  });
-
-  it('moves nothing when a named turn is not in the thread the page believes, and answers where the file has each named turn', () => {
-    const [first, second, older] = [turn(3), turn(2), turn(1)];
-    putTimeline(person, ARI, { ...first, thread: first.id });
-    putTimeline(person, ARI, { ...second, thread: first.id });
-    // Saved before threads: in none, as far as the file goes.
-    putTimeline(person, ARI, older);
-    const before = readFileSync(timelinePath(person, ARI), 'utf8');
-    vi.mocked(renameSync).mockClear();
-    // The page believes the second is in its own thread: the file says otherwise, so the whole move is refused.
-    const refused = moveTimeline(person, ARI, [{ from: first.id, to: older.id, turns: [first.id] }, { from: second.id, to: older.id, turns: [second.id] }]);
-    expect(refused).toEqual({ moved: false, turns: [{ turn: first.id, thread: first.id }, { turn: second.id, thread: first.id }] });
-    expect(renameSync).not.toHaveBeenCalled();
-    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
-    // In none, a turn saved before threads moves from null, and the answer says where it is now. Named for the first
-    // time, it is marked as carrying no more than the turns it followed, as it did (`carried`).
-    expect(moveTimeline(person, ARI, [{ from: null, to: first.id, turns: [older.id] }])).toEqual({ moved: true, turns: [{ turn: older.id, thread: first.id }] });
-    expect(readTimeline(person, ARI)[2]).toEqual({ ...older, thread: first.id, carried: [] });
+    // In none, a turn moves from null. Named for the first time, a turn saved before threads is marked as carrying no
+    // more than the turns it followed, as it did (`carried`); one whose thread was no turn's id is named as it is.
+    expect(moveTimeline(person, ARI, [{ from: null, to: first.id, turns: [older.id] }, { from: null, to: second.id, turns: [odd.id] }]))
+      .toEqual({ moved: true, turns: [{ turn: older.id, thread: first.id }, { turn: odd.id, thread: second.id }] });
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }, { ...older, thread: first.id, carried: [] },
+      { ...odd, thread: second.id }]);
     expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
-  });
-
-  it('takes a thread the file holds that is not a turn\'s id as none, in what a move compares and in what it answers', () => {
-    const [first, second] = [turn(2), turn(1)];
-    putTimeline(person, ARI, { ...second, thread: second.id });
-    // Written by something other than a put, which takes only a turn's id there.
-    putTimeline(person, ARI, { ...first, thread: 'thread-1' });
-    expect(moveTimeline(person, ARI, [{ from: 'thread-1', to: second.id, turns: [first.id] }])).toEqual({ moved: false, turns: [{ turn: first.id, thread: null }] });
-    expect(moveTimeline(person, ARI, [{ from: null, to: second.id, turns: [first.id] }])).toEqual({ moved: true, turns: [{ turn: first.id, thread: second.id }] });
-    expect(readTimeline(person, ARI)[1]).toEqual({ ...first, thread: second.id });
   });
 
   it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds none of the turns named', () => {
@@ -503,29 +485,24 @@ describe('what the page sends with an Ask and a check', () => {
     expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(5_000), citation_indexes: [0] }] })).not.toBeNull();
   });
 
-  it('carries the asker\'s other threads as the client takes them, only on an Ask that has some (ADR-0056)', () => {
-    const threads = [{ questions: ['When does Apollo launch?', 'did that change?'], asked_at: '2026-10-24T09:00:00.000Z' }];
-    expect(askArgv('Who owns it?', { kind: 'global' }, previous)).not.toContainEqual(expect.stringMatching(/^--threads=/u));
-    expect(askArgv('Who owns it?', { kind: 'global' }, previous, threads).slice(-2)).toEqual([`--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify(threads)}`]);
-    expect(askArgv('Who owns it?', { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' }, undefined, threads).at(-1)).toBe(`--threads=${JSON.stringify(threads)}`);
-  });
-
-  it('takes the other threads only as the request carries them: a list it would refuse is not sent, and the Ask goes without it', () => {
-    const thread = { questions: ['When does Apollo launch?'], asked_at: '2026-10-24T09:00:00.000Z' };
+  it('carries the asker\'s other threads only as the request takes them, as the client takes them: a list it would refuse is not sent (ADR-0056, T6)', () => {
+    const thread = { questions: ['When does Apollo launch?', 'did that change?'], asked_at: '2026-10-24T09:00:00.000Z' };
     const earlier = { question: 'When does Apollo launch?', asked_at: '2026-10-20T09:00:00.000Z', statements: [], citations: [] };
-    expect(askThreads([thread], 'Who owns it?', undefined)).toEqual([thread]);
-    expect(askThreads([thread], 'Who owns it?', { ...previous, earlier: [earlier] })).toEqual([thread]);
-    // No count of its own: many threads, of many questions, all go.
-    expect(askThreads(Array.from({ length: 300 }, () => ({ ...thread, questions: Array.from({ length: 20 }, (_, at) => `Question ${at}?`) })), 'Who owns it?', previous)).toHaveLength(300);
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous)).not.toContainEqual(expect.stringMatching(/^--threads=/u));
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, [thread]).slice(-2)).toEqual([`--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify([thread])}`]);
+    expect(askArgv('Who owns it?', { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' }, undefined, [thread]).at(-1)).toBe(`--threads=${JSON.stringify([thread])}`);
+    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, []).at(-1)).toBe('--threads=[]');
+    // No count of its own: many threads, of many questions, all go; so does an empty list, with or without a previous turn.
+    const many = Array.from({ length: 300 }, () => ({ ...thread, questions: Array.from({ length: 20 }, (_, at) => `Question ${at}?`) }));
+    for (const [threads, sentWith] of [[[thread], undefined], [[thread], { ...previous, earlier: [earlier] }], [many, previous], [[], previous], [[], undefined]] as const) {
+      expect(askThreads(threads, 'Who owns it?', sentWith)).toEqual(threads);
+    }
+    // Refused: what the request would refuse, a list beside an Ask again, and a list that does not fit the body with the turn.
     for (const bad of [
       [{ ...thread, questions: [] }], [{ ...thread, questions: [' padded '] }], [{ ...thread, asked_at: 'today' }], [{ ...thread, name: 'Apollo' }], [{ questions: thread.questions }],
       'threads', null, {},
     ]) expect(askThreads(bad, 'Who owns it?', previous)).toBeNull();
-    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
-    expect(askThreads([], 'Who owns it?', previous)).toEqual([]);
-    expect(askThreads([], 'Who owns it?', undefined)).toEqual([]);
-    expect(askArgv('Who owns it?', { kind: 'global' }, previous, []).at(-1)).toBe('--threads=[]');
-    // An Ask again carries none, and the list and the turn fit the body together.
     expect(askThreads([thread], previous.question, { ...previous, purpose: 'ask_again' })).toBeNull();
     expect(askThreads([{ ...thread, questions: ['é'.repeat(600_000)] }], 'Who owns it?', previous)).toBeNull();
   });

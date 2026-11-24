@@ -76,17 +76,21 @@ const body = (extra: { readonly previous?: unknown; readonly threads?: unknown; 
 const auditText = (f: OpenItemsFixtureV1) => JSON.stringify(f.db.prepare("SELECT * FROM authority_person_read_decision_audit_v2 WHERE context_kind = 'answer_composition'").all());
 
 describe('where a question belongs, on /v7 (ADR-0056)', () => {
-  it('streams a question that belongs to other threads as clarify with the threads by index, audited, with no research and no read', async () => {
+  it.each([
+    ['from its thread', { thread: 'other', threads: [3, 1] }, following(launchTurn, undefined), { thread: { kind: 'other', threads: [2, 0] } }],
+    // Asked from a page with no thread open, the request carries the threads only; a merge passes through.
+    ['from a page, with the thread plainly on its subject', { thread: 'other', threads: [1], merge: [3, 1] }, undefined, { thread: { kind: 'other', threads: [0] }, merge: [2] }],
+  ])('streams a question that belongs to other threads, asked %s, as clarify with the threads by index, audited, with no research and no read', async (_name, reply, previous, placed) => {
     const f = await sentFixture();
-    const { model, resolver, calls } = withThreadResolver([{ thread: 'other', threads: [3, 1] }], noResearch);
-    const response = await ask(await v7(f, model), { body: body({ previous: following(launchTurn, undefined), threads: THREADS, question: 'when does the Halvorsen quote expire?' }) });
+    const { model, resolver, calls } = withThreadResolver([reply], noResearch);
+    const response = await ask(await v7(f, model), { body: body({ previous, threads: THREADS, question: 'when does the Halvorsen quote expire?' }) });
     const events = decodeAll(createPersonAskProgressDecoderV3(), await response.text());
     expect(events.map(event => event.type)).toEqual(['stage', 'answer']);
     const terminal = events.at(-1)!;
     if (terminal.type !== 'answer') throw new Error('expected the answer event');
     expect(terminal.response).toEqual({
       schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'clarify', citations: [], parts: [],
-      question: 'when does the Halvorsen quote expire?', thread: { kind: 'other', threads: [2, 0] },
+      question: 'when does the Halvorsen quote expire?', ...placed,
     });
     expect(terminal.receipt).toMatchObject({ looked_through: 0, rows: [] });
     // One model call, the thread resolver's, shown the other threads from 1 with the days they were last asked in.
@@ -98,51 +102,27 @@ describe('where a question belongs, on /v7 (ADR-0056)', () => {
     expect(auditBodies(f, 'echo-person-agentic-ask-audit-v1')).toEqual([expect.objectContaining({ outcome: 'clarify', rounds: 0, model_calls: 1, citation_count: 0, receipt_digests: [], generations: [expect.objectContaining({ role: 'answer' })] })]);
   });
 
-  it('passes a merge through: the one thread the question belongs to, and the thread plainly on its subject', async () => {
-    const f = await sentFixture();
-    const { model } = withThreadResolver([{ thread: 'other', threads: [1], merge: [3, 1] }], noResearch);
-    // Asked from a page with no thread open: the request carries the threads only.
-    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body({ threads: THREADS, question: 'when does the Halvorsen quote expire?' }) }));
-    expect(answer).toMatchObject({ outcome: 'clarify', thread: { kind: 'other', threads: [0] }, merge: [2] });
-  });
-
-  it('researches a new subject as asked, and the answer says it starts a new thread', async () => {
+  it.each([
+    ['a new subject, with other threads', following(launchTurn, undefined), THREADS, true],
+    // The client keeps threads and the person has no other yet: the list goes, empty, and is still placed.
+    ['a new subject, from inside the person\'s only thread', following(launchTurn, undefined), [], true],
+    // The same reply, to a request that is not being placed (no `threads` field at all), is answered in its thread.
+    ['a request with older turns and no list', following(latestLaunchTurn, [launchTurn]), undefined, false],
+  ])('researches %s as asked, from nothing of the open thread, the answer saying where it belongs only when the request was placed', async (_name, previous, threads, placed) => {
     const f = await sentFixture();
     const tasks = myOpenTasksPlanner();
     const { model, resolver, seenAfterResolver } = withThreadResolver([{ thread: 'new' }], tasks.model);
-    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body({ previous: following(launchTurn, undefined), threads: THREADS, question: 'What are my open tasks?' }) }));
-    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?', thread: { kind: 'new' } });
+    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body({ previous, threads, question: 'What are my open tasks?' }) }));
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?' });
+    if (placed) expect(answer).toMatchObject({ thread: { kind: 'new' } });
+    else for (const key of ['thread', 'merge']) expect(answer).not.toHaveProperty(key);
+    // The thread resolver ran once, shown the open thread and the other threads sent, if any.
     expect(resolver).toHaveLength(1);
+    expect(JSON.parse(resolver[0]!.user_prompt)).toMatchObject({ threads: (threads ?? []).map(() => expect.anything()), open: { turns: previous.earlier === undefined ? [{ question: LAUNCH_QUESTION }] : [{}, {}] } });
     // Research starts from nothing of the open thread (no item opened before its first step), on the question as asked,
     // and neither research nor the writer is shown the thread or the other threads.
     expect(tasks.steps[0]).toMatchObject({ question: 'What are my open tasks?', opened: [] });
-    for (const text of [BLOCKED, LAUNCH_QUESTION, ...THREAD_TEXT]) expect(seenAfterResolver()).not.toContain(text);
-  });
-
-  it('lets a person start a second thread from inside their only one: an empty list of threads is still placed', async () => {
-    const f = await sentFixture();
-    const tasks = myOpenTasksPlanner();
-    const { model, resolver } = withThreadResolver([{ thread: 'new' }], tasks.model);
-    // The client keeps threads and the person has no other yet: the list goes, empty.
-    const sent = body({ previous: following(launchTurn, undefined), threads: [], question: 'What are my open tasks?' });
-    const answer = await streamedAnswer(await ask(await v7(f, model), { body: sent }));
-    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?', thread: { kind: 'new' } });
-    // The thread resolver ran, and was shown the open thread and no other.
-    expect(resolver).toHaveLength(1);
-    expect(JSON.parse(resolver[0]!.user_prompt)).toMatchObject({ threads: [], open: { turns: [{ question: LAUNCH_QUESTION }] } });
-    expect(tasks.steps[0]).toMatchObject({ question: 'What are my open tasks?', opened: [] });
-  });
-
-  it('answers a new subject in its thread, saying nothing of threads, when the request carried older turns and no list', async () => {
-    const f = await sentFixture();
-    const tasks = myOpenTasksPlanner();
-    // The same reply, to a request that is not being placed: no `threads` field at all.
-    const { model, resolver } = withThreadResolver([{ thread: 'new' }], tasks.model);
-    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body({ previous: following(latestLaunchTurn, [launchTurn]), question: 'What are my open tasks?' }) }));
-    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?' });
-    for (const key of ['thread', 'merge']) expect(answer).not.toHaveProperty(key);
-    expect(resolver).toHaveLength(1);
-    expect(JSON.parse(resolver[0]!.user_prompt).threads).toEqual([]);
+    if (placed) for (const text of [BLOCKED, LAUNCH_QUESTION, ...THREAD_TEXT]) expect(seenAfterResolver()).not.toContain(text);
   });
 
   it('resolves a reference to something only an older turn names, and starts research from that turn\'s citation', async () => {
