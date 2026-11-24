@@ -713,7 +713,7 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
  * has Merge, which merges that thread into the open one. The arrow keys move through the rows from the field, and Return
  * there jumps to the first. While a question is on its way nothing here moves Ask.
  */
-function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
+export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
   const [find, setFind] = useState('');
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);

@@ -397,8 +397,9 @@ export interface Thread {
   /** Where it lives, one project or none: the scope of its first turn, or of its oldest once that one is gone. */
   readonly home: AskScope;
   /**
-   * What the page calls it: the first question typed in it (R2). A thread none of whose turns kept the person's words
-   * (all saved before they were) is called by its first turn's heading, as its page shows that turn; nothing of it is sent.
+   * What the page calls it: the question typed for its first turn (R2), which a merge does not change, or else the first
+   * typed in it. A thread none of whose turns kept the person's words (all saved before they were) is called by its
+   * first turn's heading, as its page shows that turn; nothing of it is sent.
    */
   readonly name: string;
   /** The questions typed in it, oldest first, each question it shows once: all an Ask ever sends of it (R2). */
@@ -418,9 +419,10 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
   }
   return [...grouped].map(([id, own]) => {
     const questions = visibleTurns(own).flatMap(turn => sentWords(turn) ?? []);
-    const first = own.find(turn => ownWords(turn)?.trim());
-    return { id, turns: own, home: (own.find(turn => turn.id === id) ?? own[0]!).scope, name: (first ? ownWords(first)! : own[0]!.text).trim(),
-      questions, asked_at: own.at(-1)!.asked_at };
+    // Its first turn, the one it is named after, then the others oldest first: turns a merge brought in may be older.
+    const first = own.find(turn => turn.id === id) ?? own[0]!;
+    const worded = [first, ...own].find(turn => ownWords(turn)?.trim());
+    return { id, turns: own, home: first.scope, name: (worded ? ownWords(worded)! : first.text).trim(), questions, asked_at: own.at(-1)!.asked_at };
   });
 }
 
