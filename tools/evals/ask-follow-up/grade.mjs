@@ -1,8 +1,7 @@
 /**
  * Deterministic grading for the follow-up resolution eval (Ask timeline v1, "Follow-up resolution eval
  * (pre-registered)", ADR-0047). No model judges: a trial passes or fails its case's expectation from the resolver's
- * structured reply alone, and the four rules are counts over trials. The thread resolution eval (Ask threads v1,
- * ADR-0056) is graded the same way, by its own cases and rules, in the second half of this file.
+ * structured reply alone, and the four rules are counts over trials; the thread resolution eval (ADR-0056) below likewise.
  */
 import { readFileSync } from "node:fs";
 import { validatePersonAnswerRequestV3, validatePersonQuestionText } from "@echo-brain/organization-api";
@@ -132,7 +131,7 @@ export const THREAD_THRESHOLDS = Object.freeze({ route_the_obvious: 0.9, leave_n
 /** Trials of each case in the run that decides, as pre-registered. */
 export const THREAD_TRIALS = 3;
 
-/** Distinct thread numbers as a case names them: from 1, as the resolver is shown the threads. */
+/** Distinct thread numbers, from 1 as the resolver is shown them. */
 const threadNumbers = (value, threads) => Array.isArray(value) && value.length > 0 && new Set(value).size === value.length
   && value.every((n) => Number.isSafeInteger(n) && n >= 1 && n <= threads);
 const sameSet = (left, right) => left.length === right.length && new Set(left).size === left.length && left.every((entry) => right.includes(entry));
@@ -197,19 +196,10 @@ export function loadThreadCases(path = THREAD_CASES_FILE) {
 }
 
 /**
- * One thread trial's grade against its case, from the kernel's placement (`{ thread: "open" | "new" | "other", … }`,
- * its `threads` and `merge` counting from 0) or null for a trial that threw:
- *
- * - `passed`: the placement is the group's expectation. Continues the open thread: `open`. One other thread: `other`
- *   naming exactly that thread. Several other threads: `other` naming exactly the candidates. New subject: `new`. Same
- *   subject twice: the expected thread with exactly its duplicates merged; when both are other threads, either may be
- *   the one named and the other merged, since the merged thread is the same.
- * - `named_all`: `other` naming every candidate, whatever else it names. Rule 1 reads it: a trial that names one
- *   candidate alone has guessed.
- * - `merged`: it named a merge at all. Rule 4 reads it.
- *
- * A `fallback` (no usable reply after one repair, so the product answered where the question was asked) passes nothing,
- * in every group.
+ * One thread trial's grade (the kernel's placement, indexes from 0; null for a trial that threw). `passed`: the group's
+ * expectation, a same-subject pair of other threads graded either way round, since the merged thread is the same.
+ * `named_all`: `other` names every candidate (rule 1: one alone has guessed). `merged`: it named any merge (rule 4).
+ * A fallback passes nothing.
  */
 export function gradeThreadTrial(caseDefinition, placement, fallback = false) {
   if (fallback || placement === null || placement === undefined) return Object.freeze({ passed: false, named_all: false, merged: false });
@@ -239,11 +229,7 @@ export function gradeThreadTrial(caseDefinition, placement, fallback = false) {
   return Object.freeze({ passed, named_all: namedAll, merged: merge.length > 0 });
 }
 
-/**
- * Whether graded trials are the whole registered run, which alone decides: every registered case (`cases`, each an id
- * and its group), tried exactly THREAD_TRIALS times as trials 1 to 3, and no other trial. A selection of some cases, a
- * case run twice, or fewer trials is a run that may be reported and never decides.
- */
+/** Whether graded trials are the whole registered run, which alone decides: every registered case, trials 1 to 3, once. */
 export function threadRunIsComplete(trials, cases) {
   const registered = new Map(cases.map((entry) => [entry.id, entry.group]));
   if (registered.size !== cases.length || trials.length !== registered.size * THREAD_TRIALS) return false;
@@ -252,7 +238,7 @@ export function threadRunIsComplete(trials, cases) {
     if (!registered.has(trial.case_id) || registered.get(trial.case_id) !== trial.group) return false;
     if (!Number.isSafeInteger(trial.trial) || trial.trial < 1 || trial.trial > THREAD_TRIALS) return false;
     const key = `${trial.case_id} ${trial.trial}`;
-    // As many trials as the registered run has, each of a registered case and trial number, none twice: all of them.
+    // As many trials as the run has, each registered and none twice: so all of them.
     if (seen.has(key)) return false;
     seen.add(key);
   }
@@ -260,15 +246,9 @@ export function threadRunIsComplete(trials, cases) {
 }
 
 /**
- * The five pre-registered thread rules over graded trials (`{ case_id, trial, group, passed, named_all, merged }`), and
- * the one decision they make. Rule 1: every several-other-threads trial names every candidate. Rule 2: at least 90% of
- * continues-the-open-thread and one-other-thread trials pass. Rule 3: at least 90% of new-subject trials return `new`.
- * Rule 4: no trial outside same-subject-twice names a merge. Rule 5: same-subject-twice trials that pass, reported for
- * the founder to judge.
- *
- * ECHO picks threads only when rules 1, 2 and 4 pass over the whole registered run (`threadRunIsComplete`, against
- * `cases`, the registered set). Rule 2 decides with the other two because a resolver that names every other thread for
- * every question never guesses and never merges, and routes nothing. Rules 3 and 5 are for the founder.
+ * The five pre-registered thread rules and their one decision: ECHO picks threads only when rules 1, 2 and 4 pass over
+ * the whole registered run. Rule 2 decides too because a resolver naming every thread never guesses or merges, yet routes
+ * nothing; rules 3 and 5 are for the founder.
  */
 export function summarizeThreadRules(trials, cases) {
   const of = (...groups) => trials.filter((trial) => groups.includes(trial.group));
@@ -292,9 +272,7 @@ export function summarizeThreadRules(trials, cases) {
   const complete = threadRunIsComplete(trials, cases);
   return Object.freeze({
     rules,
-    // Only the whole registered set, each case once with three trials, decides anything.
     complete,
-    // Rules 1, 2 and 4 decide whether ECHO picks threads at all, and only over the whole registered run.
     echo_picks_threads: complete && rules.never_guess.passed && rules.route_the_obvious.passed && rules.never_merge_wrongly.passed,
     // Rule 3 is reported with its threshold and goes to the founder when missed; rule 5 always does.
     founder_review: !rules.leave_new_subjects_alone.passed,

@@ -2,18 +2,12 @@
 /**
  * Opt-in real-model evaluation of Ask's follow-up resolution (ADR-0047; Ask
  * timeline v1, "Follow-up resolution eval (pre-registered)") and, with
- * `--set threads`, of its thread resolution (ADR-0056; Ask threads v1,
- * "Thread resolution eval (pre-registered)").
+ * `--set threads`, of its thread resolution (ADR-0056).
  *
- * Each case in cases.json is a previous turn and a new question; each case in
- * thread-cases.json is an Ask with the asker's other threads and, for most,
- * an open thread. The kernel's resolver runs on it directly, with the
- * product's model route (the shipped OpenRouter bundle and its answer model,
- * ADR-0037), three times, and grade.mjs grades every trial deterministically.
- * The only network operation is the structured-generation request that bundle
- * makes, after the caller explicitly supplies --run and --credential-file.
- * The bundle reads the credential file; this runner only checks that it is a
- * private file.
+ * Each case runs the kernel's resolver directly on the product's model route
+ * (ADR-0037), three times, graded by grade.mjs. The only network operation is
+ * that bundle's request, after an explicit --run and --credential-file; the
+ * bundle reads the credential, and this runner only checks it is private.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -44,14 +38,10 @@ const CODE_FILES = Object.freeze([
   "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
 ]);
 
-/** A group's counts in a report: how many of its trials ran, passed, fell back and threw, and any counts of its own. */
 const groupCounts = (trials, more) => Object.freeze({ trials: trials.length, passed: trials.filter((entry) => entry.passed).length, ...more(trials),
   fallback: trials.filter((entry) => entry.fallback === true).length, errors: trials.filter((entry) => entry.error !== undefined).length });
 
-/**
- * The two pre-registered sets this runner holds, each with its own cases, trial, rules and report. Nothing is shared
- * between them but the runner: the follow-up set is exactly what it was before the thread set existed.
- */
+/** The two pre-registered sets; the follow-up set is exactly what it was before the thread set existed. */
 const SETS = Object.freeze({
   "follow-up": Object.freeze({
     cases_file: CASES_FILE, cases_path: "tools/evals/ask-follow-up/cases.json", groups: GROUPS, load: loadCases,
@@ -76,9 +66,8 @@ const SETS = Object.freeze({
 const caseCount = (set) => Object.values(set.groups).reduce((total, count) => total + count, 0);
 /** One call and its one repair per trial. */
 const maxModelCalls = (set) => caseCount(set) * MAX_TRIALS * 2;
-/** The set a run's options name: the follow-up set unless `--set threads` chose the other. */
 const setOf = (options) => SETS[options.set ?? "follow-up"];
-/** Whether a run's report says its set's deciding rules passed: what the exit status follows, and nothing else does. */
+/** The exit status follows this alone: whether the set's deciding rules passed. */
 export const qualifies = (report, options) => report[setOf(options).ships] === true;
 
 export function help() {
@@ -130,10 +119,7 @@ export function parseArgs(argv) {
   return Object.freeze(options);
 }
 
-/**
- * One resolver call of a trial, through `structuredOutput` (the production adapter, or a test's), with only model
- * metadata recorded per call. What it resolved, or null for a trial that threw, which keeps its safe error and passes nothing.
- */
+/** One resolver call of a trial, recording only model metadata per call, never the reply. */
 async function resolvedTrial(structuredOutput, resolve) {
   const calls = [];
   const model = Object.freeze({
@@ -159,7 +145,6 @@ async function resolvedTrial(structuredOutput, resolve) {
   } catch (caught) {
     error = safeError(caught);
   }
-  // What every trial keeps after its own fields: how the resolver ran, its grade, and any safe error.
   const kept = (grade) => ({ fallback: resolved?.fallback ?? null, calls: resolved?.calls ?? calls.length, repairs: resolved?.repairs ?? null, ...grade,
     elapsed_ms: Math.round(performance.now() - started), model_calls: Object.freeze(calls), ...(error === null ? {} : { error }) });
   return { resolved, kept };
@@ -182,23 +167,20 @@ export async function runTrial(caseDefinition, trial, structuredOutput, generati
   });
 }
 
-/** What a report keeps of a placement: the place, and the thread numbers (from 1, as the resolver was shown them) it names and merges. */
+/** What a report keeps of a placement, thread numbers from 1 as the resolver was shown them. */
 function placementKept(placement) {
   const numbers = (indexes) => Object.freeze(indexes.map((index) => index + 1));
   const merge = (indexes) => (indexes.length === 0 ? {} : { merge: numbers(indexes) });
   if (placement === null) return { thread: null };
   switch (placement.thread) {
-    // The open thread's resolution names nothing but what it is: its rewritten question and choices are graded by the follow-up set.
+    // Its rewritten question and choices are the follow-up set's to grade.
     case "open": return { thread: "open", resolution: placement.resolution.resolution, ...merge(placement.merge) };
     case "new": return { thread: "new" };
     case "other": return { thread: "other", threads: numbers(placement.threads), ...merge(placement.merge) };
   }
 }
 
-/**
- * One thread trial (ADR-0056): the kernel's thread resolver, the function the product's Ask calls, on one case's open
- * thread, other threads and question.
- */
+/** One thread trial (ADR-0056): the product's thread resolver on one case. */
 export async function runThreadTrial(caseDefinition, trial, structuredOutput, generation, document, options) {
   const { resolved, kept } = await resolvedTrial(structuredOutput, (model) => resolveAgenticThreadOnceV1({
     model, generation, previous: caseDefinition.previous, threads: caseDefinition.threads,
@@ -234,8 +216,7 @@ export async function run(options, dependencies = {}) {
     kind: set.report_kind,
     observed_at: new Date().toISOString(),
     synthetic_only: true,
-    // Only the whole pre-registered set, three trials each, decides. The thread set's grader says whether the trials
-    // are that run, case by case (a case run twice is not); the follow-up set's is its selection, as it was.
+    // Only the whole registered set, three trials each, decides; the thread grader checks that case by case.
     complete: summary.complete ?? (selected.length === caseCount(set) && options.trials === MAX_TRIALS),
     cases_sha256: sha256(readFileSync(set.cases_file)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
