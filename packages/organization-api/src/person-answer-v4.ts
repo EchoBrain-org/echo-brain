@@ -511,8 +511,9 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   const elsewhere = result.thread?.kind === 'other' ? result.thread.threads : undefined;
   if ((elsewhere !== undefined) !== (clarify && !previous.includes('choices')) || (result.thread?.kind === 'new' && clarify)) fail('Ask response thread is inconsistent');
   // A merge names other threads on the subject of the one the question belongs to: the open thread, or the one other
-  // thread named. A new subject has none, and neither has a question that could belong to several.
-  if (result.merge !== undefined && (result.thread?.kind === 'new' || (elsewhere !== undefined && (elsewhere.length !== 1 || result.merge.includes(elsewhere[0]!))))) fail('Ask response merge is inconsistent');
+  // thread named. A new subject has none, and neither has a question that could belong to several. An answer that
+  // offers choices has none either: the question is asked again once one is chosen, and that answer names them.
+  if (result.merge !== undefined && (previous.includes('choices') || result.thread?.kind === 'new' || (elsewhere !== undefined && (elsewhere.length !== 1 || result.merge.includes(elsewhere[0]!))))) fail('Ask response merge is inconsistent');
   for (const item of result.parts) {
     if (item.status === 'answered' && (item.statements.length === 0 || item.gap !== undefined || item.gap_details !== undefined || item.records !== undefined)) fail('Answered part is inconsistent');
     if (item.status === 'partial' && (item.statements.length === 0 || item.records !== undefined)) fail('Partial part is inconsistent');

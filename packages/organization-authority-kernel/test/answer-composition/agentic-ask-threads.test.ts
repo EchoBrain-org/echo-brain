@@ -228,13 +228,14 @@ describe("a question that continues the open thread (ADR-0056)", () => {
     expect(agenticAskAnswerSha256V1(unmerged as PersonAnswerResponseV8)).not.toBe(audits[0]!.answer_sha256);
   });
 
-  it("asks which one between things in the open thread, with the merge beside the choices", async () => {
+  it("asks which one between things in the open thread, and names no merge beside the choices", async () => {
     const choices = [{ label: "THERM-482: thermal fixture", question: RESOLVED }, { label: "MECH-214: drop test", question: "What are the details on MECH-214?" }];
     const run = scripted({ resolver: [{ thread: "open", resolution: "clarify", choices, merge: [3] }] });
     const port = desk();
     const { ask, audits } = askV8(port, run);
     const response = await ask.answer({ question: QUESTION, previous: PREVIOUS, threads: THREADS });
-    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, choices, merge: [2] });
+    // The question is asked again once a choice is made, and that answer names the threads to merge.
+    expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, choices });
     for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
     expect(audits).toEqual([expect.objectContaining({ outcome: "clarify", rounds: 0, model_calls: 1 })]);
     expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));

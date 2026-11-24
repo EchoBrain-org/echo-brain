@@ -444,8 +444,9 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
             case "open": {
               const { resolution } = placement;
               switch (resolution.resolution) {
-                // More than one thing could fit: the answer asks which one.
-                case "clarify": return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices, placed));
+                // More than one thing could fit: the answer asks which one, and names no thread to merge. The question
+                // is asked again once one is chosen, and that answer does.
+                case "clarify": return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices));
                 // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
                 case "resolved": {
                   // Never reached: only a request with a previous turn is placed in the open thread, and a kept resolution is

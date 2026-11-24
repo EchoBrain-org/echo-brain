@@ -374,10 +374,11 @@ describe("the open thread's citations as one list, and what an answer says of th
     expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, thread: { kind: "other", threads: [1] }, merge: [2] });
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);
     expect(agenticElsewhereResponseV1({ kind: "global" }, QUESTION, { thread: "other", threads: [0, 2], merge: [] })).not.toHaveProperty("merge");
-    // A clarify between things in the open thread carries the threads to merge with it, and otherwise is what it was.
+    // A clarify between things in the open thread is what it was: it names no thread, and the contract refuses a merge beside choices.
     const choices = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
-    expect(agenticClarifyResponseV1({ kind: "global" }, QUESTION, choices, { merge: [0] })).toMatchObject({ outcome: "clarify", choices, merge: [0] });
-    expect(agenticClarifyResponseV1({ kind: "global" }, QUESTION, choices, {})).toEqual(agenticClarifyResponseV1({ kind: "global" }, QUESTION, choices));
+    const clarified = agenticClarifyResponseV1({ kind: "global" }, QUESTION, choices);
+    for (const key of ["thread", "merge"]) expect(clarified).not.toHaveProperty(key);
+    expect(() => validatePersonAnswerResponseV8({ ...clarified, merge: [0] })).toThrow("Ask response merge is inconsistent");
   });
 
   it("keys a kept resolution by exactly what it was made from: the question, the checked previous turn and the threads", () => {

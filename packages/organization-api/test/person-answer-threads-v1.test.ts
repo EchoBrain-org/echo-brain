@@ -96,7 +96,13 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
   it('names threads on the same subject beside the open thread or the one other thread, never beside a new one or several', () => {
     expect(validatePersonAnswerResponseV8(answered({ merge: [1, 4] })).merge).toEqual([1, 4]);
     expect(validatePersonAnswerResponseV8(elsewhere([2], { merge: [0] })).merge).toEqual([0]);
+    const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
+    const asking = { ...elsewhere([2]), thread: undefined, choices };
+    delete (asking as { thread?: unknown }).thread;
+    expect(validatePersonAnswerResponseV8(asking).choices).toHaveLength(1);
     for (const value of [
+      // An answer that offers choices names no merge: the answer to the choice does.
+      { ...asking, merge: [0] },
       answered({ thread: { kind: 'new' }, merge: [1] }), elsewhere([2, 3], { merge: [0] }), elsewhere([2], { merge: [2] }),
       answered({ merge: [] }), answered({ merge: [1, 1] }), answered({ merge: [-1] }), answered({ merge: [1.5] }), answered({ merge: '1' }),
     ]) expect(() => validatePersonAnswerResponseV8(value), JSON.stringify(value)).toThrow();

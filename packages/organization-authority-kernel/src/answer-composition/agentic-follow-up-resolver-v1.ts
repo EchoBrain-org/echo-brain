@@ -564,12 +564,11 @@ export function agenticThreadFieldsV1(placement: AgenticThreadPlacementV1): Pick
 
 /**
  * The answer to a follow-up that could mean more than one thing: no part and no citation, the question asked, and its
- * choices. `placed` is what it also says of the asker's threads (`agenticThreadFieldsV1`): the threads to merge with the
- * open one, when the request carried threads (ADR-0056).
+ * choices. It says nothing of the asker's threads (ADR-0056): the question is asked again once a choice is made, and
+ * that answer names any thread to merge.
  */
-export function agenticClarifyResponseV1(scope: PersonAnswerScopeV3, question: string, choices: readonly PersonAnswerChoiceV1[],
-  placed: Pick<PersonAnswerResponseV8, "thread" | "merge"> = {}): PersonAnswerResponseV8 {
-  return validatePersonAnswerResponseV8({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope, outcome: "clarify", citations: [], parts: [], question, choices, ...placed });
+export function agenticClarifyResponseV1(scope: PersonAnswerScopeV3, question: string, choices: readonly PersonAnswerChoiceV1[]): PersonAnswerResponseV8 {
+  return validatePersonAnswerResponseV8({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope, outcome: "clarify", citations: [], parts: [], question, choices });
 }
 
 /**

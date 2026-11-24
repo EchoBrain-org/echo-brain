@@ -79,7 +79,7 @@ export interface PersonAnswerResponseV8 {
   readonly direct?: PersonAnswerStatementV4;
   readonly parts: readonly PersonAnswerPartV4[];
   readonly notice?: string;
-  /** Only on an answer to a request that carried `previous` (ADR-0047): the full question this answer answers. */
+  /** Only on an answer to a request that carried `previous` (ADR-0047) or `threads` (ADR-0056): the full question this answer answers. */
   readonly question?: string;
   /** Only on an Ask again answer that compared with the earlier one (ADR-0047): what is different since. */
   readonly since?: PersonAnswerSinceV1;
@@ -97,7 +97,8 @@ export interface PersonAnswerResponseV8 {
   readonly thread?: PersonAnswerThreadPlacementV1;
   /**
    * Only on an answer to a request that carried `threads` (ADR-0056): indexes of other threads that are plainly on the
-   * subject of the one the question belongs to (the open thread, or the one `other` thread named). Never with `new`.
+   * subject of the one the question belongs to (the open thread, or the one `other` thread named). Never with `new`,
+   * and never with `choices`.
    */
   readonly merge?: readonly number[];
 }

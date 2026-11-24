@@ -165,7 +165,11 @@ interface PersonAnswerResponseV8 {
   to that thread; several mean it could belong to any of them. The outcome
   `clarify` now comes with exactly one of `choices` and an `other` thread.
 - `merge`: only when `thread` is absent or names exactly one other thread;
-  never beside `new`; never the thread the question belongs to.
+  never beside `new` or `choices`; never the thread the question belongs to.
+  An answer that offers choices names none: the question is asked again once
+  one is chosen, and that answer does.
+- `question` is named on every answer to a request that carried `previous` or
+  `threads`.
 - The answer's hash covers `thread` and `merge`.
 
 ### T3. Kernel
