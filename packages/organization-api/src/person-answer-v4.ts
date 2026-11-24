@@ -534,6 +534,21 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   return Object.freeze(result) as PersonAnswerResponseV8;
 }
 
+/**
+ * What an answer says of the asker's threads, against what its Ask sent (ADR-0056, T2), for a client to check:
+ * `threads`, how many it sent (undefined: no list, which is not an empty one), and `previous`, whether it sent a previous
+ * turn. `unsent`: it places the question or names a merge by a thread the Ask did not send. `unplaced`: the Ask sent
+ * threads and the answer does not name its question or, with no previous turn to continue, where that question belongs
+ * (leaving it out means "the previous turn's thread", and there is none). Null when it fits.
+ */
+export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge'>, threads: number | undefined,
+  previous: boolean): 'unsent' | 'unplaced' | null {
+  const named = [...(answer.thread?.kind === 'other' ? answer.thread.threads : []), ...(answer.merge ?? [])];
+  if (threads === undefined ? answer.thread !== undefined || answer.merge !== undefined : named.some(index => index >= threads)) return 'unsent';
+  if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined))) return 'unplaced';
+  return null;
+}
+
 export function validatePersonEvidenceOpenRequestV1(value: unknown): PersonEvidenceOpenRequestV1 {
   const input = object(value, 'Evidence open request');
   assertExactKeys(input, ['schema_version', 'citation', ...(Object.hasOwn(input, 'neighbours') ? ['neighbours'] : []), ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : [])], 'Evidence open request');

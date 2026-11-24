@@ -9,7 +9,7 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personQuestionToSend,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personAnswerThreadsProblemV1, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -400,14 +400,11 @@ function askHeaders(): Readonly<Record<string, string>> {
 
 /**
  * Every Ask answer must echo the requested scope, and only an answer to an Ask that sent the previous turn may say what
- * is different since or ask which one (ADR-0047). Only an answer to an Ask that sent the asker's threads may place the
- * question or name a merge (ADR-0056), by indexes into the threads sent. An answer names its question to an Ask that
- * sent either: a question that belongs to another thread names the question asked, previous turn or not. To an Ask that
- * sent the threads it must (T2): the question it answers, always; and, when the Ask sent no previous turn to continue,
- * where the question belongs, since leaving that out means "the previous turn's thread" and there is none. So an
- * ordinary answer that does not say the subject is new, and a merge into no thread, are not answers to that Ask.
+ * is different since or ask which one (ADR-0047). An answer names its question to an Ask that sent the previous turn or
+ * the asker's threads; what it may say of the threads, and what an Ask that sent them is owed (T2), is
+ * personAnswerThreadsProblemV1's (ADR-0056).
  */
-function inAskScope<T extends { readonly scope: unknown; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[] }>(
+function inAskScope<T extends { readonly scope: unknown; readonly question?: string; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[] }>(
   response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]): T {
   const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
@@ -416,13 +413,9 @@ function inAskScope<T extends { readonly scope: unknown; readonly thread?: Perso
   if (previous === undefined && [...(threads === undefined ? ['question'] : []), 'since', 'choices'].some(key => Object.hasOwn(response, key))) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority answered a previous turn the Ask did not send');
   }
-  const named = [...(response.thread?.kind === 'other' ? response.thread.threads : []), ...(response.merge ?? [])];
-  if (threads === undefined ? response.thread !== undefined || response.merge !== undefined : named.some(index => index >= threads.length)) {
-    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority named a thread the Ask did not send');
-  }
-  if (threads !== undefined && (!Object.hasOwn(response, 'question') || (previous === undefined && response.thread === undefined))) {
-    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority did not place a question the Ask sent threads for');
-  }
+  const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined);
+  if (placement === 'unsent') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority named a thread the Ask did not send');
+  if (placement === 'unplaced') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority did not place a question the Ask sent threads for');
   return response;
 }
 
