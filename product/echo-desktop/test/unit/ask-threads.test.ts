@@ -76,6 +76,8 @@ let script: ((params: Record<string, unknown>) => unknown) | null;
 let unsaved: Set<string>;
 let app: AppStatus;
 let active = [apollo, zephyr];
+/** The person's archived projects: read by id like any other. */
+let archived: (typeof apollo)[] = [];
 storeLifecycle(NOW);
 beforeEach(() => {
   ids = 0;
@@ -85,14 +87,15 @@ beforeEach(() => {
   unsaved = new Set();
   app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   active = [apollo, zephyr];
+  archived = [];
   rpc.mockReset();
   const base = rpcFor(held, {
     'app.status': () => ok(app),
     'ask.run': params => script?.(params) ?? ok(answerOf(String(params.question), params.scope as AskScope)),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     'ask.record': () => fail('not_found'),
-    'projects.read': params => { const found = active.find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
-  }, () => ({ active, archived: [] }));
+    'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
+  }, () => ({ active, archived }));
   rpc.mockImplementation(async (method: string, params: Record<string, unknown>) =>
     (method === 'timeline.put' && unsaved.has((params.turn as TimelineTurn).id) ? fail('invalid_output') : base(method, params)));
 });
@@ -539,6 +542,67 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { purpose: 'follow_up', question: 'Which tests fail?' } });
     expect(asked()[1]).not.toHaveProperty('threads');
     expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: inApollo, thread: tests[0]!.id });
+  });
+
+  it.each([
+    ['one the person is no longer in', () => { active = [zephyr]; }],
+    ['archived', () => { active = [zephyr]; archived = [{ ...apollo, status: 'archived' }]; }],
+    ['archived, on a page of projects the sidebar has not read', () => { active = numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })); archived = [{ ...apollo, status: 'archived' }]; }],
+    ['gone, with projects the sidebar has not read', () => { active = numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })); }],
+  ] as const)('asks nothing in a thread whose project is %s: the pick moves nothing and says so, and the other buttons and "New question" stay (R9)', async (_why, lose) => {
+    const { tests } = seeded();
+    lose();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    await store.ask('are they fixed?');
+    await flush();
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Who owns billing?']);
+    const before = store.getState().ask!.seq;
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    // Nothing was asked, the person is where they were, and "Which one?" still waits, without that thread.
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.getState().barScope).toEqual(GLOBAL);
+    expect(store.getState().ask).toMatchObject({ seq: before, thread: null, asking: null });
+    const { THREAD_OUT_OF_REACH } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(THREAD_OUT_OF_REACH);
+    const clarify = byTestId(await page(store), 'clarify')[0]!;
+    expect(byTestId(clarify, 'choice').map(text)).toEqual(['Who owns billing?', 'New question']);
+    // A second click on what is no longer offered does nothing.
+    await store.chooseThread(tests[0]!.id);
+    expect(asked()).toHaveLength(1);
+    // "New question" asks the words where they were typed, and nothing joins Apollo's thread.
+    click(byTestId(clarify, 'choice').at(-1));
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: GLOBAL });
+    for (const key of ['previous', 'threads']) expect(asked()[1]).not.toHaveProperty(key);
+    expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: GLOBAL, thread: kept().at(-1)!.id });
+    expect(kept().filter(each => each.thread === tests[0]!.id).map(each => each.text)).toEqual(['Which tests fail?']);
+  });
+
+  it('keeps the thread\'s button when its project could not be read: the page says why, nothing is asked, and the pick can be made again', async () => {
+    const { tests } = seeded();
+    // Apollo is the person's oldest project: on a page of them the sidebar has not read.
+    active = [...numbered(12).map(each => ({ ...each, project_id: each.project_id.replace('prj_0', 'prj_9') })), { ...apollo, created_at: '2026-08-01T00:00:00.000Z' }];
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    expect(store.getState().projects.items.map(each => each.project_id)).not.toContain(apollo.project_id);
+    await store.ask('are they fixed?');
+    await flush();
+    const reading = held.hold('projects.read');
+    const pick = store.chooseThread(tests[0]!.id);
+    reading(fail('unavailable', { retryable: true }));
+    await pick;
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Who owns billing?']);
+    // Read this time, the project opens and the words are asked in it.
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { question: 'Which tests fail?' } });
   });
 
   it('"New question" asks the typed words where they were typed with nothing carried, and its answer starts a thread there', async () => {

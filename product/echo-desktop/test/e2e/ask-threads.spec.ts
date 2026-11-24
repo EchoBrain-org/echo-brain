@@ -280,6 +280,36 @@ test('a question that could belong to several threads asks which one: a thread i
   await expect.poll(filed).toMatchObject({ 'who audits the ledger?': 'who audits the ledger?', 'Is the ledger closed?': 'Is the ledger closed?' });
 });
 
+test('a thread whose project the person can no longer ask in is never asked in from "Which one?": the pick says so, moves nothing, and "New question" stays', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await askInApollo(page, 'Where is the Apollo ledger kept?');
+  await back(page);
+  // Apollo is archived: its thread stays on this computer, and Apollo is no longer a project to ask in.
+  await page.getByTestId('project-settings').click();
+  await page.getByTestId('project-archive').click();
+  await page.getByTestId('project-settings-confirm').click();
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
+  await page.getByTestId('sidebar-home').click();
+  await page.getByTestId('ask-field').fill('what changed in the ledger?');
+  await page.getByTestId('ask-field').press('Enter');
+  const choices = page.getByTestId('clarify').getByTestId('choice');
+  await expect(choices).toHaveText([/^Where is the Apollo ledger kept\?/u, 'New question']);
+  const sent = asks().length;
+  await choices.nth(0).click();
+  // Nothing is asked outside the thread's home (R9), and the person is not moved to a page they did not choose.
+  await expect(page.getByTestId('toast')).toHaveText('This is no longer available to you.');
+  await expect(choices).toHaveText(['New question']);
+  await expect(page.getByTestId('thread-name')).toHaveText('New thread');
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  expect(asks()).toHaveLength(sent);
+  await choices.click();
+  await expect(page.getByTestId('thread-name')).toHaveText('what changed in the ledger?');
+  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'what changed in the ledger?' });
+  await expect.poll(filed).toEqual({ 'Where is the Apollo ledger kept?': 'Where is the Apollo ledger kept?', 'what changed in the ledger?': 'what changed in the ledger?' });
+});
+
 test('back in Ask from the sidebar a question is placed among every thread, the one shown included; asked in a thread it continues it', async () => {
   run = await launch('ask-threads');
   const { page } = run;
