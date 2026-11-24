@@ -685,7 +685,9 @@ Its core operations hold the detail. Each research step and answer call
 is an `ask_planner` or `ask_answer` span with its provider `model_call` inside
 (purpose `ask_planner` or `ask_answer`). A follow-up's resolver call, before
 research, is an `ask_resolve` span the same way (ADR-0047); a follow-up that
-asked which one ends its run `clarify`, with no research and no citation. Each desk call is one span:
+asked which one ends its run `clarify`, with no research and no citation. An Ask
+that carries the asker's threads is placed by that same one call, and a question
+that belongs to other threads ends its run `clarify` the same way (ADR-0056). Each desk call is one span:
 `evidence_search`, `evidence_open`, `evidence_list` or `evidence_revalidate`.
 Desk spans carry `included_count` and, by source, `meeting_items` and
 `document_items`. The evidence HTTP doors use the same desk spans.
@@ -760,7 +762,7 @@ adapter (`openrouter-structured-generation-adapter.ts`) and the reply parsers
 | `model_json_outer_text_dropped` | Dropped text around a reply's JSON object |
 | `model_text_truncated` | Cut a model-written field to its character cap |
 | `model_items_capped` | Dropped entries past a reply's maximum count |
-| `model_entry_dropped` | Dropped a malformed entry: not an object, no text or id, an unreadable id or selection, or an argument with no text or one its tool does not take |
+| `model_entry_dropped` | Dropped a malformed entry: not an object, no text or id, an unreadable id or selection, an argument with no text or one its tool does not take, or a thread to merge that is no other thread or may not be merged (ADR-0056) |
 | `model_repeat_dropped` | Dropped a repeated need, id, phrase, list use or card row within one reply |
 | `model_id_respelled` | Read an id in another spelling (`e4`, `[E4]`, `4`, ` n2 `, `[L3]`) as its id |
 | `model_enum_respelled` | Read a closed value (a tool, a need's status or kind, a list's kind, status or role filter, a selection field, a relation) given in another spelling, as an alias (`browse`, `decisions`) or not at all, as a known value or its default |
@@ -776,7 +778,7 @@ Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers 
 
 | Name | What code did |
 | --- | --- |
-| `resolver_fallback` | Answered a follow-up as asked after its resolver gave no usable reply (ADR-0047) |
+| `resolver_fallback` | Answered a follow-up as asked after its resolver gave no usable reply (ADR-0047); with threads or older turns on the Ask (ADR-0056), answered it where it was asked: the open thread, or a new one when none was open |
 | `writer_repeat_dropped` | Dropped an Ask statement that exactly repeats an earlier one (the temporary exact-repeat guard, ADR-0041) |
 | `writer_unknown_id_dropped` | Dropped an id the writer was not shown from a sentence, a list use or a list's members |
 | `writer_uncited_sentence_dropped` | Left out a writer sentence that cites no evidence text it read |
