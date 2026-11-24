@@ -1228,9 +1228,9 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: failing.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', error: null, checked_at: null });
   });
-  it('stops the watch when the person disconnects Granola, so another account starts as its own source and what was kept stays', async () => {
+  /** One runtime over the real Granola provider, a fake Nango, and a fake Granola with two accounts, each already holding one meeting. */
+  async function granolaRuntime() {
     const f = await fixture(), connections = new Database(':memory:');
-    // The real Granola provider over a fake Granola with two accounts, each already holding one meeting.
     const accounts = { a: { email: 'a@example.test', workspace: '00000000-0000-4000-8000-0000000000a1', meeting: id },
       b: { email: 'b@example.test', workspace: '00000000-0000-4000-8000-0000000000b1', meeting: '00000000-0000-4000-8000-0000000000b2' } };
     let signedIn = accounts.a;
@@ -1250,15 +1250,24 @@ describe('personal meeting intake uses the shared processing path', () => {
     const granola = openGranolaPersonMeetingProviderV1({ state_directory: 'unused', sessions: f.sessions, resources: { coordinates: f.context.coordinates },
       nango_authorization: () => 'unused', seams: { database: connections, nango: nango.nango, fetch: granolaFetch } });
     const runtime = f.create([granola.provider], { processor: llmProcessor(JSON.stringify({ signals: [extractedItem('action', 'Send the pilot plan.', ['T1'])] })) });
-    const tool = async (verb: 'connect' | 'status' | 'disconnect', body: Record<string, unknown> = {}) => {
+    const tool = async (verb: 'connect' | 'status' | 'disconnect', body: Record<string, unknown> = {}, headers: Record<string, string> = { authorization: 'Bearer owner' }) => {
       const response = await runtime.applications.find(application => application.routes.some(route => route.route_id === `granola-${verb}`))!.accept({ route_id: `granola-${verb}`, method: 'POST',
-        path: `/v1/person/tools/granola/${verb}`, headers: { authorization: 'Bearer owner' }, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...body })) });
+        path: `/v1/person/tools/granola/${verb}`, headers, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...body })) });
       if (!('body' in response)) throw new Error('Expected JSON');
       return response.body as Record<string, unknown>;
     };
     const connectAs = async (account: typeof signedIn) => { signedIn = account; const { attempt } = await tool('connect'); nango.finish(); return tool('status', { attempt }); };
-    const pass = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     const watchMine = async () => f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: (await f.call(runtime, { operation: 'home' })).settings_sha256 });
+    return { f, accounts, mcp, runtime, tool, connectAs, watchMine,
+      /** Holds Nango's next deletion of a connection open until the returned function is called. */
+      holdDeletion() { let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); vi.mocked(nango.nango.disconnect).mockImplementationOnce(() => held); return release; },
+      /** The connection as the person's tools list reads it, and their Granola sources as the meetings home lists them. */
+      status: async () => (await runtime.tools('owner'))[0]!.personal_status, sources: async () => (await f.call(runtime, { operation: 'home' })).sources,
+      close() { runtime.close(); granola.close(); connections.close(); f.db.close(); } };
+  }
+  it('stops the watch when the person disconnects Granola, so another account starts as its own source and what was kept stays', async () => {
+    const { f, accounts, mcp, runtime, tool, connectAs, watchMine, close } = await granolaRuntime();
+    const pass = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
     // What ECHO keeps of the person's meetings: the retained originals, their reviews and records, and the notes in the person's own list.
     const kept = async () => ({ originals: f.db.prepare('SELECT * FROM authority_source_revisions_v1 ORDER BY revision_id').all(),
       records: f.record.prepare('SELECT canonical_envelope FROM organization_record_log').all(),
@@ -1300,7 +1309,63 @@ describe('personal meeting intake uses the shared processing path', () => {
       expect(f.intake.checkpoint(fresh.source_key)).toMatchObject({ seen: { [accounts.b.meeting]: expect.any(String) } });
       expect(mcp.filter(name => name === 'get_meetings' || name === 'get_meeting_transcript')).toEqual([]);
       expect(await kept()).toEqual(before);
-    } finally { runtime.close(); granola.close(); connections.close(); f.db.close(); }
+    } finally { close(); }
+  });
+  it('stops the watch before it disconnects Granola: when the watch cannot be stopped, the connection stays as it was and a retry finishes', async () => {
+    const { f, accounts, tool, connectAs, watchMine, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      f.db.exec("CREATE TRIGGER watch_write_fails BEFORE UPDATE ON authority_person_meeting_sources_v2 BEGIN SELECT RAISE(ABORT, 'synthetic watch write failure'); END");
+      await expect(tool('disconnect')).rejects.toThrow('synthetic watch write failure');
+      expect(await status()).toBe('linked');
+      f.db.exec('DROP TRIGGER watch_write_fails');
+      expect(await tool('disconnect')).toEqual({ schema_version: 1, connected: false });
+      expect(await status()).toBe('unlinked');
+      expect(await sources()).toMatchObject([{ watch: 'off' }]);
+    } finally { close(); }
+  });
+  it('has stopped the watch when the Disconnect then fails, as when the session ends while Granola\'s grant is being deleted', async () => {
+    const { f, accounts, tool, connectAs, watchMine, holdDeletion, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      const release = holdDeletion(), disconnecting = tool('disconnect');
+      const ended = vi.spyOn(f.sessions, 'authenticateAccess').mockImplementation(() => { throw new AuthorityOperationError('unauthorized', 'person authentication failed'); });
+      release();
+      await expect(disconnecting).rejects.toMatchObject({ code: 'unauthorized' });
+      ended.mockRestore();
+      // Signed in again, the person finds the watch off and the connection stopped, still pinned, for a Disconnect to finish.
+      expect(await sources()).toMatchObject([{ watch: 'off' }]);
+      expect(await status()).toBe('revoked');
+    } finally { close(); }
+  });
+  it('keeps a watch that was saved after a newer reconnect when a slow Disconnect finishes', async () => {
+    const { accounts, tool, connectAs, watchMine, holdDeletion, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a);
+      const release = holdDeletion(), disconnecting = tool('disconnect');
+      // While Nango is still deleting the former grant, the person connects the same account again and saves a watch.
+      expect(await connectAs(accounts.a)).toMatchObject({ status: 'complete' });
+      await watchMine();
+      release();
+      expect(await disconnecting).toEqual({ schema_version: 1, connected: false });
+      expect(await status()).toBe('linked');
+      expect(await sources()).toMatchObject([{ watch: 'mine' }]);
+    } finally { close(); }
+  });
+  it('leaves an unauthenticated Disconnect to Granola\'s routes: their own answer, the watch still on and the connection as it was', async () => {
+    const { f, accounts, tool, connectAs, watchMine, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      // No session at all.
+      await expect(tool('disconnect', {}, {})).rejects.toMatchObject({ code: 'unauthorized', message: 'person authentication failed' });
+      // A session the Authority refuses. The answer is still Granola's own: its routes check the body before the session.
+      const refused = vi.spyOn(f.sessions, 'authenticateAccess').mockImplementation(() => { throw new AuthorityOperationError('unauthorized', 'synthetic refused session'); });
+      await expect(tool('disconnect')).rejects.toMatchObject({ code: 'unauthorized', message: 'synthetic refused session' });
+      await expect(tool('disconnect', { schema_version: 2 })).rejects.toMatchObject({ code: 'invalid_request', message: 'Granola connection request is invalid' });
+      refused.mockRestore();
+      expect(await status()).toBe('linked');
+      expect(await sources()).toMatchObject([{ watch: 'mine' }]);
+    } finally { close(); }
   });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);

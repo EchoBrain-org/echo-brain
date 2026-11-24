@@ -54,9 +54,9 @@ describe('person-discovered workspace uses the shared consent lifecycle', () => 
     try {
       const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
       const first = store.begin(person);
-      store.complete(person, first.attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      const { version } = store.complete(person, first.attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
       store.revoke(person);
-      store.forget(person);
+      store.forget(person, version);
       expect(store.current(person)).toBeUndefined();
       const next = store.begin(person);
       const other = store.complete(person, next.attempt, 'new-reference', '00000000-0000-4000-8000-000000000008', 'other@example.test', 'https://mcp.granola.ai');
@@ -71,12 +71,25 @@ describe('person-discovered workspace uses the shared consent lifecycle', () => 
       const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
       const other = { ...person, principal_id: 'person-other', membership_id: 'membership-other' };
       const kept = store.complete(person, store.begin(person).attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
-      store.complete(other, store.begin(other).attempt, 'other-reference', cloud, 'other@example.test', 'https://mcp.granola.ai');
+      const theirs = store.complete(other, store.begin(other).attempt, 'other-reference', cloud, 'other@example.test', 'https://mcp.granola.ai');
       store.revoke(other);
-      store.forget(person);
+      store.forget(person, kept.version); store.forget(person, theirs.version);
       expect(store.current(person)).toEqual(kept);
       expect(store.requireCurrent(kept.binding)).toEqual(kept);
       expect(store.current(other)).toMatchObject({ active: false, reference: 'other-reference' });
+    } finally { database.close(); }
+  });
+  it('forgets only the connection whose version it is given, so a newer one that was switched off keeps its pin and its reference', () => {
+    const database = new Database(':memory:');
+    try {
+      const store = new PersonConnectionStoreV1(database, GRANOLA_PERSON_PROVIDER_V1);
+      const former = store.complete(person, store.begin(person).attempt, 'reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      const newer = store.complete(person, store.begin(person).attempt, 'new-reference', cloud, 'fixture@example.test', 'https://mcp.granola.ai');
+      store.revoke(person);
+      store.forget(person, former.version);
+      expect(store.current(person)).toEqual({ ...newer, active: false });
+      store.forget(person, newer.version);
+      expect(store.current(person)).toBeUndefined();
     } finally { database.close(); }
   });
 });

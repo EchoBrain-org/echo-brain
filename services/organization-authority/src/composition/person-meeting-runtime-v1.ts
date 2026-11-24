@@ -601,24 +601,31 @@ export function createPersonMeetingRuntimeV1(options: {
     return setting;
   }
   /**
-   * A provider's connection routes, with one addition: a person's own Disconnect also stops their watch on that tool.
+   * A provider's connection routes, with one addition: a person's own Disconnect first stops their watch on that tool.
    * A source is one person's one tool account, so the account they connect next is another source, with no watch and
    * nothing seen. A watch left on the former account's source could never read again and would fail every pass.
-   * Queued imports stay pending, and what was kept stays (ADR-0030).
+   * The watch stops before the provider disconnects, so the account pin never ends with the watch still on, and a watch
+   * saved after a later reconnect is not this Disconnect's to stop. If the watch cannot be stopped the request fails
+   * with the connection as it was. Queued imports stay pending, and what was kept stays (ADR-0030).
    */
   function connectionRoutes(provider: PersonMeetingProviderV1): ProviderHttpApplicationV1 {
     const connection = provider.connection_http;
     return { ...connection, async accept(request) {
-      const response = await connection.accept(request);
       // The shared connection application names its four verbs `<tool>-<verb>`.
-      if (request.route_id !== `${provider.id}-disconnect`) return response;
-      const person = meetingIntakePersonV1(authenticate(request.headers.authorization?.slice(7) ?? ''));
+      if (request.route_id !== `${provider.id}-disconnect`) return connection.accept(request);
+      // A valid session is enough to stop the watch, so every request the provider can accept has stopped it first;
+      // without one nothing is stopped and the provider answers as it always did. The accepted cost: a signed-in person's
+      // Disconnect that the provider then refuses for its shape may already have stopped their watch, which is fine,
+      // because only the person's own client sends this request and they asked to disconnect.
+      let person: MeetingIntakePersonV1;
+      try { person = meetingIntakePersonV1(authenticate(request.headers.authorization?.slice(7) ?? '')); }
+      catch { return connection.accept(request); }
       const watched = intake.list(person).find(s => s.watch !== 'off' && s.source_adapter_id === provider.cursor.policy.source_adapter_id);
       if (watched) {
         ownerOf(watched.source_adapter_id).intake.watch(watched, { watch: 'off', folder_id: null }, null, () => {});
         observed.delete(watched.source_key);
       }
-      return response;
+      return connection.accept(request);
     } };
   }
   return { applications: [...providers.map(connectionRoutes), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,

@@ -134,10 +134,11 @@ export class PersonConnectionStoreV1 {
   }
   /**
    * A person's own Disconnect ends the account pin: with no saved row, `begin` expects no account or site, so the next
-   * consent accepts whichever the provider verifies. Only a switched-off connection is forgotten; one completed since stays.
+   * consent accepts whichever the provider verifies. Only the switched-off connection of this `version`, the one that
+   * Disconnect read, is forgotten; one completed since stays, switched off or not, with its pin and its reference.
    */
-  forget(person: ConnectedPersonV1): void {
-    this.db.prepare(`DELETE FROM ${this.bindingTable} WHERE person_key=? AND json_extract(body_json, '$.active')=0`).run(this.key(person));
+  forget(person: ConnectedPersonV1, version: string): void {
+    this.db.prepare(`DELETE FROM ${this.bindingTable} WHERE person_key=? AND json_extract(body_json, '$.active')=0 AND json_extract(body_json, '$.version')=?`).run(this.key(person), version);
   }
   requireCurrent(binding: PersonConnectorReadBindingV1): StoredPersonConnectionV1 {
     const current = this.current({ organization_id: binding.organization_id, principal_id: binding.principal_id, membership_id: binding.membership_id });

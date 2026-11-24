@@ -350,15 +350,15 @@ function consent() {
     connection: vi.fn(async (saved: string) => ({ tags: connections.get(saved)!, access_token: 'synthetic-access-token' })),
     disconnect: vi.fn(async (saved: string, _signal?: AbortSignal) => { connections.delete(saved); }),
   };
+  const authenticate = vi.fn(() => ({ ...person, authorization_sha256: canonicalSha256(person) }));
   const { application } = createPersonConnectionLifecycleV1({
-    provider: GRANOLA_PERSON_PROVIDER_V1, store, nango, fetch: vi.fn() as unknown as typeof fetch,
-    authenticate: () => ({ ...person, authorization_sha256: canonicalSha256(person) }),
+    provider: GRANOLA_PERSON_PROVIDER_V1, store, nango, fetch: vi.fn() as unknown as typeof fetch, authenticate,
     verify: async (_authenticated, input) => { input.require_account(verified.account); return { account_id: verified.account, scope_id: verified.workspace, origin }; },
   });
   const session = { access_token: 'person-session' };
   /** The person approves the pending consent in the browser. */
   const approve = () => { connections.set(`connection-${++consents}`, pending); };
-  return { store, nango, application, session, approve, tool: () => application.tool(session),
+  return { store, nango, authenticate, application, session, approve, tool: () => application.tool(session),
     /** Connect, approve as this account in this workspace, and read the attempt's outcome. */
     async connectAs(who = account, where = workspace) {
       verified.account = who; verified.workspace = where;
@@ -452,7 +452,29 @@ describe('person connection account pin', () => {
     expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'complete' });
   });
 
-  it('keeps a connection completed while its Disconnect was still deleting the former grant', async () => {
+  it.each(['a session that ended', 'a request that was cancelled'])('keeps a switched-off connection and its pin after %s while its remote grant was being deleted, and finishes on the next Disconnect', async failure => {
+    const subject = consent();
+    await subject.connectAs();
+    const first = subject.store.current(person)!;
+    const deleting = deferred<void>(), cancelling = new AbortController();
+    subject.nango.disconnect.mockImplementationOnce(() => deleting.promise);
+
+    const disconnecting = subject.application.disconnect({ ...subject.session, signal: cancelling.signal });
+    if (failure === 'a session that ended') subject.authenticate.mockImplementationOnce(() => { throw new Error('synthetic session end'); });
+    else cancelling.abort();
+    deleting.resolve();
+    await expect(disconnecting).rejects.toMatchObject(failure === 'a session that ended' ? { message: 'synthetic session end' } : { name: 'AbortError' });
+    // A Disconnect that answers an error ends no pin, and the reference stays for the next one to delete.
+    expect(subject.tool()).toMatchObject({ personal_status: 'revoked' });
+    expect(subject.store.current(person)).toMatchObject({ active: false, reference: first.reference });
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+
+    await subject.application.disconnect(subject.session);
+    expect(subject.nango.disconnect).toHaveBeenLastCalledWith(first.reference, undefined);
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
+  });
+
+  it.each(['still on', 'switched off since'])('keeps a connection completed while its Disconnect was still deleting the former grant (%s)', async state => {
     const subject = consent();
     await subject.connectAs();
     const deleting = deferred<void>();
@@ -460,11 +482,19 @@ describe('person connection account pin', () => {
 
     const disconnecting = subject.application.disconnect(subject.session);
     expect(await subject.connectAs()).toMatchObject({ status: 'complete' });
+    // As drift or another Connect does, before the former grant's deletion returns.
+    if (state === 'switched off since') subject.store.revoke(person);
     const fresh = subject.store.current(person)!;
     deleting.resolve();
     await disconnecting;
 
     expect(subject.store.current(person)).toEqual(fresh);
-    expect(subject.tool()).toMatchObject({ personal_status: 'linked' });
+    expect(subject.tool()).toMatchObject({ personal_status: state === 'still on' ? 'linked' : 'revoked' });
+    // On or off, it keeps its pin and its reference, so its own Disconnect can still delete its grant.
+    expect(await subject.connectAs(otherAccount, otherWorkspace)).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+    subject.nango.disconnect.mockClear();
+    await subject.application.disconnect(subject.session);
+    expect(subject.nango.disconnect).toHaveBeenCalledWith(fresh.reference, undefined);
+    expect(subject.tool()).toMatchObject({ personal_status: 'unlinked' });
   });
 });
