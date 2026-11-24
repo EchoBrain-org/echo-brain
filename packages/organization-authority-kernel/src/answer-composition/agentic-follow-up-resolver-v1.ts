@@ -270,13 +270,14 @@ function shownNumber(raw: unknown): number {
 
 /**
  * Numbers the resolver was shown (1 to `count`), each once, as indexes. One that names nothing it was shown sends the
- * reply back with `outside`; a number given as a string, and a repeat, are read and counted.
+ * reply back with `outside`; a number given as a string, and a repeat, are read and counted. With no `outside`, an
+ * entry that names nothing shown, or names `target`, is dropped and counted instead.
  */
-function shownIndexes(value: readonly unknown[], count: number, outside: string): readonly number[] {
+function shownIndexes(value: readonly unknown[], count: number, outside: string | undefined, target?: number): readonly number[] {
   const indexes: number[] = [];
   for (const raw of value) {
     const given = shownNumber(raw);
-    if (!Number.isSafeInteger(given) || given < 1 || given > count) throw new AgenticAskOutputErrorV1(outside);
+    if (!Number.isSafeInteger(given) || given < 1 || given > count || given - 1 === target) { if (outside !== undefined) throw new AgenticAskOutputErrorV1(outside); observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
     if (typeof raw !== "number") observeCoreModelCorrectionV1("model_id_respelled");
     if (indexes.includes(given - 1)) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
     indexes.push(given - 1);
@@ -299,16 +300,8 @@ function aboutOf(value: unknown, sources: number): readonly number[] {
  * the caller passes no thread to choose from, so every entry is dropped.
  */
 function mergeOf(value: unknown, threads: number, target?: number): readonly number[] {
-  const merge: number[] = [];
   // Anything but a list is one entry code cannot read.
-  for (const raw of Array.isArray(value) ? value : value === undefined || value === null ? [] : [undefined]) {
-    const given = shownNumber(raw);
-    if (!Number.isSafeInteger(given) || given < 1 || given > threads || given - 1 === target) { observeCoreModelCorrectionV1("model_entry_dropped"); continue; }
-    if (typeof raw !== "number") observeCoreModelCorrectionV1("model_id_respelled");
-    if (merge.includes(given - 1)) { observeCoreModelCorrectionV1("model_repeat_dropped"); continue; }
-    merge.push(given - 1);
-  }
-  return merge.length === 0 ? NO_MERGE : Object.freeze(merge);
+  return shownIndexes(Array.isArray(value) ? value : value === undefined || value === null ? [] : [undefined], threads, undefined, target);
 }
 
 /**
@@ -346,16 +339,14 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
 
 /**
  * What the thread resolver was shown, which is all its reply may name: whether a thread is open, how many sources that
- * thread has, and the asker's other threads.
- *
- * `others` says whether the request carried `threads` at all, which is not the same as carrying none: a request that
- * carried the list, even empty, is being placed, so its answer may say the question starts a new thread; one that
- * carried only the older turns of its thread is answered in that thread.
+ * thread has, and how many other threads the request carried, or `undefined` when it carried no `threads` at all. That
+ * is not an empty list: a request that carried the list, even empty, is being placed, so its answer may say the question
+ * starts a new thread; one that carried only the older turns of its thread is answered in that thread.
  */
 interface ThreadShownV1 {
   readonly open: boolean;
   readonly sources: number;
-  readonly others: { readonly carried: true; readonly count: number } | { readonly carried: false };
+  readonly others: number | undefined;
 }
 
 /** The fields of a reply that say what a question refers to in the open thread: only an `open` reply has them. */
@@ -393,7 +384,7 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
     }
   }
   // How many other threads the reply may name: none when the request carried no list, or an empty one.
-  const count = shown.others.carried ? shown.others.count : 0;
+  const count = shown.others ?? 0;
   switch (thread) {
     case "open": {
       if (!shown.open) throw new AgenticAskOutputErrorV1("the person has no thread open, so the thread is \"new\" or \"other\"");
@@ -408,9 +399,9 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
       // Only a request that carried `threads`, empty or not, is being placed: its answer may say the question starts
       // a new thread. One that carried only the older turns of its thread is answered there as asked, which is what
       // `same` says.
-      return shown.open && !shown.others.carried ? inOpenThread(SAME) : NEW_THREAD;
+      return shown.open && shown.others === undefined ? inOpenThread(SAME) : NEW_THREAD;
     case "other": {
-      const elsewhere = [...(shown.open ? ["\"open\""] : []), ...(shown.others.carried || !shown.open ? ["\"new\""] : [])].join(" or ");
+      const elsewhere = [...(shown.open ? ["\"open\""] : []), ...(shown.others !== undefined || !shown.open ? ["\"new\""] : [])].join(" or ");
       const none = `the person has no other thread, so the thread is ${elsewhere}`;
       const threads = shownIndexes(Array.isArray(body.threads) ? body.threads : [], count, count === 0 ? none : `"threads" holds thread numbers from 1 to ${count}`);
       if (threads.length === 0) throw new AgenticAskOutputErrorV1(count === 0 ? none : "\"other\" needs \"threads\": the number of every thread the question could belong to");
@@ -563,11 +554,7 @@ export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1
   // first question waits for no call and pays for none.
   if (previous === undefined && threads !== undefined && threads.length === 0) return Object.freeze({ placement: NEW_THREAD, fallback: false });
   const open = previous === undefined ? undefined : threadCitations(previous);
-  const shown: ThreadShownV1 = {
-    open: open !== undefined, sources: open?.citations.length ?? 0,
-    // Whether the request carried the list is kept apart from how many threads it holds: an empty list still asks for the question to be placed.
-    others: threads === undefined ? { carried: false } : { carried: true, count: threads.length },
-  };
+  const shown: ThreadShownV1 = { open: open !== undefined, sources: open?.citations.length ?? 0, others: threads?.length };
   return orFallback<AgenticThreadResolvedV1>(input, fallbackPlacement(previous), async () => Object.freeze({
     placement: await input.gate.withRepair(RESOLVE_CALL, THREAD_RESOLVER_PROMPT, threadResolverInput(input, open), threadPlacementSchema,
       value => parseThreadPlacementV1(value, shown)),
@@ -649,11 +636,7 @@ async function resolvedOnce<T>(input: AgenticResolverEvalInputV1, resolve: (reso
   return Object.freeze({ ...resolved, calls, repairs });
 }
 
-/**
- * One resolution as the follow-up resolution eval runs it (Ask timeline v1): the product's prompt, schema, reply
- * reading and one repair, through a gate of its own with no evidence desk, so nothing is read,
- * released or audited. `calls` and `repairs` are that gate's.
- */
+/** One resolution as the follow-up resolution eval runs it (Ask timeline v1), through `resolvedOnce`. */
 export function resolveAgenticFollowUpOnceV1(input: AgenticResolverEvalInputV1 & { readonly previous: PersonAnswerPreviousV1 }): Promise<AgenticFollowUpResolvedV1 & { readonly calls: number; readonly repairs: number }> {
   return resolvedOnce(input, resolver => resolveAgenticFollowUpV1({ ...resolver, previous: input.previous }));
 }

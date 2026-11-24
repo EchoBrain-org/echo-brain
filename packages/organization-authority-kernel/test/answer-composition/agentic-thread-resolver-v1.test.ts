@@ -63,8 +63,7 @@ const QUESTION = "what are the details on that ticket?";
  * What the parser is told the resolver was shown: whether a thread is open, its sources, and the other threads the
  * request carried. `threads` is how many, which may be 0; `undefined` is a request that carried no `threads` at all.
  */
-const shownAs = (open: boolean, sources: number, threads: number | undefined) =>
-  ({ open, sources, others: threads === undefined ? { carried: false as const } : { carried: true as const, count: threads } });
+const shownAs = (open: boolean, sources: number, threads: number | undefined) => ({ open, sources, others: threads });
 const SHOWN = shownAs(true, 3, 3);
 const CHOICES = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
 const OPEN_RESOLVED = { thread: "open", resolution: "resolved", question: "What are the details on THERM-482?", about: [1] };
