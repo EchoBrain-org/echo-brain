@@ -85,9 +85,9 @@ function kept(id: string, answer: Answer, days = 1, question = QUESTION): Timeli
 const finding = (states: Readonly<Record<string, string>>): Handler => params => ok({ items: (params.items as { citation: Record<string, unknown> }[]).map(({ citation }) =>
   ({ state: states[String(citation.page_id ?? citation.ticket_id)] ?? 'same' })) });
 
-/** Ask opened on `turns`' latest, each check request answered by `check`: the store, and the thread as it shows now. */
+/** Ask opened on `turns`' latest, one thread (ADR-0056), each check request answered by `check`: the store, and the thread as it shows now. */
 async function reopenedWith(check: Handler, ...turns: TimelineTurn[]) {
-  timelineFiles.set(fileOf(ACCOUNT), turns);
+  timelineFiles.set(fileOf(ACCOUNT), turns.map(turn => ({ ...turn, thread: turns[0]!.id })));
   checked = check;
   const store = await startStore();
   store.pickSuggestion({ question: QUESTION, turn: turns.at(-1)!.id });

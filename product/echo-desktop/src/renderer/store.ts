@@ -3867,7 +3867,7 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
   // The turn opened, until a question asked since it was opened is answered: then the conversation goes on from the latest.
   const continued = open && open.asked.length === open.openedAt ? open.opened : null;
   // A thread is asked in only where it lives: its home's scope.
-  const follows = thread !== undefined && sameScope(scope, thread.home) ? followedTurn(askThread(), continued)?.id ?? null : null;
+  const follows = thread !== undefined && sameScope(scope, thread.home) ? followedTurn(thread.turns, continued)?.id ?? null : null;
   return askAs({ kind: 'typed', question: question.trim(), follows, placed: true }, scope);
 }
 
@@ -4247,9 +4247,10 @@ export async function openThread(id: string, at: string | null = null): Promise<
  */
 function showThread(id: string, at: string | null, forQuestion = false): void {
   const view = newAsk(id);
-  const turns = visibleTurns(threadOf(id)?.turns ?? []);
-  const opened = at !== null && turns.some(turn => turn.id === at) ? at : null;
-  set({ ask: { ...view, forQuestion, opened, focus: opened, earlier: opened !== null && behindEarlierLine(turns, fullTurns(view)).includes(opened) } });
+  const turn = turnOf(at);
+  const opened = turn !== undefined && threadIdOf(turn) === id ? turn.id : null;
+  const behind = behindEarlierLine(visibleTurns(threadOf(id)?.turns ?? []), fullTurns(view));
+  set({ ask: { ...view, forQuestion, opened, focus: opened, earlier: opened !== null && behind.includes(opened) } });
   startSources(opened ?? undefined);
   void checkTimeline(turnOf(opened));
 }
