@@ -617,6 +617,33 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(kept().filter(each => each.thread === tests[0]!.id).map(each => each.text)).toEqual(['Which tests fail?']);
   });
 
+  it('reads the project of a thread picked to ask in, though the sidebar has it: archived meanwhile, nothing is asked and nothing joins, and its button goes', async () => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+    const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+    seed(...tests, ...flaky);
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?')], { merge: [placeOf(params, 'Which tests are flaky?')] }) : null);
+    const store = await startStore();
+    const { THREAD_OUT_OF_REACH } = await import('../../src/renderer/store.js');
+    await store.ask('are they fixed?');
+    await flush();
+    expect(store.getState().projects.items.map(each => each.project_id)).toContain(apollo.project_id);
+    // Archived elsewhere since the sidebar read it: its copy still says active.
+    const base = rpc.getMockImplementation()!;
+    rpc.mockImplementation((method: string, params: Record<string, unknown>) => (method === 'projects.read' ? Promise.resolve(ok({ ...apollo, status: 'archived' })) : base(method, params)));
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(calls('projects.read')).toEqual([expect.objectContaining({ project_id: apollo.project_id })]);
+    expect(store.getState().toast).toBe(THREAD_OUT_OF_REACH);
+    expect(calls('timeline.move')).toEqual([]);
+    expect(filed()['Which tests are flaky?']).toBe(flaky[0]!.id);
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.clarifyThreads()).toEqual([]);
+    // A jump made only to look goes by the sidebar's copy, with no read.
+    expect(await store.openThread(flaky[0]!.id)).toBe(true);
+    expect(calls('projects.read')).toHaveLength(1);
+  });
+
   it('reads the project of a thread picked while the person\'s project list is still loading: one still theirs is asked in, never taken for lost', async () => {
     const { tests } = seeded();
     script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);

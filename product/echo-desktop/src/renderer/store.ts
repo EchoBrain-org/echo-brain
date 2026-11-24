@@ -4385,12 +4385,14 @@ type Jumped = 'shown' | 'unreachable' | 'dropped';
  * here, its own row while Ask shows it included, and takes over from any jump
  * still on its way.
  * A project not among the person's active ones as the sidebar has them is read
- * by its id first. One the read says is gone, archived or no longer theirs
- * cannot be asked in: a jump made to look (`toAsk` false) shows the thread at
- * Home, where a question typed continues none (R9); one made to ask in the
- * thread (`toAsk`) moves nothing and says so (`unreachable`), so no question of
- * that thread is ever asked outside its home. A read that fails says why and
- * opens nothing: the project may well be there.
+ * by its id first; so is every project a jump made to ask in the thread
+ * (`toAsk`) goes to, before the page moves or anything joins the thread, since
+ * the sidebar's copy may be out of date. One the read says is gone, archived
+ * or no longer theirs cannot be asked in: a jump made to look shows the thread
+ * at Home, where a question typed continues none (R9); one made to ask moves
+ * nothing and says so (`unreachable`), so no question of that thread is ever
+ * asked outside its home. A read that fails says why and opens nothing: the
+ * project may well be there.
  * `picked`: the person chose this thread (its row, a "Which one?" button, one
  * of its questions), so they are in it; false when Ask only shows the thread
  * they last used.
@@ -4408,7 +4410,7 @@ async function jump(id: string, at: string | null, picked: boolean, toAsk: boole
   const thread = threadOf(id);
   if (!account || !thread || askBusy()) return 'dropped';
   const { home } = thread;
-  let project = home.kind === 'project' ? state.projects.items.find(item => item.project_id === home.project_id && item.status === 'active') : undefined;
+  let project = home.kind === 'project' && !toAsk ? state.projects.items.find(item => item.project_id === home.project_id && item.status === 'active') : undefined;
   if (home.kind === 'project' && !project) {
     const nav = navSeq;
     const result = await rpc('projects.read', { expect: account, project_id: home.project_id });
