@@ -82,8 +82,9 @@ export interface PersonAnswerRequestV3 {
   /** The asker's previous turn (ADR-0047): the asker's own context, never evidence, and never stored. */
   readonly previous?: PersonAnswerPreviousV1;
   /**
-   * The asker's other threads (ADR-0056), most recently asked first, at least one: the asker's own context, never
-   * evidence, and never stored. Never beside an Ask again.
+   * The asker's other threads (ADR-0056), most recently asked first, possibly none: the asker's own context, never
+   * evidence, and never stored. Present on every question a client that keeps threads wants placed; never beside an
+   * Ask again.
    */
   readonly threads?: readonly PersonAnswerThreadV1[];
 }
@@ -331,20 +332,24 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : []), ...(Object.hasOwn(input, 'threads') ? ['threads'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
   const question = validatePersonQuestionText(input.question);
+  // Read in the order the fields were always read, so a request wrong in two places fails on the same one as before.
+  const project = Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {};
   const previous = Object.hasOwn(input, 'previous') ? validatePersonAnswerPreviousV1(input.previous, question) : undefined;
   const threads = Object.hasOwn(input, 'threads') ? validatePersonAnswerThreadsV1(input.threads) : undefined;
   // An Ask again asks one earlier question again where it was asked: nothing places it.
   if (threads !== undefined && previous?.purpose === 'ask_again') fail('Ask again carries no threads');
-  return boundedRequest({ schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }) }, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
+  return boundedRequest({ schema_version: 3 as const, question, ...project, ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }) }, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
 }
 
 /**
  * The asker's other threads an Ask carries (ADR-0056), checked on their own, as a client checks them before sending:
- * at least one, each with at least one question the asker typed (the question rule) and when it was last asked in.
- * There is no count of threads or questions: the request's transport bound is what limits them.
+ * each with at least one question the asker typed (the question rule) and when it was last asked in. The list may be
+ * empty: a client that keeps threads sends it with every question it wants placed, so that the answer can say the
+ * question starts a new thread even when the asker has no other. There is no count of threads or questions: the
+ * request's transport bound is what limits them.
  */
 export function validatePersonAnswerThreadsV1(value: unknown): readonly PersonAnswerThreadV1[] {
-  return Object.freeze(boundedList(value, 'Ask threads', Number.MAX_SAFE_INTEGER, 1).map((raw): PersonAnswerThreadV1 => {
+  return Object.freeze(boundedList(value, 'Ask threads', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerThreadV1 => {
     const input = object(raw, 'Ask thread');
     assertExactKeys(input, ['questions', 'asked_at'], 'Ask thread');
     const questions = Object.freeze(boundedList(input.questions, 'Ask thread questions', Number.MAX_SAFE_INTEGER, 1).map(item => fullQuestion(item, 'Ask thread question')));

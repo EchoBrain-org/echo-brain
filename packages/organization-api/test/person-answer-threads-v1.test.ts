@@ -31,6 +31,13 @@ describe('the asker\'s other threads on the Ask request (ADR-0056)', () => {
     expect(Object.isFrozen(validatePersonAnswerRequestV3(alone).threads![0]!.questions)).toBe(true);
     expect(validatePersonAnswerRequestV3(ask({ previous: previous() }))).toEqual(ask({ previous: previous() }));
     expect(validatePersonAnswerThreadsV1([thread()])).toEqual([thread()]);
+    // No other thread yet: the list still goes, empty, so the answer may say the question starts a new one.
+    expect(validatePersonAnswerRequestV3(ask({ previous: previous(), threads: [] }))).toEqual(ask({ previous: previous(), threads: [] }));
+    expect(validatePersonAnswerRequestV3(ask({ threads: [] })).threads).toEqual([]);
+  });
+
+  it('fails a request wrong in two places on the field it always failed on first', () => {
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: 'Q?', project_id: 'bad', previous: {} })).toThrow('Ask request project_id');
   });
 
   it('counts neither threads nor questions: the request\'s transport bound is the only limit', () => {
@@ -40,9 +47,9 @@ describe('the asker\'s other threads on the Ask request (ADR-0056)', () => {
     expect(() => validatePersonAnswerRequestV3(ask({ threads: huge }))).toThrow('Ask request exceeds JSON byte bound');
   });
 
-  it('refuses anything else: none, a thread with no question, a bad question or time, another key, or an Ask again', () => {
+  it('refuses anything else: a thread with no question, a bad question or time, another key, or an Ask again', () => {
     for (const threads of [
-      [], [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
+      [thread({ questions: [] })], [thread({ questions: [' padded '] })], [thread({ questions: ['a\u0007b'] })], [thread({ questions: [7] })],
       [thread({ asked_at: '2026-11-16T18:00:00Z' })], [{ ...thread(), title: 'Apollo' }], [(({ asked_at: _asked, ...rest }) => rest)(thread())],
       [null], {}, 'threads', null,
     ]) expect(() => validatePersonAnswerRequestV3(ask({ threads })), JSON.stringify(threads)).toThrow();
