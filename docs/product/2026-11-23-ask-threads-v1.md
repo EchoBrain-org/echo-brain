@@ -111,10 +111,13 @@ and ECHO works out which earlier conversation a question continues.
   minutes, and the Authority checks again before a model reads it.
 - **R10. A model-written question goes only while all it was written from is
   readable.** With a thread's earlier turns shown to the resolver, a full
-  question it writes can name something from any of them. So the question a
-  model wrote for a turn, and a choice it offered, is sent or asked only when
-  the turns that turn followed and every turn of its thread asked before it
-  check readable now. Otherwise the typed words go, as today.
+  question it writes can name something from any of them. So a turn records
+  what its request carried (`carried`: the previous turn and the earlier
+  turns that went), and the question a model wrote for it, or a choice offered
+  beside it, is sent or asked only when every turn it followed, and every turn
+  each of those carried, is still kept and checks readable now, wherever it is
+  filed. A turn saved before `carried` carried only the turns it followed.
+  Otherwise the typed words go, as today.
 - **R7. No counts.** Nothing limits how many threads, questions or earlier
   turns ride on a request but its transport bound. When the body would pass
   it, the desktop leaves out the oldest threads, then the oldest earlier

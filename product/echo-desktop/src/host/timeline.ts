@@ -367,8 +367,10 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
   if (value.typed !== undefined && !string(value.typed)) return null;
   if (value.follows !== undefined && value.follows !== null && !(string(value.follows) && ID.test(value.follows))) return null;
-  // Its thread (ADR-0056): the id of a turn, the thread's first.
+  // Its thread (ADR-0056): the id of a turn, the thread's first. What its question may have been written from: turns, each once.
   if (value.thread !== undefined && !(string(value.thread) && ID.test(value.thread))) return null;
+  if (value.carried !== undefined && !(Array.isArray(value.carried) && value.carried.every(id => string(id) && ID.test(id))
+      && new Set(value.carried).size === value.carried.length)) return null;
   // The sources a check found unreadable: distinct places among the answer's own sources.
   const sources = (value.answer as TimelineAnswer).sources.length;
   if (value.unreadable !== undefined && !(indexes(value.unreadable) && new Set(value.unreadable).size === value.unreadable.length

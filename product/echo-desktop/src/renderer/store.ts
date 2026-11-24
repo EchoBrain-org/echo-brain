@@ -15,7 +15,7 @@ import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
-  askCarries, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, earlierOf, followedTurn, foundUnreadable, freshChecks, freshStates,
+  askCarries, askedSuggestions, behindEarlierLine, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, earlierOf, earlierTurns, followedTurn, foundUnreadable, freshChecks, freshStates,
   homeTurns, knownStates, mergeable, otherThreads, turnReadable, previousOf, sameScope, shownInFull, showsOf, threadGroups, threadIds, threadsOf, undoable, unreadableAfter, visibleTurns, turnGroups,
   type CheckPlan, type MovedTurn, type Suggestion, type Thread, type ThreadGroup, type TurnCheck, type TurnChecks,
 } from './timeline.js';
@@ -70,8 +70,11 @@ type AskHow =
   | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean }
   /** A turn's question again: in its scope, carrying the turn (Ask again), or everywhere, carrying nothing (Ask everywhere). */
   | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
-  /** A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`. */
-  | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null };
+  /**
+   * A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`,
+   * from what the request offering it carried (`carried`, by turn: AskClarify).
+   */
+  | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null; readonly carried: readonly string[] };
 
 /** The question on its way, and what it has done so far (ADR-0039). */
 export interface AskAsking extends AskQuestion {
@@ -80,14 +83,15 @@ export interface AskAsking extends AskQuestion {
 
 /**
  * "Which one?", in one of its two kinds. Never kept.
- * `choices`: a follow-up that could mean several things, the choices, the turn it continued and its typed words.
+ * `choices`: a follow-up that could mean several things, the choices, the turn it continued, its typed words, and what
+ * its request carried (`carried`, by turn): the choices may have been written from any of those turns (R10).
  * `threads` (ADR-0056): a question (the person's typed words) that belongs to other threads, named by id, with those the
  * answer said are on the subject of the one named (`merge`, only beside one). A thread named that is gone by the time
  * the page shows them has no button (clarifyThreads), and one picked whose home cannot be asked in is taken off the list
  * (chooseThread).
  */
 export type AskClarify = AskQuestion & (
-  | { readonly kind: 'choices'; readonly choices: readonly AskChoice[]; readonly follows: string | null; readonly typed: string | null }
+  | { readonly kind: 'choices'; readonly choices: readonly AskChoice[]; readonly follows: string | null; readonly typed: string | null; readonly carried: readonly string[] }
   | { readonly kind: 'threads'; readonly threads: readonly string[]; readonly merge: readonly string[] }
 );
 
@@ -3712,23 +3716,25 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
 export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
 
 /**
- * Keeps a turn, here and in the account's file: in place of the turn with its
- * id, or at the end, named with its thread (ADR-0056) from now on; the file
- * keeps the thread it has the turn in, which only a move changes. A put that
- * fails is not retried, and the page says the turn shows only until the
- * timeline is read again.
+ * Keeps turns, here and in the account's file: each in place of the turn with
+ * its id, or at the end, named with its thread (ADR-0056) from now on; the
+ * file keeps the thread it has a turn in, which only a move changes. One
+ * change of the timeline here, and one put a turn. A put that fails is not
+ * retried, and the page says the turn shows only until the timeline is read
+ * again.
  */
-function keepTurn(given: TimelineTurn): void {
+function keepTurns(given: readonly TimelineTurn[]): void {
   const account = expect();
-  if (!account) return;
+  if (!account || given.length === 0) return;
   // A turn saved before threads is named with the thread it belongs to when it is next saved, never rewritten for that alone.
-  const turn: TimelineTurn = given.thread === undefined ? { ...given, thread: threadIdOf(given) } : given;
+  const named = given.map((turn): TimelineTurn => (turn.thread === undefined ? { ...turn, thread: threadIdOf(turn) } : turn));
+  const byId = new Map(named.map(turn => [turn.id, turn]));
   const turns = state.timeline.turns;
-  const kept = turns.some(other => other.id === turn.id) ? turns.map(other => (other.id === turn.id ? turn : other)) : [...turns, turn];
-  setTimeline({ ...state.timeline, turns: kept });
+  const known = new Set(turns.map(turn => turn.id));
+  setTimeline({ ...state.timeline, turns: [...turns.map(turn => byId.get(turn.id) ?? turn), ...named.filter(turn => !known.has(turn.id))] });
   // Said only while the same account is signed in: another's page never hears of it.
   const lost = () => { if (sameAccount(account)) set({ toast: TURN_NOT_SAVED }); };
-  void rpc('timeline.put', { expect: account, turn }).then(result => { if (!result.ok) lost(); }, lost);
+  for (const turn of named) void rpc('timeline.put', { expect: account, turn }).then(result => { if (!result.ok) lost(); }, lost);
 }
 
 // ---- threads (ADR-0056) --------------------------------------------------------------
@@ -3858,7 +3864,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
 interface Derived {
   /** The earlier question that may go: the turn's own, or the person's typed words; undefined when neither may. */
   readonly question: string | undefined;
-  /** Whether every turn that could have informed the turn's question checked readable (questionOf). */
+  /** Whether every turn that could have informed the turn's question is still kept and checked readable (questionOf). */
   readonly readable: boolean;
   /** What this check found of the turn's own sources, for the sentences `previous` carries; null if it found nothing. */
   readonly checks: TurnChecks | null;
@@ -3867,40 +3873,22 @@ interface Derived {
 }
 
 /**
- * The turns that could have informed a question built along `links` (questionOf): each link, and every turn its thread
- * asked before it, those a merge brought in included. Each thread is read once, as far as its furthest link, so the
- * work grows with the threads' length and never with its square.
+ * The one rule for a question the model may have written (ADR-0047, C5, R10), for every follow-up, Ask again, Ask
+ * everywhere and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's full question
+ * may have been written from what the request asking it carried, which the turn recorded when it landed (`carried`),
+ * and from the turns back along `follows`, whose own questions rode on it, with what each of them carried; a choice
+ * also from what the request that offered it carried (`offered`). It goes only when a check made by this very call
+ * (never the five-minute one) finds every one of those turns still kept, with at least one source, each readable. A
+ * chain with a turn missing, or saved before `follows` was kept, fails, and so does a carried turn no longer kept; a
+ * turn saved before `carried` was kept carried no more than its chain. Where a turn is filed now says nothing of it. A
+ * first question in the person's own words needs no check. Otherwise only the person's typed words go, and none for a
+ * turn that never kept them. Access lost between this check and the send is the Authority's to catch: it checks the
+ * turn's citations again when the request comes. The one check also covers the older turns a follow-up carries
+ * (`riding`), so every sentence that goes was found readable just now. What a check says is good for five minutes
+ * from when it went (C5), here as everywhere: one that comes back later than that, its requests having taken so long,
+ * is as none, and the request goes with questions only.
  */
-function informedBy(links: readonly TimelineTurn[]): TimelineTurn[] {
-  const reach = new Map<string, { turns: readonly TimelineTurn[]; at: ReadonlyMap<string, number>; upTo: number }>();
-  for (const link of links) {
-    const id = threadIdOf(link);
-    let thread = reach.get(id);
-    if (!thread) {
-      const turns = threadOf(id)?.turns ?? [];
-      thread = { turns, at: new Map(turns.map((each, at) => [each.id, at])), upTo: 0 };
-      reach.set(id, thread);
-    }
-    thread.upTo = Math.max(thread.upTo, thread.at.get(link.id) ?? 0);
-  }
-  return [...new Set([...links, ...[...reach.values()].flatMap(({ turns, upTo }) => turns.slice(0, upTo))])];
-}
-
-/**
- * The one rule for a question the model may have written (ADR-0047, C5), for every follow-up, Ask again, Ask everywhere
- * and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's question may have been
- * written from the sources of every turn that rode on the request that asked it: its own, those of each turn back along
- * `follows`, and those of every turn asked before one of these in its thread (ADR-0056), since a thread's older turns
- * ride behind the turn a follow-up continues, a turn a merge brought in among them. It goes only when a check made by
- * this very call (never the five-minute one) finds every one of those turns with at least one source, each readable; a
- * chain with a turn missing, or saved before `follows` was kept, fails. A first question in the person's own words needs
- * no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost between
- * this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
- * The one check covers the thread's older turns a follow-up carries too, so every sentence that goes was found readable
- * just now. What a check says is good for five minutes from when it went (C5), here as everywhere: one that comes back
- * later than that, its requests having taken so long, is as none, and the request goes with questions only.
- */
-async function questionOf(turn: TimelineTurn): Promise<Derived> {
+async function questionOf(turn: TimelineTurn, riding: readonly TimelineTurn[] = [], offered: readonly string[] = []): Promise<Derived> {
   const byId = new Map(state.timeline.turns.map(each => [each.id, each]));
   const chain: TimelineTurn[] = [];
   const walked = new Set<string>();
@@ -3909,12 +3897,14 @@ async function questionOf(turn: TimelineTurn): Promise<Derived> {
     walked.add(link.id);
     link = link.follows === null ? undefined : byId.get(link.follows);
   }
-  const informed = informedBy(chain.length > 0 ? chain : [turn]);
+  const carried = new Set([...offered, ...chain.flatMap(link => link.carried ?? [])]);
+  const informed = [...new Set([...(chain.length > 0 ? chain : [turn]), ...[...carried].flatMap(id => byId.get(id) ?? [])])];
   const went = Date.now();
-  const checked = await checkTurns(informed);
+  const checked = await checkTurns([...new Set([...informed, ...riding])]);
   const found = Date.now() - went < CHECK_FRESH_MS ? checked : null;
-  // Whole only when the chain ends at a turn that followed none.
-  const readable = found !== null && chain.at(-1)?.follows === null && informed.every(each => turnReadable(each, found[each.id]));
+  // Whole only when the chain ends at a turn that followed none, and every turn carried along it is still kept.
+  const readable = found !== null && chain.at(-1)?.follows === null && [...carried].every(id => byId.has(id))
+    && informed.every(each => turnReadable(each, found[each.id]));
   const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
   const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
   return { question, readable, checks: found?.[turn.id] ?? null, found };
@@ -3931,14 +3921,14 @@ export function askAgainOffered(turn: TimelineTurn): boolean {
  * stays hidden past the five minutes a check is good for, and after a restart.
  */
 function keepUnreadable(checked: readonly (readonly [string, TurnChecks])[]): void {
-  for (const [id, states] of checked) {
-    const turn = turnOf(id);
-    if (!turn) continue;
-    const next = unreadableAfter(turn.unreadable, states);
-    if (next.join() === (turn.unreadable ?? []).join()) continue;
+  const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
+  keepTurns(checked.flatMap(([id, states]) => {
+    const turn = byId.get(id);
+    const next = turn && unreadableAfter(turn.unreadable, states);
+    if (!turn || !next || next.join() === (turn.unreadable ?? []).join()) return [];
     const { unreadable: _kept, ...rest } = turn;
-    keepTurn(next.length > 0 ? { ...rest, unreadable: next } : rest);
-  }
+    return [next.length > 0 ? { ...rest, unreadable: next } : rest];
+  }));
 }
 
 /**
@@ -4037,7 +4027,7 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   if (how.kind !== 'typed') {
     if (!from && how.kind !== 'choice') return;
     const before = state.ask?.seq;
-    derived = from ? await questionOf(from) : null;
+    derived = from ? await questionOf(from, [], how.kind === 'choice' ? how.carried : []) : null;
     // Asked meanwhile, Ask closed or moved to another thread, or another account: this one is not asked.
     if (state.ask?.seq !== before || askBusy() || !sameAccount(account)) return;
     typed = how.kind === 'choice' ? how.typed : from?.typed ?? null;
@@ -4064,10 +4054,12 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
       ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
-  // The thread the person's own question continues, as Ask shows it: its turns before the one continued ride behind it.
-  const thread = how.kind === 'typed' && from ? visibleTurns(homeTurns(threadOf(within), scope)) : [];
+  // The thread the person's own question continues, as Ask shows it: its turns before the one continued ride behind it,
+  // checked with it in the one check.
+  const home = how.kind === 'typed' && from ? visibleTurns(homeTurns(threadOf(within), scope)) : [];
+  const older = how.kind === 'typed' && from ? earlierTurns(home, from) : [];
   if (how.kind === 'typed' && from) {
-    derived = await questionOf(from);
+    derived = await questionOf(from, older);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
       if (activeAskCancelId === cancelId) activeAskCancelId = null;
       notAsking(mine);
@@ -4080,8 +4072,13 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   // A question to be placed carries the threads it may be placed in: every one but the thread it continues, so all of them
   // when it continues none. A follow-up none of whose turn may go is not placed: it stays in the thread it was typed in.
   const placed = how.kind === 'typed' && how.placed && (from === null || previous !== null);
-  const carries = askCarries(askText(text), scope, previous, how.kind === 'typed' && from ? earlierOf(thread, from, derived?.found ?? null) : [],
+  const carries = askCarries(askText(text), scope, previous, how.kind === 'typed' && from ? earlierOf(home, from, derived?.found ?? null) : [],
     placed ? otherThreads(threads(), scope, within) : null);
+  // What its answer's question may be written from (R10), recorded where it lands (`carried`): the turns this request
+  // carried, the previous one and the older ones that fit (askCarries leaves out the oldest), and for a choice what the
+  // request offering it carried. The other threads go by the person's own words only (R2).
+  const went = carries.previous === undefined || !from ? [] : [from.id, ...older.slice(older.length - (carries.previous.earlier?.length ?? 0)).map(each => each.id)];
+  const carried = [...new Set([...(how.kind === 'choice' ? how.carried : []), ...went])];
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId,
     ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
@@ -4116,7 +4113,7 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   }
   if (answer.outcome === 'clarify') {
     const follows = how.kind === 'typed' || how.kind === 'choice' ? from?.id ?? null : null;
-    set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'choices', choices: answer.choices ?? [], follows, typed } } });
+    set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'choices', choices: answer.choices ?? [], follows, typed, carried } } });
     startSources();
     return;
   }
@@ -4130,9 +4127,9 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   const turn: TimelineTurn = {
     id, asked_at: new Date(started).toISOString(), text, question: full ?? text, scope, answer: kept, citations_complete: true,
     ...(typed === null ? {} : { typed }), follows: from?.id ?? null,
-    ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed,
+    ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed, carried,
   };
-  keepTurn(turn);
+  keepTurns([turn]);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - started;
   const shown = took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
@@ -4219,7 +4216,7 @@ export function askAgain(id: string): void {
 export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'choices' || askBusy()) return;
-  void askAs({ kind: 'choice', question: choice.question, typed: clarify.typed, follows: clarify.follows }, clarify.scope);
+  void askAs({ kind: 'choice', question: choice.question, typed: clarify.typed, follows: clarify.follows, carried: clarify.carried }, clarify.scope);
 }
 
 /** What the person is told when the thread they picked lives in a project they cannot ask in now: the words a thing no longer theirs to use gets everywhere. */

@@ -352,7 +352,7 @@ test('the threads on the subject of the one a question jumps to join it first, t
   await expect(page.getByTestId('thread-merged')).toHaveCount(0);
 });
 
-test('a question a model wrote is sent again only while every turn of its thread before it is still readable, one a merge brought in included', async () => {
+test('a question a model wrote is sent again only while every turn its request carried is still readable, one a merge brought in included', async () => {
   // In this mode the source check answers, and never finds the follow-up that an answer about what was drafted cites.
   run = await launch('ask-threads-checked');
   const { page } = run;
@@ -366,8 +366,8 @@ test('a question a model wrote is sent again only while every turn of its thread
   // Everything in the thread is readable: the next follow-up names that question in full, as it always did.
   await ask(page, 'and since when?');
   expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: rewrite, earlier: [{ question: 'When does the pilot start?' }] } });
-  // The other thread joins by hand. Its one turn cites what this person can no longer read, and is now a turn asked
-  // before every question in this thread: any of them a model wrote could have drawn on it.
+  // The other thread joins by hand. Its one turn cites what this person can no longer read, and it is now among the older
+  // turns of this thread that ride on a follow-up.
   await page.getByTestId('thread-name').click();
   const drafted = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'What was drafted last week?' });
   await drafted.hover();
@@ -377,13 +377,18 @@ test('a question a model wrote is sent again only while every turn of its thread
   await ask(page, 'and by whom?');
   await ask(page, 'and why?');
   const [first, second] = asks().slice(before) as { previous: { question: string; earlier: { question: string; statements: unknown[] }[] } }[];
-  // Each names the turn it continues by the words typed for it, and the merged turn rides with no sentence.
-  expect(first!.previous.question).toBe('and since when?');
-  expect(second!.previous.question).toBe('and by whom?');
+  // The turn the first continues was asked before the merge: its request carried only this thread's own turns, as its
+  // record says, so its full question goes. The merged turn rides with no sentence.
+  expect(first!.previous.question).toBe(`${RESOLVED} and since when? (after "${rewrite}")`);
   expect(first!.previous.earlier.map(each => [each.question, each.statements.length])).toEqual([
     ['What was drafted last week?', 0], ['When does the pilot start?', 1], ['and who decided?', 1]]);
-  expect(JSON.stringify([first, second])).not.toContain(RESOLVED);
+  // That first follow-up carried the merged turn: the next names it by the words typed for it, and nothing a model wrote
+  // from the merged turn goes.
+  expect(second!.previous.question).toBe('and by whom?');
+  expect(JSON.stringify(second)).not.toContain(`${RESOLVED} and by whom?`);
   expect(JSON.stringify([first, second])).not.toContain('Confirm the trace');
+  const carried = (file().find(turn => turn.text === 'and by whom?') as { carried?: string[] } | undefined)?.carried ?? [];
+  expect(carried).toContain(file().find(turn => turn.text === 'What was drafted last week?')!.id);
 });
 
 test('a question that could belong to several threads asks which one: a thread in a project names it, and picking it opens the project\'s page and asks there; "New question" starts a thread', async () => {

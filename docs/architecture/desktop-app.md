@@ -133,11 +133,12 @@ copy that a unit test proves equivalent.
   every thread the question may be placed in, the one shown included. The
   answer says when the question belongs to another thread or starts one, and
   the host refuses one that leaves out what an Ask with threads is owed: its
-  question, and with no previous turn, where it belongs. A turn's full
-  question, which a model may have written, is sent again only while a fresh
-  check finds every turn that could have informed it readable: the turns it
-  followed and every turn asked before it in its thread. Otherwise the typed
-  words go.
+  question, and with no previous turn, where it belongs. Each turn records
+  what its request carried (`carried`), and its full question, which a model
+  may have written, is sent again only while a fresh check finds every turn
+  that could have informed it still kept and readable: the turns it followed
+  and every turn each of those carried, wherever they are filed now.
+  Otherwise the typed words go.
 
 ## Updates
 

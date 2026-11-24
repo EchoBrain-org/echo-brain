@@ -304,6 +304,10 @@ describe('the timeline file (C5)', () => {
     expect(timelineTurn(older)).toEqual(older);
     // A thread is named by a turn's id, its first: anything else is not one a put writes.
     for (const thread of ['thread-1', '', 7, null, { id: good.id }]) expect(timelineTurn({ ...good, thread })).toBeNull();
+    // What its question was written from: turns, by their ids, each once; none at all is a record too.
+    const [one, two] = [randomUUID(), randomUUID()];
+    for (const carried of [[], [one], [one, two]]) expect(timelineTurn({ ...good, carried })).toEqual({ ...good, carried });
+    for (const carried of [[one, one], ['turn-1'], [7], one, null, {}]) expect(timelineTurn({ ...good, carried })).toBeNull();
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
       // Never what a put writes: a part's statements without blocks (ADR-0051), a scope the page has not got, and blocks with nothing to arrange.

@@ -79,6 +79,8 @@ let script: ((params: Record<string, unknown>) => unknown) | null;
 let moveEnds: null | 'refused' | 'timeout' | 'lost';
 /** While set, a `timeline.move` is taken by the file at once and its reply waits for this. */
 let moveGate: Promise<unknown> | null;
+/** The turns, by what was typed for them, whose `timeline.put` fails. */
+let unsaved: Set<string>;
 let app: AppStatus;
 let active = [apollo, zephyr];
 /** The person's archived projects: read by id like any other. */
@@ -91,6 +93,7 @@ beforeEach(() => {
   script = null;
   moveEnds = null;
   moveGate = null;
+  unsaved = new Set();
   app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   active = [apollo, zephyr];
   archived = [];
@@ -104,6 +107,7 @@ beforeEach(() => {
     'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
   }, () => ({ active, archived }));
   rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === 'timeline.put' && unsaved.has((params.turn as TimelineTurn).text)) return fail('failed');
     if (method !== 'timeline.move') return base(method, params);
     if (moveEnds === 'refused') return fail('failed');
     if (moveEnds === 'timeout') return fail('timeout', { retryable: true });
@@ -1855,6 +1859,128 @@ describe('a question a model wrote goes only while every turn that could have in
     store.chooseClarified(choices[1]!);
     await flush();
     expect(asked().at(-1)).toMatchObject({ question: 'What does the sponsor still have to approve?' });
+  });
+
+  /** Signed out and in again as the same person, Ask open behind the sign-in page: the timeline is read again, as a restart reads it. */
+  const readAgain = async (store: Store) => {
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+  };
+
+  it('holds to what a request carried, as recorded, after an Undo the page could not confirm: a turn it carried counts wherever it is filed now', async () => {
+    const other = orion();
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    seed(other, ...pilot);
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    store.mergeThread(other.id);
+    await flush();
+    // The Undo goes into the file and its reply is lost: the page still shows the other thread's turn in the pilot's.
+    moveEnds = 'lost';
+    await store.undoMerge();
+    await flush();
+    moveEnds = null;
+    expect(filed()['Who leads the other team?']).toBe(other.id);
+    expect(store.askThread().map(each => each.text)).toEqual(['Who leads the other team?', 'When does the pilot start?']);
+    // A follow-up there carries that turn among the older ones, and its answer's full question names what only it said.
+    const rewrite = `Who signs off the pilot that ${NAME} leads?`;
+    script = params => (params.question === 'and who signs it off?' ? answered(params, { question: rewrite }) : null);
+    await store.ask('and who signs it off?');
+    await flush();
+    expect((asked()[0]!.previous as AskPrevious).earlier!.map(each => each.question)).toEqual(['Who leads the other team?']);
+    expect(kept().at(-1)).toMatchObject({ question: rewrite, carried: [pilot[0]!.id, other.id] });
+    // Read again, the pilot's thread no longer holds the other turn. Then that turn's source goes: the next follow-up
+    // names the turn it continues by the words typed for it.
+    await readAgain(store);
+    expect(store.askThread().map(each => each.text)).toEqual(['When does the pilot start?', 'and who signs it off?']);
+    orionGone();
+    await store.ask('and where?');
+    expect(asked().at(-1)!.previous).toMatchObject({ purpose: 'follow_up', question: 'and who signs it off?' });
+    expect(JSON.stringify(asked().at(-1))).not.toContain(NAME);
+  });
+
+  it('holds to what a request carried, as recorded, when a turn it carried was never saved and a merge left it behind', async () => {
+    const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    seed(...ledger, ...pilot);
+    const leads = 'Who leads the other team?';
+    const rewrite = `Who signs off the pilot that ${NAME} leads?`;
+    const statements = [said(`${NAME} leads it.`, [0])];
+    script = params => (params.question === leads
+      ? answered(params, { sources: [ticket('ORION-7', '30007')], parts: [{ question: leads, status: 'answered', statements, blocks: paragraphs(statements) }] })
+      : params.question === 'and who signs it off?' ? answered(params, { question: rewrite }) : null);
+    // Its answer is not saved on this computer: it shows from memory until the timeline is read again.
+    unsaved.add(leads);
+    const store = await startStore();
+    const { TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    await store.ask(leads);
+    await flush();
+    expect(store.getState().toast).toBe(TURN_NOT_SAVED);
+    const lead = store.getState().timeline.turns.find(each => each.text === leads)!;
+    expect(kept().map(each => each.id)).not.toContain(lead.id);
+    // A follow-up of the pilot's first turn, opened again: the unsaved turn is after that one, never one it followed.
+    store.toggleTurn(pilot[0]!.id);
+    await store.ask('and what about the date?');
+    await flush();
+    // Then a follow-up of that: it carries the thread's older turns, the unsaved one among them, and names what only it said.
+    await store.ask('and who signs it off?');
+    await flush();
+    const signs = kept().at(-1)!;
+    expect(signs.question).toBe(rewrite);
+    expect(signs.carried).toContain(lead.id);
+    expect(signs.follows).not.toBe(lead.id);
+    // Merged by hand into the ledger's thread, in one move that names every turn of the pilot's: the file has no such
+    // turn, so it is left behind.
+    await store.openThread(ledger[0]!.id);
+    await flush();
+    store.mergeThread(pilot[0]!.id);
+    await flush();
+    expect(store.askThread().map(each => each.text)).not.toContain(leads);
+    expect(store.askThread().map(each => each.text)).toContain('and who signs it off?');
+    // Its source goes: the next follow-up names the turn it continues by the words typed for it.
+    orionGone();
+    await store.ask('and where?');
+    expect(asked().at(-1)!.previous).toMatchObject({ purpose: 'follow_up', question: 'and who signs it off?' });
+    expect(JSON.stringify(asked().at(-1))).not.toContain(NAME);
+  });
+
+  it('sends no question a model wrote once a turn its request carried is no longer kept, though every turn there reads', async () => {
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    const rewrite = 'Who signs off the pilot for the launch?';
+    const said2 = (missing: boolean) => turn(rewrite, 2 * DAY, {
+      text: 'and who signs it off?', typed: 'and who signs it off?', follows: pilot[0]!.id, thread: pilot[0]!.id, answer: answerOf('and who signs it off?'),
+      carried: missing ? [pilot[0]!.id, '00000000-0000-4000-8000-00000000ffff'] : [pilot[0]!.id] });
+    const [gone, here] = [said2(true), said2(false)];
+    seed(...pilot, gone, here);
+    const store = await startStore();
+    store.askAgain(gone.id);
+    await flush();
+    expect(asked()[0]).toMatchObject({ question: 'and who signs it off?', previous: { purpose: 'ask_again', question: 'and who signs it off?' } });
+    // All it carried still kept and readable, its full question goes.
+    store.askAgain(here.id);
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
+  });
+
+  it('takes the turns a turn saved before `carried` followed as all it carried, whatever else its thread holds', async () => {
+    const other = orion();
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    const rewrite = 'When does the pilot start after the slip?';
+    // Saved before turns recorded what their request carried: it followed the pilot's first turn, and no more rode then.
+    const legacy = turn(rewrite, 2 * DAY, { text: 'and now?', typed: 'and now?', follows: pilot[0]!.id, thread: pilot[0]!.id, answer: answerOf('and now?') });
+    // The other turn sits in the same thread, before it, and is no longer readable: never a turn the legacy one carried.
+    seed({ ...other, thread: pilot[0]!.id }, ...pilot, legacy);
+    orionGone();
+    const store = await startStore();
+    store.askAgain(legacy.id);
+    await flush();
+    expect(asked()[0]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
   });
 
   it('checks a long thread in one check of every turn the question could have drawn on, the earliest included', async () => {

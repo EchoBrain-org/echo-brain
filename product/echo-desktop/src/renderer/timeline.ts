@@ -466,17 +466,21 @@ export function otherThreads(threads: readonly Thread[], scope: AskScope, contin
 }
 
 /**
- * The older turns of a thread a follow-up carries (R6): those `turns` (the thread as Ask shows it) has before `before`,
- * the turn it continues, oldest first. Each goes by the person's own words, so one without any is left out, with its
- * sentences `found` (the check this follow-up made, by turn) has readable, as the previous turn's go: only its question
- * with nothing found of it.
+ * The older turns of a thread a follow-up carries (R6), oldest first: those `turns` (the thread as Ask shows it) has
+ * before `before`, the turn it continues, with the person's own words.
+ */
+export function earlierTurns(turns: readonly TimelineTurn[], before: TimelineTurn): TimelineTurn[] {
+  const at = turns.findIndex(turn => turn.id === before.id);
+  return turns.slice(0, Math.max(at, 0)).filter(turn => sentWords(turn) !== undefined);
+}
+
+/**
+ * Those older turns as `previous.earlier` carries them (R6): each by the person's own words, with its sentences `found`
+ * (the check this follow-up made, by turn) has readable, as the previous turn's go: only its question with nothing
+ * found of it.
  */
 export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, found: Readonly<Record<string, TurnChecks>> | null): AskEarlierTurn[] {
-  const at = turns.findIndex(turn => turn.id === before.id);
-  return turns.slice(0, Math.max(at, 0)).flatMap(turn => {
-    const question = sentWords(turn);
-    return question === undefined ? [] : [carried(turn, question, readableStatements(turn, found?.[turn.id] ?? null))];
-  });
+  return earlierTurns(turns, before).map(turn => carried(turn, sentWords(turn)!, readableStatements(turn, found?.[turn.id] ?? null)));
 }
 
 /** What an Ask carries beside its question: the previous turn with its thread's older turns, and the threads it may be placed in, with which threads those are. */
