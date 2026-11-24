@@ -148,7 +148,7 @@ describe('the timeline\'s rules', () => {
     expect(askedWhen('2025-10-14T12:00:00.000Z', NOW.getTime())).toBe('Oct 14, 2025');
   });
 
-  it('suggests the questions of a place\'s thread, newest first, each once: Home\'s every one, a project\'s its own (ADR-0049)', () => {
+  it('suggests the questions asked in a place, newest first, each once: Home\'s every one, a project\'s its own (ADR-0049)', () => {
     const inApollo = { ...status(), scope: { kind: 'project' as const, project_id: apollo.project_id } };
     const turns = [turn('When do we ship?', 3 * DAY, status()), turn('Who owns it?', 2 * DAY, inApollo, { scope: inApollo.scope }), turn('when do we ship?', DAY, status())];
     // As the empty bar offers them: each once, the newest.
@@ -157,7 +157,7 @@ describe('the timeline\'s rules', () => {
     expect(asked(inApollo.scope)).toEqual([{ question: 'Who owns it?', turn: turns[1]!.id }]);
   });
 
-  it('shows each place its own thread, and each question once: a turn asked again, or asked again word for word there, folds away', () => {
+  it('suggests each place the questions asked in it, each once: a turn asked again, or asked again word for word there, folds away', () => {
     const first = turn('When do we ship?', 4 * DAY, status());
     const apolloTurn = turn('Who owns it?', 3 * DAY, status(), { scope: inApollo });
     const again = turn('When do we ship?', 2 * DAY, status(), { again_of: first.id });
@@ -166,7 +166,7 @@ describe('the timeline\'s rules', () => {
     const turns = [first, apolloTurn, again, typed, elsewhere];
     expect(askedIn(turns, { kind: 'global' })).toEqual(turns);
     expect(askedIn(turns, inApollo)).toEqual([apolloTurn, typed]);
-    // Home's thread: the first was asked again, and Apollo's question was asked again there; the same words asked at Home stay.
+    // At Home, every question: the first was asked again, and Apollo's question was asked again there; the same words asked at Home stay.
     expect(visibleTurns(askedIn(turns, { kind: 'global' }))).toEqual([again, typed, elsewhere]);
     expect(visibleTurns(askedIn(turns, inApollo))).toEqual([typed]);
   });
@@ -1609,7 +1609,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left in Apollo?']);
   });
 
-  it('goes back to Home\'s thread for a question asked in a project that is no longer one of yours', async () => {
+  it('goes back to the thread at Home when its project is no longer one of yours', async () => {
     seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
     const store = await startStore();
     await store.openProject(apollo);
@@ -1687,7 +1687,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left?']);
   });
 
-  it('goes to Home\'s thread for an unloaded project you no longer have, and says why when it cannot be read', async () => {
+  it('goes to the thread at Home for an unloaded project you no longer have, and says why when it cannot be read', async () => {
     const many = numbered(12);
     let reply = fail('not_found');
     rpc.mockImplementation(rpcFor(held, { 'projects.read': () => reply }, () => ({ active: many, archived: [] })));

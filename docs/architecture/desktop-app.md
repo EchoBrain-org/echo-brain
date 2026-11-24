@@ -67,7 +67,7 @@ copy that a unit test proves equivalent.
 | --- | --- | --- |
 | Home | `screens/home.tsx`, `screens/altitude.tsx` | What needs you, grouped by kind, then your projects; zoom into a project or a person. Home always opens at its top. |
 | Decision | `screens/decision.tsx`, `card.tsx`, `impact-card.tsx` | Approve a meeting, route each item, see its impact checks |
-| Ask | `screens/ask.tsx` | Question bar with suggestions, the thread, the source pane |
+| Ask | `screens/ask.tsx` | Question bar with suggestions, one thread under its name, the list of threads, the source pane |
 | Project | `screens/project.tsx`, `items.tsx`, `project-settings.tsx`, `people.tsx` | The project feed, settings, Tools mappings and members |
 | Only me | `screens/only-me.tsx`, `only-me-row.tsx` | Items locked to you |
 | Follow-ups | `screens/follow-ups.tsx` | Follow-up lists and the item page |
@@ -107,6 +107,17 @@ copy that a unit test proves equivalent.
   old turn runs `ask.check`, a content-free check that its sources are still
   readable.
 
+  Threads ([ADR-0056](../decisions/ADR-0056-ask-threads.md), proposed) are
+  labels on turns in that same file: each turn names its thread by the id of
+  the thread's first turn, and a turn saved before the label belongs to the
+  thread of the turn it followed in the same place. Ask shows one thread, and
+  the list under the thread's name is the way to another: a row jumps to a
+  thread at its place (Home, or its project's page), and Merge relabels a
+  thread's turns into the open one with `timeline.put`. `ask.run` also carries
+  the person's other threads, as the questions they typed, and the open
+  thread's older turns; the answer says when the question belongs to another
+  thread or starts one.
+
 ## Updates
 
 Only release packages update themselves
@@ -129,7 +140,7 @@ unresolved.
 | What | Where |
 | --- | --- |
 | Person session | `~/.local/share/echo-brain/person/`, owned by the Person client |
-| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, every turn kept until the file would pass what the runtime can read back as one string (then the oldest go), deleted at sign-out |
+| Ask timeline | `<person dir>/ask-timeline-v1/<digest>.json`, one file per account, every turn kept, each with the thread it belongs to, until the file would pass what the runtime can read back as one string (then the oldest go), deleted at sign-out |
 | Updater state | `<appData>/ECHO/desktop/updater/` |
 | Chromium data and log | `<appData>/ECHO/chromium`; `<userData>/logs/desktop.log` (codes only, rotated at 1 MiB) |
 | Renderer conveniences | Three `localStorage` keys: sidebar open, last Authority, projects seen |

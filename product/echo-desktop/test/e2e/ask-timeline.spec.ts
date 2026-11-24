@@ -28,36 +28,28 @@ async function back(page: Page): Promise<void> {
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
 }
 
-test('the timeline stays through navigation, on this computer only, each place shows its own thread, and the bar reopens a question at its turn', async () => {
+test('the timeline stays through navigation, on this computer only, Ask shows one thread, and the bar reopens a question at its turn in its thread', async () => {
   run = await launch();
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await expect(page.getByTestId('suggestions')).toHaveCount(0);
   await ask(page, 'What did we agree?');
+  // With Ask open the next question continues the thread.
+  await ask(page, 'Who approved it?');
+  await expect(page.getByTestId('question')).toHaveText(['What did we agree?', 'Who approved it?']);
   await back(page);
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await ask(page, 'What is left in Apollo?');
-  // Apollo's thread is its own (ADR-0049): the question asked at Home is not on it.
+  // One thread on the page (ADR-0056): a question asked from a page starts its own, and the others are not on it.
   await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?']);
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await page.getByTestId('sidebar-home').click();
-  await ask(page, 'Who approved it?');
-  // Home's thread holds every question: Apollo's latest, Ask opened on, stays in full; the one before folds as a line, with no
-  // scope line or date under any question.
-  const rows = page.getByTestId('timeline-row');
-  await expect(rows).toHaveCount(1);
-  await expect(rows.getByTestId('timeline-question')).toHaveText('What did we agree?');
-  await expect(rows).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?', 'Who approved it?']);
-  // A line opens its answer as it was.
-  await rows.click();
-  await expect(rows).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
-  await expect(page.getByTestId('opened-turn').getByTestId('ask-again')).toBeVisible();
-  // Every question went alone: none carried an earlier turn from a page.
-  expect(asks().map(body => 'previous' in body)).toEqual([false, false, false]);
-  expect(asks().map(body => body.project_id)).toEqual([undefined, 'prj_11111111-1111-4111-8111-111111111111', undefined]);
+  await expect(page.getByTestId('thread-name')).toHaveText('What is left in Apollo?');
+  // From a page a question goes alone; typed with Ask open it carried the turn before it. No thread from outside a project
+  // rides on a project's Ask.
+  expect(asks().map(body => 'previous' in body)).toEqual([false, true, false]);
+  expect(asks().map(body => body.project_id)).toEqual([undefined, undefined, 'prj_11111111-1111-4111-8111-111111111111']);
+  expect(asks().map(body => 'threads' in body)).toEqual([false, false, false]);
   // Kept in one owner-only file for the account, beside the session.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
   // The answer renders before its atomic save finishes. Wait for the committed file, without a temporary write beside it.
@@ -66,17 +58,30 @@ test('the timeline stays through navigation, on this computer only, each place s
   expect(statSync(folder).mode & 0o777).toBe(0o700);
   expect(statSync(join(folder, files[0]!)).mode & 0o777).toBe(0o600);
 
-  // Home's empty bar suggests every question asked, newest first; one opens Ask at its turn without asking again.
+  // Home's empty bar suggests every question asked, newest first; one opens its thread at its turn without asking again.
   await back(page);
+  await page.getByTestId('sidebar-home').click();
   await page.getByTestId('ask-field').click();
   const suggestions = page.getByTestId('suggestion');
-  await expect(suggestions.first()).toHaveText('Who approved it?');
-  await expect(page.locator('[data-testid="suggestion"][data-asked="true"]')).toHaveText(['Who approved it?', 'What is left in Apollo?', 'What did we agree?']);
+  await expect(suggestions.first()).toHaveText('What is left in Apollo?');
+  await expect(page.locator('[data-testid="suggestion"][data-asked="true"]')).toHaveText(['What is left in Apollo?', 'Who approved it?', 'What did we agree?']);
   await page.getByTestId('ask-field').press('ArrowUp');
   await expect(suggestions.last()).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('ask-field')).toHaveAttribute('aria-activedescendant', 'ask-suggestion-2');
   await page.getByTestId('ask-field').press('Enter');
+  // Its thread: the latest question in full, and the one chosen as a line, opened on its answer as it was, with no scope line
+  // or date under any question.
+  await expect(page.getByTestId('thread-name')).toHaveText('What did we agree?');
+  await expect(page.getByTestId('question')).toHaveText(['Who approved it?']);
+  const rows = page.getByTestId('timeline-row');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.getByTestId('timeline-question')).toHaveText('What did we agree?');
+  await expect(rows).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
+  await expect(page.getByTestId('opened-turn').getByTestId('ask-again')).toBeVisible();
+  // The line folds it again.
+  await rows.click();
+  await expect(rows).toHaveAttribute('aria-expanded', 'false');
   expect(asks()).toHaveLength(3);
 });
 
@@ -85,11 +90,12 @@ test('a line opens as its heading, with what you can no longer read left out', a
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'What is open on THERM?');
+  await ask(page, 'and who has it?');
   await back(page);
-  await ask(page, 'What else?');
-  await back(page);
-  await ask(page, 'Anything new?');
-  // Opening Ask checked the newest turns' sources in one read: the follow-up is no longer yours.
+  // The sidebar's Ask opens the thread again: its latest turn in full, the one before as a line.
+  await page.getByTestId('sidebar-ask').click();
+  await expect(page.getByTestId('question')).toHaveText(['and who has it?']);
+  // Opening the thread checked its turns' sources in one read: the follow-up is no longer yours.
   const row = page.getByTestId('timeline-row').filter({ hasText: 'What is open on THERM?' });
   await row.click();
   const opened = page.getByTestId('opened-turn');

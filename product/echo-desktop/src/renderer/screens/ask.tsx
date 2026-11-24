@@ -778,7 +778,8 @@ function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  // Listening from the frame the list shows in: an Escape pressed at once must close the list, not Ask.
+  useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
     // Escape closes the list only: the window's Escape would close Ask.
