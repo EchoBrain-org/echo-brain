@@ -1282,6 +1282,29 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     expect(store.getState().route).toEqual({ page: 'home' });
   });
 
+  it('goes on with a jump still reading its project when a read of your projects lets go of one Home only remembered, Home showing the same', async () => {
+    active = numbered(12);
+    const later = active[11]!;
+    const far = threadIn({ kind: 'project', project_id: later.project_id }, ['What is left there?', 4 * DAY]);
+    seed(...far);
+    const store = await startStore();
+    // Zoomed into the first project and out again: Home remembers it for its stop.
+    store.zoomTo('project', { project_id: active[0]!.project_id });
+    store.zoomOut();
+    await flush();
+    const reading = held.hold('projects.read');
+    const jump = store.openThread(far[0]!.id);
+    // That project leaves your list, and a read of it lets go of it: Home still shows My projects.
+    active = active.slice(1);
+    await store.loadProjects();
+    await flush();
+    expect(store.getState().altitude).toMatchObject({ level: 'projects', category: null, project_id: null });
+    reading(ok(later));
+    expect(await jump).toBe(true);
+    expect(store.threadShown()?.id).toBe(far[0]!.id);
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: later.project_id } });
+  });
+
   it('drops a jump whose thread was merged away, or lives somewhere else, by the time its project is read', async () => {
     active = numbered(12);
     const later = active[11]!;
@@ -2014,6 +2037,32 @@ describe('merging threads, and Undo', () => {
       expect(store.threadShown()?.id).toBe(tests[0]!.id);
       // The merge it waited on is made all the same.
       expect(filed()['Which tests are flaky?']).toBe(tests[0]!.id);
+    });
+
+    it('asks the words again though, while the merge is on its way, a read of your projects takes Home, under Ask, off a project it was zoomed into', async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
+      const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+      seed(...billing, ...ledger, ...pilot);
+      script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')], { merge: [placeOf(params, 'Where is the ledger?')] }) : null);
+      const store = await startStore();
+      store.zoomTo('project', { project_id: zephyr.project_id });
+      await flush();
+      await store.openThread(pilot[0]!.id);
+      await flush();
+      const confirm = gated();
+      void store.ask('who approves them?');
+      await flush();
+      expect(moves()).toHaveLength(1);
+      // Zephyr leaves your list, and a read of it takes Home to My projects, out of sight.
+      active = [apollo];
+      await store.loadProjects();
+      await flush();
+      expect(store.getState().altitude).toMatchObject({ level: 'projects', project_id: null });
+      confirm();
+      await flush();
+      expect(asked()[1]).toMatchObject({ question: 'who approves them?', previous: { question: 'Who owns billing?' } });
+      expect(store.threadShown()?.id).toBe(billing[0]!.id);
     });
 
     it.each(['Ask is closed', 'another account signs in'] as const)('asks nothing when, while the merge is on its way, %s', async (leave) => {

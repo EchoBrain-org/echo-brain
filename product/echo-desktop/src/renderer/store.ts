@@ -735,16 +735,22 @@ export function clearToast(shown: number): void {
 /**
  * Whether `patch`, set over `before`, is a move of the person's (navSeq): Ask closed, which every page change does too,
  * or a question started there; or another page, reader item, follow-up view or item page in front, opened or closed;
- * or Home zoomed to another altitude, or into or out of a kind's list. A merge, an Undo and the bar widened count too
- * (mergeThread, undoMerge, widenScope).
+ * or Home, on screen, zoomed to another altitude, or into or out of a kind's list. A merge, an Undo and the bar widened
+ * count too (mergeThread, undoMerge, widenScope).
  */
 function navigated(before: State, patch: Partial<State>): boolean {
   if ('ask' in patch && (patch.ask === null || (patch.ask?.asking && !before.ask?.asking))) return true;
   const page = (current: State) => (current.route.page === 'project' ? current.route.project.project_id : current.route.page);
   const item = (current: State) => (current.reader ? `${current.reader.ref.kind} ${current.reader.ref.id}` : null);
-  const zoom = ({ altitude: { level, category, project_id, membership_id } }: State) => `${level} ${category} ${project_id} ${membership_id}`;
+  // Home's zoom as it shows, nothing over it: its altitude, a kind's list, and what the altitude is on. Not a project or
+  // person it only remembers, which a refresh of your projects may let go while Home shows the same.
+  const zoom = (current: State) => {
+    const { level, category, project_id, membership_id } = current.altitude;
+    const shown = current.route.page === 'home' && current.ask === null && current.reader === null && followUpShown(current) === null;
+    return shown ? `${level} ${category} ${level === 'project' ? project_id : level === 'person' ? membership_id : null}` : null;
+  };
   return page(before) !== page(state) || item(before) !== item(state) || before.followUps?.views.at(-1)?.seq !== state.followUps?.views.at(-1)?.seq
-    || zoom(before) !== zoom(state);
+    || (zoom(before) !== null && zoom(state) !== null && zoom(before) !== zoom(state));
 }
 
 function set(patch: Partial<State>): void {
