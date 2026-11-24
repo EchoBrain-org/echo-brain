@@ -703,6 +703,38 @@ describe('where a question goes and where its answer lands (ADR-0056)', () => {
     expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { question: 'Which tests fail?' } });
   });
 
+  it.each([
+    ['the typed words go back to the empty bar', '', 'are they fixed?'],
+    ['the bar keeps what the person typed since', 'what else?', 'what else?'],
+  ] as const)('drops a pick still reading its project once × widens the bar: nothing is asked, the bar stays wide, and %s', async (_why, typed, bar) => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+    const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+    seed(...tests, ...flaky);
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Which tests are flaky?')]) : null);
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.ask('are they fixed?');
+    await flush();
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Which tests are flaky?']);
+    const reading = held.hold('projects.read');
+    const pick = store.chooseThread(tests[0]!.id);
+    store.widenScope();
+    store.setBarText(typed);
+    reading(ok(apollo));
+    await pick;
+    await flush();
+    expect(asked()).toHaveLength(1);
+    expect(store.getState().barScope).toEqual(GLOBAL);
+    expect(store.getState().barText).toBe(bar);
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
+    expect(store.clarifyThreads().map(each => each.name)).toEqual(['Which tests fail?', 'Which tests are flaky?']);
+    // Picked again with nothing in the way, the bar narrows back to Apollo and the words are asked there.
+    await store.chooseThread(tests[0]!.id);
+    await flush();
+    expect(store.getState().barScope).toEqual(inApollo);
+    expect(asked()[1]).toMatchObject({ question: 'are they fixed?', scope: inApollo, previous: { question: 'Which tests fail?' } });
+  });
+
   it('"New question" asks the typed words where they were typed with nothing carried, and its answer starts a thread there', async () => {
     const { tests } = seeded();
     seed(...kept(), ...threadIn(inApollo, ['What is left in Apollo?', HOUR]));

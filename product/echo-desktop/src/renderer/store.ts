@@ -735,8 +735,8 @@ export function clearToast(shown: number): void {
 /**
  * Whether `patch`, set over `before`, is a move of the person's (navSeq): Ask closed, which every page change does too,
  * or a question started there; or another page, reader item, follow-up view or item page in front, opened or closed;
- * or Home zoomed to another altitude, or into or out of a kind's list. A merge and an Undo count too (mergeThread,
- * undoMerge).
+ * or Home zoomed to another altitude, or into or out of a kind's list. A merge, an Undo and the bar widened count too
+ * (mergeThread, undoMerge, widenScope).
  */
 function navigated(before: State, patch: Partial<State>): boolean {
   if ('ask' in patch && (patch.ask === null || (patch.ask?.asking && !before.ask?.asking))) return true;
@@ -3577,7 +3577,14 @@ export function toggleEmployeeMenu(email: string): void {
  * question typed then is asked outside a project's thread, since a thread is asked in only where it lives (ask).
  */
 export function widenScope(): void {
+  // The person's own move: a jump or a pick still waiting gives way to it (navSeq), rather than narrow the bar back.
+  navSeq += 1;
   set({ barScope: { kind: 'global' } });
+}
+
+/** Typed words a question will not be asked with after all, back in the bar, unless the person has typed there since. */
+function wordsBack(question: string): void {
+  if (state.barText.trim() === '') set({ barText: question });
 }
 
 /** What a project's turns are called: the project by its name, as the sidebar has it. */
@@ -4268,15 +4275,22 @@ export function clarifyThreads(current: State = state): ThreadChoice[] {
  * home. The words are asked in the thread's home and nowhere else (R9): when that is a project the person is known to
  * have lost (gone, archived, or no longer theirs), nothing is asked and nothing moves; the page says so, and that
  * thread's button goes, leaving the others and "New question". A jump that does not happen otherwise (its project could
- * not be read right now, the thread gone, the person moved on meanwhile) asks nothing and keeps the button.
+ * not be read right now, the thread gone, the person moved on meanwhile) asks nothing and keeps the button; when it gave
+ * way to the bar widened while the project was read, the words go back to the bar too.
  */
 export async function chooseThread(id: string): Promise<void> {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'threads' || askBusy() || !clarify.threads.includes(id)) return;
+  const bar = state.barScope;
   const jumped = await jump(id, null, true, true);
   const view = state.ask;
   if (jumped === 'unreachable' && view?.clarify === clarify) {
     set({ ask: { ...view, clarify: { ...clarify, threads: clarify.threads.filter(each => each !== id) } }, toast: THREAD_OUT_OF_REACH });
+    return;
+  }
+  // Still on this "Which one?", the bar no longer asks where it did: the person widened it, and the pick gave way.
+  if (jumped === 'dropped' && view?.clarify === clarify && !sameScope(state.barScope, bar)) {
+    wordsBack(clarify.question);
     return;
   }
   const thread = threadOf(id);
@@ -4298,12 +4312,14 @@ async function askThere(thread: Thread, question: string, merge: readonly string
   const follows = followedTurn(homeTurns(thread, scope), null)?.id ?? null;
   const [nav, toasts] = [navSeq, state.toastShown];
   await mergeInto(thread.id, merge);
-  if (!sameAccount(account) || nav !== navSeq || threadShown()?.id !== thread.id) return;
-  // The bar no longer asks where the thread lives (widened meanwhile): nothing is asked, and the words go back to it.
+  if (!sameAccount(account) || threadShown()?.id !== thread.id) return;
+  // The bar no longer asks where the thread lives (widened meanwhile, a move of the person's): nothing is asked, and the
+  // words go back to it.
   if (!sameScope(state.barScope, scope)) {
-    if (state.barText.trim() === '') set({ barText: question });
+    wordsBack(question);
     return;
   }
+  if (nav !== navSeq) return;
   // What the move said of itself (not kept, or not confirmed) stays over the question, which would clear it; and so, made,
   // does the merge itself ("Merged with …"), whose line and Undo the question ends (R10).
   const said = state.toastShown === toasts ? mergedLine() : state.toast;
