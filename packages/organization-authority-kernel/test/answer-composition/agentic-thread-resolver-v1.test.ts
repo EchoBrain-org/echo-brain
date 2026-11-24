@@ -344,10 +344,10 @@ describe("thread resolution: the call (ADR-0056)", () => {
     const one = resolver([{ thread: "new" }], { previous: single, threads: [] });
     expect((await one.run()).placement).toEqual({ thread: "new" });
     expect(one.inputs[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
-    // With no thread open either, there is nothing but a new thread.
-    const first = resolver([{ thread: "new" }], { threads: [] });
+    // With no thread open either, there is nothing but a new thread: no model is asked, and it is no fallback.
+    const first = resolver([{ thread: "other", threads: [1] }], { threads: [] });
     expect(await first.run()).toEqual({ placement: { thread: "new" }, fallback: false });
-    expect(Object.keys(JSON.parse(first.inputs[0]!.user_prompt))).toEqual(["today", "threads", "question"]);
+    expect(first.inputs).toHaveLength(0);
     // No other thread can be named: `other` goes back for the repair, which hears what the thread can be.
     const other = resolver([{ thread: "other", threads: [1] }, { thread: "open", resolution: "same" }], { previous: PREVIOUS, threads: [] });
     expect((await other.run()).placement).toEqual({ thread: "open", resolution: { resolution: "same" }, merge: [] });

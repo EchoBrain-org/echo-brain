@@ -217,6 +217,9 @@ interface PersonAnswerResponseV8 {
   open thread as `same`.
 - A reply no repair makes usable is `open` and `same` when the request has
   `previous`, and `new` when it has none.
+- With no `previous` and an empty list there is nowhere else the question
+  could belong: it is a new thread and no call is made, so a person's first
+  question waits for none.
 - `about` addresses the thread's citations as one list: earlier turns' first,
   each citation once. Research starts from the openable ones, as today.
 - A snapshot restart reuses the resolution only when the checked `previous`

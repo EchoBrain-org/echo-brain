@@ -559,6 +559,9 @@ export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1
     const followed = await resolveAgenticFollowUpV1({ ...input, previous });
     return followed.fallback ? fallbackPlacement(previous) : Object.freeze({ placement: inOpenThread(followed.resolution), fallback: false });
   }
+  // With no thread open and no other thread, a new thread is the only place there is: no model is asked, so a person's
+  // first question waits for no call and pays for none.
+  if (previous === undefined && threads !== undefined && threads.length === 0) return Object.freeze({ placement: NEW_THREAD, fallback: false });
   const open = previous === undefined ? undefined : threadCitations(previous);
   const shown: ThreadShownV1 = {
     open: open !== undefined, sources: open?.citations.length ?? 0,

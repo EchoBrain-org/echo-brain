@@ -214,8 +214,9 @@ describe("a new subject (ADR-0056)", () => {
       expect(response).toMatchObject({ outcome: "answered", question: QUESTION, thread: { kind: "new" } });
       expect(response).not.toHaveProperty("merge");
       // One call, the thread resolver's, shown no other thread; then research as asked, from nothing of the open thread.
-      expect(run.of("resolver").map(input => input.system_prompt)).toEqual([THREAD_RESOLVER_PROMPT]);
-      expect(JSON.parse(run.of("resolver")[0]!.user_prompt).threads).toEqual([]);
+      // With no thread open either, a new thread is the only place there is, so no model is asked where it belongs.
+      expect(run.of("resolver").map(input => input.system_prompt)).toEqual(previous === undefined ? [] : [THREAD_RESOLVER_PROMPT]);
+      if (previous !== undefined) expect(JSON.parse(run.of("resolver")[0]!.user_prompt).threads).toEqual([]);
       expect(port.openCitation).not.toHaveBeenCalled();
       expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
     }
