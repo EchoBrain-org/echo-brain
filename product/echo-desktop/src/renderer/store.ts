@@ -734,13 +734,17 @@ export function clearToast(shown: number): void {
 
 /**
  * Whether `patch`, set over `before`, is a move of the person's (navSeq): Ask closed, which every page change does too,
- * or a question started there; or another page, reader item, or follow-up view or item page in front, opened or closed.
+ * or a question started there; or another page, reader item, follow-up view or item page in front, opened or closed;
+ * or Home zoomed to another altitude, or into or out of a kind's list. A merge and an Undo count too (mergeThread,
+ * undoMerge).
  */
 function navigated(before: State, patch: Partial<State>): boolean {
   if ('ask' in patch && (patch.ask === null || (patch.ask?.asking && !before.ask?.asking))) return true;
   const page = (current: State) => (current.route.page === 'project' ? current.route.project.project_id : current.route.page);
   const item = (current: State) => (current.reader ? `${current.reader.ref.kind} ${current.reader.ref.id}` : null);
-  return page(before) !== page(state) || item(before) !== item(state) || before.followUps?.views.at(-1)?.seq !== state.followUps?.views.at(-1)?.seq;
+  const zoom = ({ altitude: { level, category, project_id, membership_id } }: State) => `${level} ${category} ${project_id} ${membership_id}`;
+  return page(before) !== page(state) || item(before) !== item(state) || before.followUps?.views.at(-1)?.seq !== state.followUps?.views.at(-1)?.seq
+    || zoom(before) !== zoom(state);
 }
 
 function set(patch: Partial<State>): void {
@@ -4271,7 +4275,8 @@ export async function chooseThread(id: string): Promise<void> {
  * plain follow-up of that thread's own latest turn, worked out before anything joins it, with no other thread riding,
  * so nothing places it again. The threads the answer said are on its subject (`merge`) join the thread first, in one
  * move (mergeInto); whatever became of it, the words are then asked there, unless the person moved on meanwhile (another
- * page or view, Ask closed or on another thread, another account).
+ * page or view, Ask closed or on another thread, another account), or the bar no longer asks where the thread lives,
+ * when they go back to an empty bar instead.
  */
 async function askThere(thread: Thread, question: string, merge: readonly string[], scope: AskScope): Promise<void> {
   const account = expect();
@@ -4280,6 +4285,11 @@ async function askThere(thread: Thread, question: string, merge: readonly string
   const [nav, toasts] = [navSeq, state.toastShown];
   await mergeInto(thread.id, merge);
   if (!sameAccount(account) || nav !== navSeq || threadShown()?.id !== thread.id) return;
+  // The bar no longer asks where the thread lives (widened meanwhile): nothing is asked, and the words go back to it.
+  if (!sameScope(state.barScope, scope)) {
+    if (state.barText.trim() === '') set({ barText: question });
+    return;
+  }
   // What the move said of itself (not kept, or not confirmed) stays over the question, which would clear it.
   const said = state.toastShown === toasts ? null : state.toast;
   const asking = askAs({ kind: 'typed', question, follows, placed: false }, scope);
@@ -4584,7 +4594,10 @@ async function mergeInto(into: string, ids: readonly string[]): Promise<void> {
  */
 export function mergeThread(id: string): void {
   const open = threadShown();
-  if (open) void mergeInto(open.id, [id]);
+  if (!open || askBusy()) return;
+  // The person's own move: a jump still waiting gives way to it (navSeq).
+  navSeq += 1;
+  void mergeInto(open.id, [id]);
 }
 
 /**
@@ -4611,6 +4624,8 @@ export async function undoMerge(): Promise<void> {
   const merged = state.ask?.merged;
   if (!merged || askBusy()) return;
   if (mergedLine() === null) { set({ ask: { ...state.ask!, merged: null } }); return; }
+  // The person's own move: a jump still waiting gives way to it (navSeq).
+  navSeq += 1;
   const moved = await moveTurns(merged.moved.map(({ turn, from }) => ({ turn, to: from })));
   if (moved !== 'failed' && state.ask?.merged === merged) set({ ask: { ...state.ask, merged: null } });
   // The pane may be on a turn that just left the thread.

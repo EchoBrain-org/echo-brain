@@ -1217,6 +1217,39 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     expect(await store.openThread('00000000-0000-4000-8000-00000000ffff')).toBe(false);
   });
 
+  it('drops a jump still reading its project when the person merges or undoes meanwhile, or zooms Home', async () => {
+    active = numbered(12);
+    const later = active[11]!;
+    const far = threadIn({ kind: 'project', project_id: later.project_id }, ['What is left there?', 4 * DAY]);
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 3 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', DAY]);
+    seed(...far, ...billing, ...pilot);
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    for (const act of [() => store.mergeThread(billing[0]!.id), () => void store.undoMerge()]) {
+      const reading = held.hold('projects.read');
+      const jump = store.openThread(far[0]!.id);
+      act();
+      await flush();
+      expect(store.getState().timeline.moving).toBe(false);
+      reading(ok(later));
+      expect(await jump).toBe(false);
+      expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+      expect(store.getState().route).toEqual({ page: 'home' });
+    }
+    expect(filed()['Who owns billing?']).toBe(billing[0]!.id);
+    // With Ask closed, Home zoomed meanwhile: the jump does not take the person from where they went.
+    store.closeAsk();
+    const reading = held.hold('projects.read');
+    const zoomed = store.openThread(far[0]!.id);
+    store.zoomTo('project', { project_id: active[0]!.project_id, name: active[0]!.name });
+    reading(ok(later));
+    expect(await zoomed).toBe(false);
+    expect(store.getState().ask).toBeNull();
+    expect(store.getState().route).toEqual({ page: 'home' });
+  });
+
   it('drops a jump whose thread was merged away, or lives somewhere else, by the time its project is read', async () => {
     active = numbered(12);
     const later = active[11]!;
@@ -1876,6 +1909,31 @@ describe('merging threads, and Undo', () => {
       expect(kept().find(each => each.id === ledger[0]!.id)!.thread).toBe(billing[0]!.id);
       expect(store.threadShown()?.id).toBe(billing[0]!.id);
       expect(store.mergedLine()).toBeNull();
+    });
+
+    it('asks nothing when, while the merge is on its way, the bar is widened past the thread\'s home: the typed words go back to the bar', async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+      const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+      seed(...billing, ...tests, ...flaky);
+      script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?')], { merge: [placeOf(params, 'Which tests are flaky?')] }) : null);
+      const store = await startStore();
+      await store.ask('are they fixed?');
+      await flush();
+      const confirm = gated();
+      const pick = store.chooseThread(tests[0]!.id);
+      await flush();
+      expect(store.getState().barScope).toEqual(inApollo);
+      expect(moves()).toHaveLength(1);
+      store.widenScope();
+      confirm();
+      await pick;
+      await flush();
+      expect(asked()).toHaveLength(1);
+      expect(store.getState().barText).toBe('are they fixed?');
+      expect(store.threadShown()?.id).toBe(tests[0]!.id);
+      // The merge it waited on is made all the same.
+      expect(filed()['Which tests are flaky?']).toBe(tests[0]!.id);
     });
 
     it.each(['Ask is closed', 'another account signs in'] as const)('asks nothing when, while the merge is on its way, %s', async (leave) => {
