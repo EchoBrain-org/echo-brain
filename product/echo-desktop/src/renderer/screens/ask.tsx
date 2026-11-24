@@ -13,7 +13,7 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askAgainOffered, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
+  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
   chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
@@ -111,7 +111,7 @@ export function Bar({ state }: { state: State }) {
           onInput={event => { setSuggesting(CLOSED); setBarText((event.target as HTMLInputElement).value); }}
         />
         <button type="submit" class="circle primary" aria-label="Ask" data-testid="ask-send"
-          disabled={text.trim() === '' || Boolean(state.ask?.asking)}><Up /></button>
+          disabled={text.trim() === '' || askBusy(state)}><Up /></button>
       </form>
     </div>
   );
@@ -587,7 +587,7 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
         ) : <span data-testid="foot-label">{label}</span>)}
         <span class="foot-actions">
           {again && (
-            <button type="button" class="foot-action" data-testid="ask-again" disabled={Boolean(state.ask?.asking)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
+            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
           )}
           {copy && <CopyAnswer turn={turn} />}
         </span>
@@ -683,7 +683,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
  * place asked, jumps there and asks the same words in it; "New question", last, asks them as a thread of their own.
  */
 function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
-  const asking = Boolean(state.ask?.asking);
+  const asking = askBusy(state);
   return (
     <div class="turn" data-testid="clarify">
       <div class="question selectable" data-testid="question">{clarify.question}</div>
@@ -720,7 +720,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { field.current?.focus(); }, []);
   const open = threadShown(state);
-  const busy = Boolean(state.ask?.asking);
+  const busy = askBusy(state);
   // Either way the list closes and the caret goes back to the bar, for the next question.
   const then = (act: () => void) => () => { onDone(); act(); document.getElementById('ask-field')?.focus(); };
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>('[data-testid="thread-row"]') ?? []);
@@ -799,7 +799,7 @@ function ThreadHead({ state }: { state: State }) {
       {merged !== null && (
         <div class="thread-merged" data-testid="thread-merged" role="status">
           <span class="name">{merged}</span>
-          <button type="button" class="link-button inline" data-testid="thread-undo" disabled={Boolean(state.ask?.asking)} onClick={undoMerge}>Undo</button>
+          <button type="button" class="link-button inline" data-testid="thread-undo" disabled={askBusy(state)} onClick={undoMerge}>Undo</button>
         </div>
       )}
     </div>

@@ -74,6 +74,10 @@ let checks: ((items: readonly { asked_at: string; citation: { kind: string; tick
 let script: ((params: Record<string, unknown>) => unknown) | null;
 /** The turns a `timeline.put` fails for, by id. */
 let unsaved: Set<string>;
+/** The turns a `timeline.put` is taken for by the file and never answered, by id. */
+let unknown: Set<string>;
+/** Whether the timeline's file cannot be read. */
+let unread: boolean;
 let app: AppStatus;
 let active = [apollo, zephyr];
 /** The person's archived projects: read by id like any other. */
@@ -85,6 +89,8 @@ beforeEach(() => {
   checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
   script = null;
   unsaved = new Set();
+  unknown = new Set();
+  unread = false;
   app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
   active = [apollo, zephyr];
   archived = [];
@@ -96,8 +102,15 @@ beforeEach(() => {
     'ask.record': () => fail('not_found'),
     'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
   }, () => ({ active, archived }));
-  rpc.mockImplementation(async (method: string, params: Record<string, unknown>) =>
-    (method === 'timeline.put' && unsaved.has((params.turn as TimelineTurn).id) ? fail('invalid_output') : base(method, params)));
+  rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => {
+    if (method === 'timeline.read' && unread) return fail('unavailable', { retryable: true });
+    if (method !== 'timeline.put') return base(method, params);
+    const { id } = params.turn as TimelineTurn;
+    if (unsaved.has(id)) return fail('invalid_output');
+    const reply = await base(method, params);
+    if (unknown.has(id)) throw new Error('the reply was lost');
+    return reply;
+  });
 });
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
@@ -862,6 +875,7 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
     store.mergeThread(billing[0]!.id);
     store.widenScope();
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: false });
+    await flush();
     // Asking in it is: the answer to a question placed there lands there.
     script = params => (params.threads ? elsewhere(params, [0]) : null);
     await store.ask('and the budget?');
@@ -1120,6 +1134,7 @@ describe('merging threads, and Undo', () => {
     const store = await opened();
     store.mergeThread(billing[0]!.id);
     expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    await flush();
     if (leave === 'the next question') await store.ask('and the budget?');
     if (leave === 'a jump') { await store.openThread(tests[0]!.id); await store.openThread(pilot[0]!.id); }
     if (leave === 'closing Ask') { store.closeAsk(); store.returnToAsk(); }
@@ -1150,51 +1165,178 @@ describe('merging threads, and Undo', () => {
     expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
   });
 
-  it('puts back a turn the file did not take, says so, and leaves Undo for what did move: the page never shows a merge the file does not hold', async () => {
+  /** Each turn's thread as the page holds it, by what was typed for it: to compare with the file's (filed). */
+  const shown = (store: Store) => Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]));
+  const reads = () => calls('timeline.read').length;
+
+  it('reads the file again when a save of the merge did not go through, and shows what it holds: no line, no Undo, and the page says so', async () => {
     const { billing, pilot } = seeded();
     const store = await opened();
-    unsaved.add(billing[1]!.id);
-    store.mergeThread(billing[0]!.id);
-    // Until the file answers, the page shows the merge it asked for.
-    expect(store.askThread().map(each => each.text)).toContain('when is it due?');
-    await flush();
     const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    unsaved.add(billing[1]!.id);
+    const read = reads();
+    store.mergeThread(billing[0]!.id);
+    // Until the saves settle the page shows the merge it asked for, and the timeline is moving.
+    expect(store.askThread().map(each => each.text)).toContain('when is it due?');
+    expect(store.getState().timeline.moving).toBe(true);
+    await flush();
+    expect(reads()).toBe(read + 1);
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
-    // Memory and the file agree: the first turn moved, the second is where it was.
-    const inMemory = Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]));
-    expect(inMemory).toEqual(filed());
+    expect(store.getState().timeline.moving).toBe(false);
+    // The page and the file agree: the first turn moved, the second is where it was.
+    expect(shown(store)).toEqual(filed());
     expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
     expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'When does the pilot start?', 'did that change?']);
-    // The line tells of what moved, and Undo takes back exactly that.
-    expect(store.getState().ask?.merged?.moved).toEqual([{ turn: billing[0]!.id, from: billing[0]!.id }]);
-    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
-    unsaved.clear();
+    // A merge that did not all go through is not one Undo can take back: the line is gone, and Undo moves nothing.
+    expect(store.getState().ask?.merged).toBeNull();
+    expect(byTestId(await page(store), 'thread-merged')).toEqual([]);
+    const puts = calls('timeline.put').length;
     store.undoMerge();
     await flush();
-    expect(filed()).toMatchObject({ 'Who owns billing?': billing[0]!.id, 'when is it due?': billing[0]!.id });
-    // Nothing moved at all: no line, and the page says why.
+    expect(calls('timeline.put')).toHaveLength(puts);
+    // Nothing moved at all: the same.
     unsaved = new Set(billing.map(each => each.id));
     store.mergeThread(billing[0]!.id);
     await flush();
-    expect(store.mergedLine()).toBeNull();
     expect(store.getState().ask?.merged).toBeNull();
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
-    expect(store.askThread().map(each => each.text)).toEqual(['When does the pilot start?', 'did that change?']);
+    expect(shown(store)).toEqual(filed());
+    expect(filed()['when is it due?']).toBe(billing[0]!.id);
   });
 
-  it('keeps a turn merged, and says so, when Undo could not save it back', async () => {
+  it('shows what the file holds when a save never answered: a turn the file took stays moved, with no Undo', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    // The file took the turn, and the reply was lost on its way back.
+    unknown.add(billing[1]!.id);
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': pilot[0]!.id });
+    expect(shown(store)).toEqual(filed());
+    expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'when is it due?', 'When does the pilot start?', 'did that change?']);
+    expect(store.getState().ask?.merged).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('reads the file again when Undo could not save a turn back, and shows it still merged', async () => {
     const { billing, pilot } = seeded();
     const store = await opened();
     store.mergeThread(billing[0]!.id);
     await flush();
     unsaved.add(billing[0]!.id);
+    const read = reads();
     store.undoMerge();
     await flush();
     const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    expect(reads()).toBe(read + 1);
     expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
     expect(filed()).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
-    expect(Object.fromEntries(store.getState().timeline.turns.map(each => [each.text, each.thread]))).toEqual(filed());
+    expect(shown(store)).toEqual(filed());
     expect(store.mergedLine()).toBeNull();
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('puts back what was not saved when the file cannot be read again either, so the page says no more than it knows', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    unsaved.add(billing[1]!.id);
+    unread = true;
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(shown(store)).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': billing[0]!.id });
+    expect(shown(store)).toEqual(filed());
+    expect(store.getState().ask?.merged).toBeNull();
+    // The move is over all the same: Ask is not left busy.
+    expect(store.getState().timeline.moving).toBe(false);
+    unread = false;
+    await store.ask('and the budget?');
+    expect(asked()).toHaveLength(1);
+  });
+
+  it('moves one thing at a time: until a merge or its Undo has settled, no other merge, Undo, jump or question starts, and the page offers none', async () => {
+    const { billing, tests, pilot } = seeded();
+    seed(...kept(), ...threadIn(GLOBAL, ['Where is the ledger?', HOUR]));
+    const ledger = kept().at(-1)!;
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    const screens = await import('../../src/renderer/screens/ask.js');
+    vi.stubGlobal('document', { getElementById: () => null, activeElement: null });
+    const list = () => render(screens.ThreadList({ state: store.getState(), onDone: () => undefined }));
+    const saves = [held.hold('timeline.put'), held.hold('timeline.put')];
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    const before = store.getState();
+    expect(before.timeline.moving).toBe(true);
+    expect(store.askBusy()).toBe(true);
+    // Everything that asks, jumps, merges or undoes is refused, and nothing changes.
+    store.mergeThread(ledger.id);
+    store.undoMerge();
+    expect(await store.openThread(tests[0]!.id)).toBe(false);
+    store.returnToAsk();
+    await store.ask('and the budget?');
+    store.askAgain(pilot[0]!.id);
+    store.setBarText('and the budget?');
+    store.submitBar();
+    await flush();
+    expect(store.getState().barText).toBe('and the budget?');
+    expect({ ...store.getState(), barText: '' }).toEqual({ ...before, barText: '' });
+    expect(asked()).toEqual([]);
+    expect(calls('timeline.put')).toHaveLength(2);
+    // The page offers none of it: the rows and their Merge, Undo, and the bar's Ask are still.
+    expect(byTestId(list(), 'thread-row').filter(row => row.props['aria-current'] !== 'true').map(row => row.props.disabled)).toEqual([true, true]);
+    expect(byTestId(list(), 'thread-merge').map(button => button.props.disabled)).toEqual([true]);
+    expect(byTestId(await page(store), 'thread-undo')[0]!.props.disabled).toBe(true);
+    // Settled, each goes through again.
+    for (const save of saves) save(ok({}));
+    await flush();
+    expect(store.getState().timeline.moving).toBe(false);
+    expect(store.askBusy()).toBe(false);
+    expect(byTestId(await page(store), 'thread-undo')[0]!.props.disabled).toBe(false);
+    store.submitBar();
+    await flush();
+    expect(store.getState().barText).toBe('');
+    expect(asked()).toHaveLength(1);
+    expect(kept().at(-1)).toMatchObject({ text: 'and the budget?', thread: pilot[0]!.id });
+  });
+
+  it('ends a move with the timeline: signed out while its saves are on their way, their replies say nothing and Ask is not left busy', async () => {
+    const { billing } = seeded();
+    const store = await opened();
+    const saves = [held.hold('timeline.put'), held.hold('timeline.put')];
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.getState().timeline.moving).toBe(true);
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    expect(store.getState().timeline).toEqual({ turns: [], checks: {}, moving: false });
+    const read = reads();
+    for (const save of saves) save(fail('signed_out'));
+    await flush();
+    expect(store.getState().toast).toBeNull();
+    expect(reads()).toBe(read);
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
+  it('lets go of the merged line whenever the timeline is read again: its Undo was of the turns as they were', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    // Signed out and in again as the same person, Ask still open behind the sign-in page.
+    app = { signed_in: false, account: null, client_version: 'test' };
+    await store.refreshStatus();
+    app = { signed_in: true, account: ACCOUNT, client_version: 'test' };
+    await store.refreshStatus();
+    await flush();
+    expect(store.getState().timeline.turns).toHaveLength(5);
+    expect(store.getState().ask?.merged ?? null).toBeNull();
+    expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
   });
 
   it('merges on its own the threads an answer says are on the open thread\'s subject, in the same home only, with the same line and Undo', async () => {

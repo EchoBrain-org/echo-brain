@@ -3,7 +3,7 @@
 // on this computer's file, a question that belongs elsewhere asked again where it belongs, "Which one?" between threads,
 // and what of the threads a request carries.
 import { expect, test, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -190,6 +190,38 @@ test('Merge joins a thread to the open one in this computer\'s file, and Undo pu
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
   await page.getByTestId('thread-name').click();
   await expect(page.getByTestId('thread-row')).toHaveCount(2);
+});
+
+test('a merge this computer could not save is not shown as made: the questions are where they were, with no Undo, and the page says so', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  const before = { 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' };
+  await expect.poll(filed).toEqual(before);
+  // The timeline's folder becomes a link, which the host neither writes through nor reads: every save of the merge fails.
+  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  renameSync(folder, `${folder}.kept`);
+  symlinkSync(`${folder}.kept`, folder);
+  try {
+    await page.getByTestId('thread-name').click();
+    const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
+    await billing.hover();
+    await billing.getByTestId('thread-merge').click();
+    await expect(page.getByTestId('toast')).toHaveText('Some questions could not be moved on this computer, so they are where they were.');
+    // The page shows no merge the file does not hold.
+    await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+    await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+    await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
+    await page.getByTestId('thread-name').click();
+    await expect(page.getByTestId('thread-row').locator('.name')).toHaveText(['When does the pilot start?', 'Who owns billing?']);
+  } finally {
+    rmSync(folder);
+    renameSync(`${folder}.kept`, folder);
+  }
+  expect(filed()).toEqual(before);
 });
 
 test('a question that belongs to one other thread jumps there and is asked again in it, and no question a model wrote is ever sent as a thread\'s', async () => {
