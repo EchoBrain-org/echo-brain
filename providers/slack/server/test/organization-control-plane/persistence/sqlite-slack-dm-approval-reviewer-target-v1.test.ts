@@ -120,4 +120,20 @@ describe("Slack approval card targets", () => {
     expect(matchSlackApprovalClickActorV1(database, COORDINATES, { workspace_id: "T02", subject_id: "U012ABC" }, [member])).toBeNull();
     expect(matchSlackApprovalClickActorV1(database, COORDINATES, { workspace_id: "T01", subject_id: "U012DEF" }, [member])).toBeNull();
   });
+
+  it("never uses a removed member's Slack link: their click matches no one, and once the link is revoked their posted card is no longer current", () => {
+    const database = seed();
+    const target = resolveSlackDmApprovalTargetV1(database, COORDINATES, OWNER)!;
+    const member = { organization_id: COORDINATES.organization_id, ...OWNER };
+    const click = { workspace_id: "T01", subject_id: "U012ABC" };
+    // The Authority passes only its active members. A removed member is not among them, even while the link is still stored active.
+    const colleague = { ...member, principal_id: "prn_00000000-0000-4000-8000-000000000002", membership_id: "mem_00000000-0000-4000-8000-000000000002" };
+    expect(matchSlackApprovalClickActorV1(database, COORDINATES, click, [colleague])).toBeNull();
+
+    // The removal revokes the link: nothing resolves, rechecks or click-matches through it, whoever the Authority lists.
+    database.prepare("UPDATE organization_external_human_link_current SET current_status = 'revoked'").run();
+    expect(isCurrentSlackDmApprovalTargetV1(database, COORDINATES, target)).toBe(false);
+    expect(matchSlackApprovalClickActorV1(database, COORDINATES, click, [member, colleague])).toBeNull();
+    expect(resolveSlackDmApprovalTargetV1(database, COORDINATES, OWNER)).toBeNull();
+  });
 });

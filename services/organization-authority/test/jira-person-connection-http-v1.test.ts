@@ -86,7 +86,7 @@ it('aborts an in-flight shared Jira connect when its Person HTTP client disconne
   } finally { await value.close(); }
 });
 
-it('reconnects through the Person HTTP routes after disconnect deleted the Nango connection', async () => {
+it('disconnects through the Person HTTP routes after a reconnect deleted the Nango connection, then connects afresh', async () => {
   const database = new Database(':memory:');
   const store = new JiraConnectionStoreV1(database);
   const person = { organization_id: 'org_00000000-0000-4000-8000-000000000001', principal_id: 'fixture-person', membership_id: 'mem_00000000-0000-4000-8000-000000000001' };
@@ -122,15 +122,22 @@ it('reconnects through the Person HTTP routes after disconnect deleted the Nango
     method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer fixture' }, body: JSON.stringify({ schema_version: 1, ...extra }),
   });
   try {
-    expect((await post('disconnect')).status).toBe(200);
+    // A reconnect deletes the former Nango connection before fresh consent, and leaves the saved connection switched off.
+    expect((await post('connect')).status).toBe(201);
+    expect(store.current(person)).toMatchObject({ active: false, version: old.version });
     expect(connection.tool({ access_token: 'fixture' })).toMatchObject({ personal_status: 'revoked' });
+    // Disconnect deletes it again. Nango no longer knows it, which is success, and the saved connection is gone.
+    expect((await post('disconnect')).status).toBe(200);
+    expect(deletionStatuses).toEqual([200, 400]);
+    expect(connection.tool({ access_token: 'fixture' })).toMatchObject({ personal_status: 'unlinked' });
+    expect(store.current(person)).toBeUndefined();
     const reconnect = await post('connect');
     expect(reconnect.status).toBe(201);
     const begun = await reconnect.json() as { attempt: string; connect_link: string };
     expect(begun.connect_link).toBe('https://connect.nango.dev/fixture-reconnect');
     expect(begun.attempt).not.toBe(initial.attempt);
+    // Nothing is left to delete before this consent.
     expect(deletionStatuses).toEqual([200, 400]);
-    expect(store.current(person)).toMatchObject({ active: false, version: old.version });
     expect(await (await post('status', { attempt: begun.attempt })).json()).toMatchObject({ status: 'pending' });
     consent = true;
     expect(await (await post('status', { attempt: begun.attempt })).json()).toMatchObject({ status: 'complete' });

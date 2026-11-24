@@ -50,10 +50,14 @@ export function beginRequest(requestId = "psb_00000000-0000-4000-8000-0000000000
   };
 }
 
-/** Every workflow here shares these; each caller states its own authentication, membership and token access. */
+/**
+ * Every workflow here shares these; each caller states its own authentication, membership and token access. The
+ * Authority holds every membership active unless a caller answers `membership_active` itself.
+ */
 export function workflowOptions(
   context: { readonly database: Database.Database; readonly slack: SlackIdentityProviderV1 },
-  overrides: Pick<CreateSqliteSlackPersonIdentityLinkWorkflowV1Input, "authentication" | "membership_type" | "slack_token_access">,
+  overrides: Pick<CreateSqliteSlackPersonIdentityLinkWorkflowV1Input, "authentication" | "membership_type" | "slack_token_access"> &
+    Partial<Pick<CreateSqliteSlackPersonIdentityLinkWorkflowV1Input, "membership_active">>,
 ): CreateSqliteSlackPersonIdentityLinkWorkflowV1Input {
   return {
     database: context.database,
@@ -62,12 +66,14 @@ export function workflowOptions(
     state_lineage_id: LINEAGE_ID,
     slack: context.slack,
     now: () => NOW,
+    membership_active: () => true,
     ...overrides,
   };
 }
 
 export async function setup(
   currentAuthorization: () => PersonAccessAuthorization = () => authorization,
+  membershipActive: CreateSqliteSlackPersonIdentityLinkWorkflowV1Input["membership_active"] = () => true,
 ): Promise<{
   database: Database.Database;
   slack: SlackIdentityProviderV1;
@@ -109,6 +115,7 @@ export async function setup(
         authenticateAccess: vi.fn(currentAuthorization),
       },
       membership_type: () => currentAuthorization().membership_type,
+      membership_active: membershipActive,
       slack_token_access: tokenAccess(vi.fn(() => TOKEN)),
     })),
   };

@@ -91,6 +91,6 @@ it('catalogs, connects, maps, cites, and disconnects Confluence page evidence th
     expect(fresh.status).toBe(200);
     expect(vi.mocked(confluence.nango.connection)).toHaveBeenCalledTimes(2);
     expect((await post('/v1/person/tools/confluence/disconnect', { schema_version: 1 })).status).toBe(200);
-    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'confluence', personal_status: 'revoked', external_subject_id: null })]));
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'confluence', personal_status: 'unlinked', external_subject_id: null })]));
   } finally { await runtime.close(); }
 });

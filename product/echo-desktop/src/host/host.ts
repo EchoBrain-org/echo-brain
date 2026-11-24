@@ -1,7 +1,7 @@
 import {
   PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
   validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
-  validatePersonReviewRequestV1, validatePersonReviewResultV1,
+  validatePersonReviewRequestV1,
 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
@@ -23,7 +23,7 @@ import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timeli
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
-  projectActivityView, receiptView, recordRead, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  projectActivityView, receiptView, recordRead, recordView, reviewsView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -691,7 +691,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       let request;
       try { request = validatePersonReviewRequestV1(raw); } catch { return code('invalid_request', true); }
       return forAccount(method, expect, ['reviews', option('request', JSON.stringify(request))],
-        stdout => validatePersonReviewResultV1(request.operation, unwrap(lastJson(stdout))), undefined, undefined, isWriteCall(method, params));
+        stdout => reviewsView(request.operation, lastJson(stdout)), undefined, undefined, isWriteCall(method, params));
     }
     // Impact checks of your own approvals, and the open items they found. A
     // check-in (`next`) asks the Authority to start the oldest queued check, and

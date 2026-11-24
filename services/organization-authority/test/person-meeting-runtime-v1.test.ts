@@ -21,7 +21,7 @@ import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { approvalRecordIdV2 } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
 import { coreRuntimeIdentityV1, observeCoreRuntimeDiagnosticV1, observeCoreRuntimeRootV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1, type CoreRuntimeObservationScopeV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
-import { validatePersonReviewResultV1, type PersonMeetingOperationV2, type PersonMeetingResultsV2, type PersonOpenRefV1, type PersonReviewOperationV1, type PersonReviewResultsV1 } from '@echo-brain/organization-api';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, validatePersonReviewResultV1, type PersonMeetingOperationV2, type PersonMeetingResultsV2, type PersonOpenRefV1, type PersonReviewOperationV1, type PersonReviewResultsV1 } from '@echo-brain/organization-api';
 import type { MeetingDocument } from '@echo-brain/organization-processing/core';
 import { createGranolaMcpV1 } from '@echo-brain/provider-granola/granola-mcp-v1';
 import { GRANOLA_MEETING_NORMALIZER_VERSION_V1 } from '@echo-brain/provider-granola/granola-meeting-normalizer-v1';
@@ -37,9 +37,12 @@ import { STAGING_AUTHORITY_ORIGIN_V1 } from '@echo-brain/organization-authority-
 import { writeFileSync } from 'node:fs';
 import { SqliteAuthorityMeetingProcessingStateV1 } from '@echo-brain/organization-processing/admitted-meeting-processing/sqlite-authority-meeting-processing-state-v1';
 import { createPersonMeetingRuntimeV1, type PersonMeetingProviderV1 } from '../src/composition/person-meeting-runtime-v1.js';
+import { openGranolaPersonMeetingProviderV1 } from '../src/composition/granola-person-live-runtime-v1.js';
+import { fakeConfluenceNangoV1 } from './fixtures/fake-confluence-v1.js';
 import { SqlitePersonMeetingIntakeV1 } from '../src/adapters/persistence/sqlite/person-meeting-intake-v1.js';
 import { approvalContextFixture } from './fixtures/approval-core.js';
 import { validateApprovalDecisionRequestV1, type AfterApprovedRecordEventV1 } from '../src/composition/approval-core-v1.js';
+import { encodePersonListCursorV1, encodePersonReviewsCursorV1, PERSON_LIST_START_V1 } from '../src/composition/person-list-cursor-v1.js';
 import { authorization, addMembership } from './fixtures/project-context-sqlite.js';
 import { meeting as original, decisions } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 const id = '00000000-0000-4000-8000-000000000001';
@@ -1225,6 +1228,145 @@ describe('personal meeting intake uses the shared processing path', () => {
     await f.call(runtime, { operation: 'watch', watch: 'off', folder_id: null, project_id: null, retain: true, settings_sha256: failing.settings_sha256 });
     expect((await f.call(runtime, { operation: 'home' })).sources[0]).toMatchObject({ watch: 'off', error: null, checked_at: null });
   });
+  /** One runtime over the real Granola provider, a fake Nango, and a fake Granola with two accounts, each already holding one meeting. */
+  async function granolaRuntime() {
+    const f = await fixture(), connections = new Database(':memory:');
+    const accounts = { a: { email: 'a@example.test', workspace: '00000000-0000-4000-8000-0000000000a1', meeting: id },
+      b: { email: 'b@example.test', workspace: '00000000-0000-4000-8000-0000000000b1', meeting: '00000000-0000-4000-8000-0000000000b2' } };
+    let signedIn = accounts.a;
+    const mcp: string[] = [];
+    const granolaFetch: typeof fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body)), { name, arguments: args } = request.params;
+      mcp.push(name);
+      const meeting = `id="${signedIn.meeting}" title="Pilot plan" date="Oct 2, 2026 8:08 PM PDT" url="https://notes.granola.ai/d/${signedIn.meeting}"`;
+      const text = name === 'get_account_info' ? JSON.stringify({ email: signedIn.email, active_workspace: { id: signedIn.workspace, display_name: 'Fixture' }, mcp_note_access: { scopes: ['personal', 'public'] } })
+        : name === 'list_meeting_folders' ? JSON.stringify({ count: 0, folders: [] })
+        : name === 'search_meetings' ? `<pagination has_more="false" total_count="1" completion_status="exhausted" />\n\n<meetings_data count="1"><meeting ${meeting} captured_by_me="true" updated_at="2026-10-02T20:38:00.000-07:00" /></meetings_data>`
+        : name === 'get_meetings' ? `<meetings_data count="1"><meeting ${meeting}><summary>Send the pilot plan.</summary></meeting></meetings_data>`
+        : JSON.stringify({ id: args.meeting_id, created_at: '2026-08-29T22:14:34.163-07:00', transcript: 'Send the pilot plan.' });
+      return Response.json({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
+    };
+    const nango = fakeConfluenceNangoV1();
+    const granola = openGranolaPersonMeetingProviderV1({ state_directory: 'unused', sessions: f.sessions, resources: { coordinates: f.context.coordinates },
+      nango_authorization: () => 'unused', seams: { database: connections, nango: nango.nango, fetch: granolaFetch } });
+    const runtime = f.create([granola.provider], { processor: llmProcessor(JSON.stringify({ signals: [extractedItem('action', 'Send the pilot plan.', ['T1'])] })) });
+    const tool = async (verb: 'connect' | 'status' | 'disconnect', body: Record<string, unknown> = {}, headers: Record<string, string> = { authorization: 'Bearer owner' }) => {
+      const response = await runtime.applications.find(application => application.routes.some(route => route.route_id === `granola-${verb}`))!.accept({ route_id: `granola-${verb}`, method: 'POST',
+        path: `/v1/person/tools/granola/${verb}`, headers, content_type: 'application/json', raw_body: Buffer.from(JSON.stringify({ schema_version: 1, ...body })) });
+      if (!('body' in response)) throw new Error('Expected JSON');
+      return response.body as Record<string, unknown>;
+    };
+    const connectAs = async (account: typeof signedIn) => { signedIn = account; const { attempt } = await tool('connect'); nango.finish(); return tool('status', { attempt }); };
+    const watchMine = async () => f.call(runtime, { operation: 'watch', watch: 'mine', folder_id: null, project_id: null, retain: true, settings_sha256: (await f.call(runtime, { operation: 'home' })).settings_sha256 });
+    return { f, accounts, mcp, runtime, tool, connectAs, watchMine,
+      /** Holds Nango's next deletion of a connection open until the returned function is called. */
+      holdDeletion() { let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); vi.mocked(nango.nango.disconnect).mockImplementationOnce(() => held); return release; },
+      /** The connection as the person's tools list reads it, and their Granola sources as the meetings home lists them. */
+      status: async () => (await runtime.tools('owner'))[0]!.personal_status, sources: async () => (await f.call(runtime, { operation: 'home' })).sources,
+      close() { runtime.close(); granola.close(); connections.close(); f.db.close(); } };
+  }
+  it('stops the watch when the person disconnects Granola, so another account starts as its own source and what was kept stays', async () => {
+    const { f, accounts, mcp, runtime, tool, connectAs, watchMine, close } = await granolaRuntime();
+    const pass = () => runtime.processing.pollAndStageAdmittedMeetings(new AbortController().signal);
+    // What ECHO keeps of the person's meetings: the retained originals, their reviews and records, and the notes in the person's own list.
+    const kept = async () => ({ originals: f.db.prepare('SELECT * FROM authority_source_revisions_v1 ORDER BY revision_id').all(),
+      records: f.record.prepare('SELECT canonical_envelope FROM organization_record_log').all(),
+      reviews: await f.reviewCall(runtime, { operation: 'reviews' }), listed: (await f.listRoute().list({ access_token: 'owner', request: { schema_version: 1, only_me: true } })).items });
+    try {
+      // Account A: one meeting kept and approved into a record, then a watch on the person's meetings, with its baseline taken.
+      expect(await connectAs(accounts.a)).toMatchObject({ status: 'complete' });
+      const { pending, opened } = await f.pendingReview(runtime);
+      await f.reviewCall(runtime, { operation: 'review', approval_id: pending!.approval_id, snapshot_sha256: opened.snapshot_sha256, command_id: 'approve-kept', action: 'approve', routes: f.routes(opened), owners: [] });
+      await runtime.processing.recoverV4Appends(new AbortController().signal);
+      await watchMine(); await pass();
+      const [former] = (await f.call(runtime, { operation: 'home' })).sources;
+      expect(former).toMatchObject({ watch: 'mine', baseline: true, error: null });
+      const before = await kept();
+      expect(before).toMatchObject({ originals: [expect.anything()], records: [expect.anything()], reviews: { reviews: [expect.objectContaining({ status: 'approved' })] }, listed: [expect.objectContaining({ kind: 'imported_meeting' })] });
+
+      // The person disconnects, then connects account B.
+      expect(await tool('disconnect')).toEqual({ schema_version: 1, connected: false });
+      expect(await runtime.tools('owner')).toMatchObject([{ tool_id: 'granola', personal_status: 'unlinked' }]);
+      expect(await connectAs(accounts.b)).toMatchObject({ status: 'complete' });
+      mcp.length = 0;
+      // Past the former watch's next check, so a pass on its source would run now.
+      const later = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 301_000);
+      try { await pass(); await pass(); } finally { later.mockRestore(); }
+      const passes = [...mcp];
+      // The former account's source is off and quiet. Left on, its watch would fail every pass: account B cannot read it.
+      expect(await f.call(runtime, { operation: 'home' })).toMatchObject({ connected: true, email: accounts.b.email,
+        sources: [{ source_key: former!.source_key, watch: 'off', baseline: false, pending_imports: [], checked_at: null, error: null }] });
+      expect(passes).toEqual([]);
+
+      // Saved again, the watch is account B's own source with a fresh baseline: the meeting B already held is not imported.
+      await watchMine(); await pass(); await pass();
+      const sources = (await f.call(runtime, { operation: 'home' })).sources;
+      expect(sources).toHaveLength(2);
+      expect(sources.find(source => source.source_key === former!.source_key)).toMatchObject({ watch: 'off', error: null });
+      const fresh = sources.find(source => source.source_key !== former!.source_key)!;
+      expect(fresh).toMatchObject({ watch: 'mine', baseline: true, pending_imports: [], error: null });
+      // Its baseline marked the meeting B already held as seen, and read none of it.
+      expect(f.intake.checkpoint(fresh.source_key)).toMatchObject({ seen: { [accounts.b.meeting]: expect.any(String) } });
+      expect(mcp.filter(name => name === 'get_meetings' || name === 'get_meeting_transcript')).toEqual([]);
+      expect(await kept()).toEqual(before);
+    } finally { close(); }
+  });
+  it('stops the watch before it disconnects Granola: when the watch cannot be stopped, the connection stays as it was and a retry finishes', async () => {
+    const { f, accounts, tool, connectAs, watchMine, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      f.db.exec("CREATE TRIGGER watch_write_fails BEFORE UPDATE ON authority_person_meeting_sources_v2 BEGIN SELECT RAISE(ABORT, 'synthetic watch write failure'); END");
+      await expect(tool('disconnect')).rejects.toThrow('synthetic watch write failure');
+      expect(await status()).toBe('linked');
+      f.db.exec('DROP TRIGGER watch_write_fails');
+      expect(await tool('disconnect')).toEqual({ schema_version: 1, connected: false });
+      expect(await status()).toBe('unlinked');
+      expect(await sources()).toMatchObject([{ watch: 'off' }]);
+    } finally { close(); }
+  });
+  it('has stopped the watch when the Disconnect then fails, as when the session ends while Granola\'s grant is being deleted', async () => {
+    const { f, accounts, tool, connectAs, watchMine, holdDeletion, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      const release = holdDeletion(), disconnecting = tool('disconnect');
+      const ended = vi.spyOn(f.sessions, 'authenticateAccess').mockImplementation(() => { throw new AuthorityOperationError('unauthorized', 'person authentication failed'); });
+      release();
+      await expect(disconnecting).rejects.toMatchObject({ code: 'unauthorized' });
+      ended.mockRestore();
+      // Signed in again, the person finds the watch off and the connection stopped, still pinned, for a Disconnect to finish.
+      expect(await sources()).toMatchObject([{ watch: 'off' }]);
+      expect(await status()).toBe('revoked');
+    } finally { close(); }
+  });
+  it('keeps a watch that was saved after a newer reconnect when a slow Disconnect finishes', async () => {
+    const { accounts, tool, connectAs, watchMine, holdDeletion, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a);
+      const release = holdDeletion(), disconnecting = tool('disconnect');
+      // While Nango is still deleting the former grant, the person connects the same account again and saves a watch.
+      expect(await connectAs(accounts.a)).toMatchObject({ status: 'complete' });
+      await watchMine();
+      release();
+      expect(await disconnecting).toEqual({ schema_version: 1, connected: false });
+      expect(await status()).toBe('linked');
+      expect(await sources()).toMatchObject([{ watch: 'mine' }]);
+    } finally { close(); }
+  });
+  it('leaves an unauthenticated Disconnect to Granola\'s routes: their own answer, the watch still on and the connection as it was', async () => {
+    const { f, accounts, tool, connectAs, watchMine, status, sources, close } = await granolaRuntime();
+    try {
+      await connectAs(accounts.a); await watchMine();
+      // No session at all.
+      await expect(tool('disconnect', {}, {})).rejects.toMatchObject({ code: 'unauthorized', message: 'person authentication failed' });
+      // A session the Authority refuses. The answer is still Granola's own: its routes check the body before the session.
+      const refused = vi.spyOn(f.sessions, 'authenticateAccess').mockImplementation(() => { throw new AuthorityOperationError('unauthorized', 'synthetic refused session'); });
+      await expect(tool('disconnect')).rejects.toMatchObject({ code: 'unauthorized', message: 'synthetic refused session' });
+      await expect(tool('disconnect', { schema_version: 2 })).rejects.toMatchObject({ code: 'invalid_request', message: 'Granola connection request is invalid' });
+      refused.mockRestore();
+      expect(await status()).toBe('linked');
+      expect(await sources()).toMatchObject([{ watch: 'mine' }]);
+    } finally { close(); }
+  });
   it('imports a note saved to A and then B before processing as one source and one extraction, freezing both projects', async () => {
     const f = await fixture(), runtime = f.create(); f.grantProject(); f.grantProject(projectB);
     await f.call(runtime, { operation: 'import', meeting_id: id, project_id: project, retain: true });
@@ -1537,6 +1679,258 @@ describe('personal meeting intake uses the shared processing path', () => {
     const core = await runtime.approvals();
     expect(await runtime.approvals()).toBe(core);
     expect(await f.create().approvals()).not.toBe(core);
+  });
+});
+
+// ADR-0055: a list that outgrows its response pages, it never fails. The transport bound is one response's, so a reviewer's
+// list is answered a page at a time in its own order: undecided first, then newest.
+describe('the reviews list pages at its transport bound', () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  type Runtime = ReturnType<Fixture['create']>;
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+  /** Imports and processes `count` more meetings, from the `from`-th on: each a proposal titled 'Test meeting' and then `title`. */
+  async function propose(f: Fixture, runtime: Runtime, count: number, title: string, from = 0) {
+    f.revise(title);
+    for (let index = from; index < from + count; index++) {
+      await f.call(runtime, { operation: 'import', meeting_id: `00000000-0000-4000-8000-${String(100_000 + index).padStart(12, '0')}`, project_id: null, retain: true });
+      await f.processUntilIdle(runtime);
+    }
+  }
+  /** Proposals made in one instant: only their approval ids order them, so a page always ends between two of the same time. */
+  async function proposeAt(time: string, f: Fixture, runtime: Runtime, count: number, title: string, from = 0) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try { vi.setSystemTime(new Date(time)); await propose(f, runtime, count, title, from); } finally { vi.useRealTimers(); }
+  }
+  const reject = (f: Fixture, runtime: Runtime, approval_id: string) => f.reviewCall(runtime, { operation: 'review', approval_id, command_id: `reject-${approval_id.slice(4, 36)}`,
+    snapshot_sha256: f.db.prepare('SELECT approved_snapshot_sha256 FROM authority_live_approval_outbox_v2 WHERE approval_id=?').pluck().get(approval_id) as string,
+    action: 'reject', routes: [], owners: [] });
+  /** Every page from the start (or from `cursor`) to the last, each read with the cursor the page before it gave. */
+  async function walk(f: Fixture, runtime: Runtime, cursor?: string) {
+    const pages: PersonReviewResultsV1['reviews'][] = [];
+    do {
+      const page: PersonReviewResultsV1['reviews'] = await f.reviewCall(runtime, { operation: 'reviews', ...(cursor === undefined ? {} : { cursor }) });
+      pages.push(page); cursor = page.next_cursor;
+    } while (cursor !== undefined);
+    return pages;
+  }
+  /** A reviewer whose list is one undecided proposal per length given, in the list's order: each titled 'Test meeting' and that many more characters. */
+  async function listed(...pads: readonly number[]) {
+    const f = await fixture(), runtime = f.create();
+    // The list is newest first, so its first row is the last one made.
+    for (const [index, pad] of pads.entries()) await proposeAt(`2026-11-01T10:00:0${pads.length - index}.000Z`, f, runtime, 1, 'T'.repeat(pad), index);
+    return { f, runtime };
+  }
+  /** The padding `rows` of `listed`'s rows have between them when their `{"reviews":[…]}` is the response bound to the byte. */
+  async function filling(rows: number) {
+    // One row with no padding. Every row is as long before its padding: its id is as long, and the rest is the same.
+    const { f, runtime } = await listed(0), [row] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
+    return PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - bytes({ reviews: [] }) - (rows - 1) - rows * bytes(row);
+  }
+  /** An extraction whose one decision reads `line`: the first line of the proposal's row. */
+  const deciding = (line: string): DecisionProcessorBundleV1 => ({ processor_adapter_id: 'llm', assert_admission_commitments() {},
+    current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }),
+    create_processor(admission) {
+      const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
+      return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+        async extract(meeting) {
+          return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+            signals: decisions.signals.map(signal => ({ ...signal, text: line, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) };
+        } };
+    } });
+
+  it("answers a reviewer whose proposals are past the bound in pages, each within it, with every proposal once and in the list's order", async () => {
+    const f = await fixture(), runtime = f.create();
+    // 24 rows of 100 KB: ten fit one response, eleven do not.
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 12, 'T'.repeat(100_000));
+    await proposeAt('2026-11-01T10:00:01.000Z', f, runtime, 12, 'T'.repeat(100_000), 12);
+    const core = await runtime.approvals();
+    // Every third one is decided: a decided one follows every undecided one, whenever it was made.
+    for (const [index, view] of core.proposals(f.person).entries()) if (index % 3 === 0) await reject(f, runtime, view.approval_id);
+    // The one read with no bound, which the pages must add up to.
+    const whole = core.proposals(f.person).map(view => ({ approval_id: view.approval_id, status: view.status }));
+    expect(whole.map(row => row.status)).toEqual([...Array.from({ length: 16 }, () => 'pending'), ...Array.from({ length: 8 }, () => 'rejected')]);
+
+    const pages = await walk(f, runtime);
+    const rows = pages.flatMap(page => page.reviews);
+    expect(bytes({ reviews: rows })).toBeGreaterThan(2 * PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    // Each page is a whole valid response within the bound, and as full as the bound lets it be.
+    for (const page of pages) {
+      expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+      expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    }
+    expect(pages.map(page => page.reviews.length)).toEqual([10, 10, 4]);
+    // The first page has a cursor and holds undecided proposals only; the last page has no cursor key at all.
+    expect(pages[0]!.next_cursor).toMatch(/^[A-Za-z0-9_-]{1,512}$/);
+    expect(pages[0]!.reviews.every(row => row.status === 'pending')).toBe(true);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews', 'next_cursor'], ['reviews']]);
+    // Every proposal exactly once, in the order one unbounded read gives.
+    expect(rows.map(row => ({ approval_id: row.approval_id, status: row.status }))).toEqual(whole);
+    expect(new Set(rows.map(row => row.approval_id)).size).toBe(24);
+    // The cursor is this reviewer's: nobody else can read on with it.
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: pages[0]!.next_cursor! }, 'other')).rejects.toMatchObject({ code: 'invalid_request' });
+  });
+
+  it('never loses a proposal decided between two page reads: it comes again where the list has it now', async () => {
+    const f = await fixture(), runtime = f.create();
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 14, 'T'.repeat(100_000));
+    const whole = (await runtime.approvals()).proposals(f.person).map(view => view.approval_id);
+    const first = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(first.reviews.map(row => row.approval_id)).toEqual(whole.slice(0, 10));
+    // One the first page already gave, and one it has not reached, are decided before the next page is read.
+    const [seen, unseen] = [whole[2]!, whole[11]!];
+    await reject(f, runtime, seen); await reject(f, runtime, unseen);
+    const rest = (await walk(f, runtime, first.next_cursor)).flatMap(page => page.reviews);
+    // The undecided ones left, then the two decided ones: nothing is skipped, and only the one already given comes twice.
+    expect(rest.map(row => [row.approval_id, row.status])).toEqual([[whole[10], 'pending'], [whole[12], 'pending'], [whole[13], 'pending'],
+      ...[seen, unseen].sort().map(approval_id => [approval_id, 'rejected'])]);
+    expect(new Set([...first.reviews, ...rest].map(row => row.approval_id))).toEqual(new Set(whole));
+  });
+
+  it('answers a short list in one page with no cursor key, as it did before the list paged', async () => {
+    const f = await fixture(), runtime = f.create();
+    const { pending } = await f.pendingReview(runtime);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(page).toEqual({ reviews: [pending] });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(Object.keys(await f.reviewCall(runtime, { operation: 'reviews' }, 'other'))).toEqual(['reviews']);
+  });
+
+  // The last page sends no cursor, so it keeps no room for one: what was one response before the list paged still is.
+  it('answers a list that fills one response to the byte in one page, with no cursor key and no row cut', async () => {
+    const padding = await filling(2), { f, runtime } = await listed(500_000, padding - 500_000);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(page.reviews.map(row => row.title.length)).toEqual([500_000, padding - 500_000].map(pad => 'Test meeting'.length + pad));
+    expect(bytes(page)).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  it('pages a list one byte past one response: two pages within the bound, a cursor on the first only, each row once and whole', async () => {
+    const padding = await filling(2) + 1, { f, runtime } = await listed(500_000, padding - 500_000);
+    const pages = await walk(f, runtime), rows = pages.flatMap(page => page.reviews);
+    expect(bytes({ reviews: rows })).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 + 1);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    for (const page of pages) expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(rows.map(row => row.approval_id)).toEqual((await runtime.approvals()).proposals(f.person).map(view => view.approval_id));
+  });
+
+  it('keeps room for the cursor on a page with a row left: two rows that fill a last page are not one page when a third follows', async () => {
+    const padding = await filling(2), { f, runtime } = await listed(500_000, padding - 500_000, 0);
+    const pages = await walk(f, runtime), rows = pages.flatMap(page => page.reviews);
+    // The second row has no room beside the first page's cursor, so it starts the next page, whole. No row is cut.
+    expect(pages.map(page => page.reviews.length)).toEqual([1, 2]);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    for (const page of pages) expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes({ reviews: rows.slice(0, 2) })).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(rows.map(row => row.approval_id)).toEqual((await runtime.approvals()).proposals(f.person).map(view => view.approval_id));
+  });
+
+  it('refuses a cursor it did not write for this reviewer and this list, as an invalid request that says why', async () => {
+    const f = await fixture(), runtime = f.create();
+    const { pending } = await f.pendingReview(runtime);
+    const refused = { code: 'invalid_request', message: 'Review cursor is not one this list gave' };
+    for (const cursor of ['not a cursor!', 'not-a-cursor', 'AAAA', 'c'.repeat(512)]) await expect(f.reviewCall(runtime, { operation: 'reviews', cursor })).rejects.toMatchObject(refused);
+    // A place before every row of the list: read with the reviewer's own cursor, it gives the list.
+    const place = { rank: 0 as const, created_at: '9999-12-31T23:59:59.999Z', approval_id: `apr_${'0'.repeat(64)}` };
+    expect(await f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(f.person, place) })).toEqual({ reviews: [pending] });
+    // The same place under another reviewer's cursor, and another list's cursor, are not this list's.
+    const other = { ...f.person, principal_id: 'prn_00000000-0000-4000-8000-000000000011', membership_id: 'mem_00000000-0000-4000-8000-000000000012' };
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(other, place) })).rejects.toMatchObject(refused);
+    expect(await f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonReviewsCursorV1(other, place) }, 'other')).toEqual({ reviews: [] });
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: encodePersonListCursorV1({ scope: { kind: 'only_me' }, organization_id: f.person.organization_id, membership_id: f.person.membership_id },
+      PERSON_LIST_START_V1) })).rejects.toMatchObject(refused);
+    // A cursor that is no text at all is no review request.
+    await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: 5 } as never)).rejects.toMatchObject({ code: 'invalid_request', message: 'Invalid review request' });
+  });
+
+  it('leaves a single row that fills the last page to the byte whole', async () => {
+    const pad = await filling(1), { f, runtime } = await listed(pad);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(page.reviews.map(row => row.title.length)).toEqual(['Test meeting'.length + pad]);
+    expect(bytes(page)).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  it('cuts a row that fills a last page when a row follows it, by no more than the cursor its page then carries takes', async () => {
+    const pad = await filling(1), { f, runtime } = await listed(pad, 0);
+    const [large, small] = (await runtime.approvals()).proposals(f.person);
+    const pages = await walk(f, runtime);
+    // Both proposals are listed, once each and in the list's order: the first page is the large row and the cursor.
+    expect(pages.map(page => page.reviews.map(row => row.approval_id))).toEqual([[large!.approval_id], [small!.approval_id]]);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    // The row gave up what the cursor takes and no more: its page ends within a character of the bound, and never past it.
+    expect(bytes(pages[0])).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(pages[0])).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
+    const cut = pages[0]!.reviews[0]!;
+    expect(cut.title.endsWith('…')).toBe(true);
+    expect(large!.title.startsWith(cut.title.slice(0, -1))).toBe(true);
+    expect(cut.first_line).toBe('Ship the cohort onboarding.');
+  });
+
+  it('keeps a proposal whose row alone is past the bound on the list, its title cut to fit a page', async () => {
+    const f = await fixture(), runtime = f.create();
+    // Characters of every JSON width: four bytes, two (escaped) and one. The whole title is past one response by itself.
+    const title = `Test meeting${'😀"\\T'.repeat(130_000)}`;
+    await proposeAt('2026-11-01T10:00:00.000Z', f, runtime, 1, title.slice('Test meeting'.length));
+    await proposeAt('2026-11-01T10:00:01.000Z', f, runtime, 1, '', 1);
+    const core = await runtime.approvals();
+    const [small, large] = core.proposals(f.person);
+    expect([small!.title, large!.title]).toEqual(['Test meeting', title]);
+    expect(bytes(title)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+
+    const pages = await walk(f, runtime);
+    for (const page of pages) {
+      expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+      expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    }
+    // Both proposals are listed, once each: the large one is never dropped. It does not fit after the small one, so it
+    // starts the next page, and there it is cut.
+    expect(pages.map(page => page.reviews.map(row => row.approval_id))).toEqual([[small!.approval_id], [large!.approval_id]]);
+    // Its title is the start of the whole one, cut between characters and marked as cut. The first line is short, so the
+    // title has the room it leaves: the page ends within a character of the bound. The rest of the row is whole.
+    const cut = pages[1]!.reviews[0]!;
+    expect(cut.title.endsWith('…')).toBe(true);
+    expect(title.startsWith(cut.title.slice(0, -1))).toBe(true);
+    expect(bytes(pages[1])).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(cut.title)).toBe(false);
+    expect(cut).toMatchObject({ status: 'pending', first_line: 'Ship the cohort onboarding.', action_count: 0 });
+    // Only the list's row is cut: the proposal an opened review reads keeps its whole title.
+    expect(core.proposal(large!.approval_id)!.title).toBe(title);
+  });
+
+  it('cuts the first line with the title when the two together are past the bound, and the row fills its page', async () => {
+    const line = 'L'.repeat(600_000), title = `Test meeting${'T'.repeat(600_000)}`;
+    // The one decision is as long as the title: neither is past a page alone, the two together are.
+    const f = await fixture(), runtime = f.create(undefined, { processor: deciding(line) });
+    await propose(f, runtime, 1, title.slice('Test meeting'.length));
+    const [view] = (await runtime.approvals()).proposals(f.person);
+    expect(view!.title).toBe(title);
+
+    const [page, ...more] = await walk(f, runtime);
+    expect(more).toEqual([]);
+    expect(() => validatePersonReviewResultV1('reviews', page)).not.toThrow();
+    // Each text keeps half the room of a page: together they fill it, and never pass it.
+    expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(page)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 1024);
+    const [cut] = page!.reviews;
+    expect(cut).toMatchObject({ approval_id: view!.approval_id, status: 'pending' });
+    for (const [kept, whole] of [[cut!.title, title], [cut!.first_line!, line]] as const) {
+      expect(kept.endsWith('…')).toBe(true);
+      expect(whole.startsWith(kept.slice(0, -1))).toBe(true);
+    }
+  });
+
+  it('cuts only the first line when it alone is past the bound: a short title is whole, and the line has the room it leaves', async () => {
+    const line = 'L'.repeat(1_100_000);
+    const f = await fixture(), runtime = f.create(undefined, { processor: deciding(line) });
+    await propose(f, runtime, 1, '');
+    const [page, ...more] = await walk(f, runtime);
+    expect(more).toEqual([]);
+    const [cut] = page!.reviews;
+    expect(cut!.title).toBe('Test meeting');
+    expect(cut!.first_line!.endsWith('…')).toBe(true);
+    expect(line.startsWith(cut!.first_line!.slice(0, -1))).toBe(true);
+    expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(page)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
   });
 });
 

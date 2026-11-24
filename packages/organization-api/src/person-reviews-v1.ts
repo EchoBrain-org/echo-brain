@@ -56,12 +56,19 @@ export interface PersonMeetingReviewV2 {
 }
 
 export type PersonReviewOperationV1 =
-  | { readonly operation: 'reviews' }
+  /** `cursor`: the `next_cursor` of the page before the one to read; without it, the first page. */
+  | { readonly operation: 'reviews'; readonly cursor?: string }
   | { readonly operation: 'review_open'; readonly approval_id: string }
   | { readonly operation: 'review'; readonly approval_id: string; readonly command_id: string; readonly snapshot_sha256: string; readonly action: 'approve' | 'reject'; readonly routes: readonly PersonMeetingRouteV2[]; readonly owners: readonly { readonly signal_id: string; readonly owner: string }[] };
 export type PersonReviewRequestV1 = PersonReviewOperationV1 & { readonly schema_version: 1 };
 export interface PersonReviewResultsV1 {
-  reviews: { readonly reviews: readonly PersonMeetingReviewV2[] };
+  /**
+   * One page of the caller's reviews, undecided first, then newest. The Authority fits each page to the transport bound, so
+   * no list is too long to answer (ADR-0055). `next_cursor` is there only when the list goes on. On the last page it is
+   * left out, not null: a desktop from before the list paged takes exactly `reviews`, so it still reads a list that fits
+   * one page as it always did.
+   */
+  reviews: { readonly reviews: readonly PersonMeetingReviewV2[]; readonly next_cursor?: string };
   review_open: { readonly review: PersonMeetingReviewV2; readonly snapshot_sha256: string; readonly participants: readonly string[];
     readonly items: readonly PersonMeetingReviewItemV2[]; readonly reasons: readonly PersonMeetingReviewReasonV2[];
     /** Names for every project id the items name that the reviewer can read. */
@@ -78,9 +85,12 @@ const SIGNAL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 /**
  * A reviews response has no bound of its own: every one is bounded by the tool transport that carries it
  * (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1), the one bound per transport. Kept as names for the Authority's own check.
+ * The list pages to stay inside it.
  */
 export const PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
 export const PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 = PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1;
+/** A page cursor's own shape, as the Authority frames one: a line of at most 512 characters. Only the Authority reads what it says. */
+const CURSOR_MAX_CHARACTERS = 512;
 /** An identifier ECHO mints (approval, command and digest ids): its own shape, at most 256 characters. */
 function text(value: unknown, maximum = 256): asserts value is string {
   if (typeof value !== 'string' || value.length === 0 || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) fail(label);
@@ -129,7 +139,10 @@ export function validatePersonReviewRequestV1(value: unknown): PersonReviewReque
   const row = asEnumerableRecord(value, label), operation = row.operation as PersonReviewOperationV1['operation'];
   if (row.schema_version !== 1) fail('Personal review request version is unsupported');
   if (typeof operation !== 'string' || !Object.hasOwn(fields, operation)) fail(label);
-  assertExactKeys(row, ['schema_version', 'operation', ...fields[operation]], label);
+  // Only the list pages, so only its request may name a page.
+  const paged = operation === 'reviews' && Object.hasOwn(row, 'cursor');
+  assertExactKeys(row, ['schema_version', 'operation', ...fields[operation], ...(paged ? ['cursor'] : [])], label);
+  if (paged) text(row.cursor, CURSOR_MAX_CHARACTERS);
   for (const key of fields[operation]) {
     const item = row[key];
     if (key === 'routes') routes(item);
@@ -146,14 +159,20 @@ export function validatePersonReviewRequestV1(value: unknown): PersonReviewReque
   }
   return Object.freeze({ ...row }) as PersonReviewRequestV1;
 }
-/** Transport and UTF-8 bounds apply before parsing; typed response checks also run at the Authority. */
-export function validatePersonReviewResultV1<K extends keyof PersonReviewResultsV1>(operation: K, value: unknown): PersonReviewResultsV1[K] {
+/**
+ * Transport and UTF-8 bounds apply before parsing; typed response checks also run at the Authority.
+ * `joined` says the value is the whole `reviews` list as a client joined it from every page (personReviewCommandV1): its
+ * rows are checked as a page's are, but it is no one response, so no response's bound applies to it. Each page was held to
+ * that bound as it arrived.
+ */
+export function validatePersonReviewResultV1<K extends keyof PersonReviewResultsV1>(operation: K, value: unknown, joined = false): PersonReviewResultsV1[K] {
   if (typeof operation !== 'string' || !Object.hasOwn(fields, operation)) fail('Personal review response operation is invalid');
   const row = asEnumerableRecord(value, 'Personal review response');
-  const keys = { reviews: ['reviews'], review_open: ['review','snapshot_sha256','participants','items','reasons','suggested_projects','records'], review: ['status','decided_on'] };
+  const keys = { reviews: ['reviews', ...(Object.hasOwn(row, 'next_cursor') ? ['next_cursor'] : [])],
+    review_open: ['review','snapshot_sha256','participants','items','reasons','suggested_projects','records'], review: ['status','decided_on'] };
   assertExactKeys(row, keys[operation], 'Personal review response');
   const bound = operation === 'review_open' ? PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 : PERSON_REVIEW_RESPONSE_MAX_BYTES_V1;
-  if (utf8ByteLength(JSON.stringify(row)) > bound) fail('Personal review response exceeds its bound');
+  if (!(joined && operation === 'reviews') && utf8ByteLength(JSON.stringify(row)) > bound) fail('Personal review response exceeds its bound');
   const object = (value: unknown, keys: readonly string[], optional: readonly string[] = []) => {
     const item = asEnumerableRecord(value, 'Meeting response item');
     assertExactKeys(item, [...keys, ...optional.filter(key => Object.hasOwn(item, key))], 'Meeting response item');
@@ -184,7 +203,10 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
     records(item.records);
     if (item.status !== 'approved' && (item.records as unknown[]).length > 0) fail('Invalid meeting review record');
   };
-  if (operation === 'reviews') for (const item of array(row.reviews)) review(item);
+  if (operation === 'reviews') {
+    for (const item of array(row.reviews)) review(item);
+    if (Object.hasOwn(row, 'next_cursor')) text(row.next_cursor, CURSOR_MAX_CHARACTERS);
+  }
   if (operation === 'review_open') {
     review(row.review); digest(row.snapshot_sha256); records(row.records);
     for (const name of array(row.participants)) words(name);
@@ -213,10 +235,28 @@ export function validatePersonReviewResultV1<K extends keyof PersonReviewResults
   if (operation === 'review' && (!['publishing','approved','rejected'].includes(String(row.status)) || !['desktop', 'slack'].includes(String(row.decided_on)))) fail('Invalid meeting outcome');
   return Object.freeze({ ...row }) as unknown as PersonReviewResultsV1[K];
 }
+/**
+ * One review request under one tool session. The Authority answers `reviews` a page at a time, each within the transport
+ * bound, so the client reads every page, sending each `next_cursor` back, and answers the whole list with no cursor left.
+ * A proposal decided between two page reads is on both pages: it is kept once, as it was last read.
+ */
 export function personReviewCommandV1<K extends PersonReviewOperationV1['operation']>(host: PersonToolHostV1, request: PersonReviewRequestV1 & { readonly operation: K }): Promise<PersonReviewResultsV1[K]> {
   const body = validatePersonReviewRequestV1(request);
-  return host.withToolSession(session => session.transport.json({ path: PERSON_REVIEWS_PATH_V1, body, validate_request: validatePersonReviewRequestV1,
-    validate_response: value => validatePersonReviewResultV1(request.operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1,
-    // The transport's ceiling, which the Authority's response shares: at least either typed bound above.
-    maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000 }));
+  return host.withToolSession(async session => {
+    const send = <O extends keyof PersonReviewResultsV1>(operation: O, sent: PersonReviewRequestV1) => session.transport.json({ path: PERSON_REVIEWS_PATH_V1, body: sent,
+      validate_request: validatePersonReviewRequestV1, validate_response: value => validatePersonReviewResultV1(operation, value), maximum_request_bytes: PERSON_TOOL_REQUEST_MAX_BYTES_V1,
+      // The transport's ceiling, which the Authority's response shares: at least either typed bound above.
+      maximum_response_bytes: PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1, timeout_ms: 75_000 });
+    if (body.operation !== 'reviews') return send(request.operation, body);
+    const reviews = new Map<string, PersonMeetingReviewV2>(), cursors = new Set([body.cursor]);
+    for (let next: PersonReviewRequestV1 = body; ;) {
+      const page: PersonReviewResultsV1['reviews'] = await send('reviews', next);
+      for (const review of page.reviews) { reviews.delete(review.approval_id); reviews.set(review.approval_id, review); }
+      if (page.next_cursor === undefined) return { reviews: [...reviews.values()] } as unknown as PersonReviewResultsV1[K];
+      // A list never comes to the same place twice: a cursor given again would be followed for ever.
+      if (cursors.has(page.next_cursor)) fail('Personal review response repeats a cursor');
+      cursors.add(page.next_cursor);
+      next = { ...body, cursor: page.next_cursor };
+    }
+  });
 }

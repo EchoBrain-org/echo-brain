@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
-import { validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
+import { PERSON_EVIDENCE_LABEL_MAX_BYTES_V1, validatePersonAnswerCitationV8, validatePersonSourceEvidenceV1 } from "@echo-brain/organization-api";
 import { MeetingSourceBridgeV1, pullAndAdmitSourceBatchV1, type MeetingDocument } from "@echo-brain/organization-processing/core";
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
@@ -15,6 +15,7 @@ import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sq
 import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
 import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
+import { createPersonSourceEvidenceRouteV1 } from "../src/composition/person-source-evidence-route.js";
 import type { OriginalContextCitationV1 } from "../src/application/ports/person-original-context-retrieval-v1.js";
 import { MEMBER, OWNER, PROJECT_ALPHA, PROJECT_BETA, PROJECT_CONTEXT_NOW, authorization, insertStoredDocumentV1, projectContextDatabase, seedProject, seedProjectMember } from "./fixtures/project-context-sqlite.js";
 
@@ -825,5 +826,190 @@ describe("Person original context: an open reads the whole source", () => {
       expect(search(80)).toMatchObject({ truncated: true });
       expect(search(80).items).toHaveLength(80);
     }
+  });
+});
+
+describe("Person original context: a note title of any length", () => {
+  const global = { kind: "global" as const };
+  type Release = ReturnType<SqlitePersonOriginalContextRetrievalV1["deskSearch"]>;
+  type Item = Release["items"][number];
+
+  /** Every packet of the one note a search finds, in source order: its listed first packet, opened whole. */
+  function openWhole(f: ReturnType<typeof fixture>, marker: string, access_token = "member"): Release {
+    const hit = f.retrieval.deskSearch({ access_token, scope: global, query: marker }).items[0]!;
+    const first = f.retrieval.deskSearch({ access_token, scope: global }).items.find(item => item.ref === hit.ref)!;
+    return f.retrieval.deskOpen({ access_token, scope: global, citation: first.citation });
+  }
+  /** What packets hold under their headings, read back in order: each begins 256 characters before the last one ended. */
+  function packed(items: readonly Item[]): string {
+    return items.map((item, index) => [...item.text!.slice(item.text!.indexOf("\n") + 1)].slice(index === 0 ? 0 : 256).join("")).join("");
+  }
+  /**
+   * The label rules a cited note meets: an answer's, on the citation as Ask's desk and renderer build it (the label is
+   * beside the citation and inside it), and the cited original's read.
+   */
+  function expectLabelAccepted(f: ReturnType<typeof fixture>, item: Item, access_token = "member"): void {
+    expect(Buffer.byteLength(item.label)).toBeLessThanOrEqual(PERSON_EVIDENCE_LABEL_MAX_BYTES_V1);
+    expect(() => validatePersonAnswerCitationV8({ citation: { ...item.citation, label: item.label }, kind: item.kind, label: item.label, visibility: item.visibility, ref: item.ref })).not.toThrow();
+    const read = createPersonSourceEvidenceRouteV1({ originals: f.retrieval }).readSource({ access_token, request: { schema_version: 1, scope: global, citation: item.citation } as never });
+    expect(read.citation.label).toBe(item.label);
+  }
+
+  it("keeps search, list, open and recheck working for everyone beside a note whose first line is 4,000 bytes", async () => {
+    const f = fixture();
+    await f.admitTeamNote("Ordinary plan", "ordinarymarker the launch is in March");
+    // As the desktop saves a pasted paragraph: the title is the note's whole first line, so its text carries the title.
+    const pasted = `${"pasted ".repeat(570)}pastedtail`;
+    await f.admitTeamNote(pasted, `${pasted}\nits second line`);
+    // As any other client may send one: a title its text does not repeat.
+    const titled = `${"titled ".repeat(570)}clienttail`;
+    await f.admitTeamNote(titled, "a text that does not repeat its title");
+    expect([pasted, titled].map(title => Buffer.byteLength(title))).toEqual([4_000, 4_000]);
+    for (const access_token of ["owner", "member"]) {
+      const search = (query?: string) => f.retrieval.deskSearch({ access_token, scope: global, ...(query === undefined ? {} : { query }) });
+      expect(texts(search("ordinarymarker"))).toEqual(["Ordinary plan\nordinarymarker the launch is in March"]);
+      const listed = search();
+      expect(listed.items).toHaveLength(3);
+      for (const item of listed.items) expectLabelAccepted(f, item, access_token);
+      expect(() => f.retrieval.revalidateDeskRelease({ access_token, release: listed })).not.toThrow();
+      for (const [title, tail, content] of [[pasted, "pastedtail", `${pasted}\nits second line`], [titled, "clienttail", `${titled}\na text that does not repeat its title`]] as const) {
+        // A word past the title's first 1,024 bytes is found, in a packet an answer can cite.
+        const found = search(tail);
+        expect(found.items).not.toHaveLength(0);
+        expect(found.items.every(item => item.text!.includes(tail))).toBe(true);
+        expectLabelAccepted(f, found.items[0]!, access_token);
+        // An open reads the whole title, once, under a heading cut to 1,024 bytes.
+        const opened = openWhole(f, tail, access_token);
+        expect(opened.items.every(item => item.text!.startsWith(`${title.slice(0, 1_024)}\n`))).toBe(true);
+        expect(packed(opened.items)).toBe(content);
+        for (const release of [found, opened]) expect(() => f.retrieval.revalidateDeskRelease({ access_token, release })).not.toThrow();
+      }
+    }
+  });
+
+  it.each([3_069, 3_071, 100_000])("never refuses a search because one note's title is %i bytes", async bytes => {
+    const f = fixture();
+    await f.admitTeamNote("Ordinary plan", "ordinarymarker stays findable");
+    // The note's text begins with a three-byte character: under 3,069 bytes of title the packer had two bytes left for
+    // the text, and from 3,071 it had none.
+    const title = `${"x".repeat(bytes - 9)} edgetail`;
+    await f.admitTeamNote(title, "語 begins the long-titled note");
+    for (const access_token of ["owner", "member"]) {
+      expect(texts(f.retrieval.deskSearch({ access_token, scope: global, query: "ordinarymarker" }))).toEqual(["Ordinary plan\nordinarymarker stays findable"]);
+      expect(packed(openWhole(f, "edgetail", access_token).items)).toBe(`${title}\n語 begins the long-titled note`);
+    }
+  });
+
+  it("keeps an only-me note with a long title its author's alone, and out of every other reader's way", async () => {
+    const f = fixture();
+    await f.admitTeamNote("Ordinary plan", "ordinarymarker stays findable");
+    const notes = createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) });
+    notes.submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title: `${"secret ".repeat(570)}privatetail`, text: "an only-me text", association_project_ids: [], audience: { kind: "only_me" } });
+    expect(await new PersonDocumentProcessingV1(f.repository, undefined, new SqlitePersonTextSourceInboxV1(f.database)).runOnce(new AbortController().signal)).toBe("admitted");
+    const search = (access_token: string, query: string) => f.retrieval.deskSearch({ access_token, scope: global, query }).items;
+    expect(search("owner", "privatetail")).not.toHaveLength(0);
+    expect(search("member", "privatetail")).toEqual([]);
+    for (const access_token of ["owner", "member"]) expect(search(access_token, "ordinarymarker")).toHaveLength(1);
+  });
+
+  it.each([
+    { name: "a short title, unchanged", title: "Launch note", label: "Launch note" },
+    { name: "200 characters, unchanged", title: "é".repeat(200), label: "é".repeat(200) },
+    { name: "300 characters, cut to 200", title: "t".repeat(300), label: `${"t".repeat(197)}…` },
+    { name: "1,024 bytes in 512 characters, cut to 200", title: "é".repeat(512), label: `${"é".repeat(197)}…` },
+    { name: "1,500 bytes, cut to 200 characters", title: "w".repeat(1_500), label: `${"w".repeat(197)}…` },
+    { name: "spaces around it, trimmed", title: "  Padded title  ", label: "Padded title" },
+  ])("cites and lists a note under a label an answer and its source read accept: $name", async ({ title, label }) => {
+    const f = fixture();
+    await f.admitTeamNote(title, "labelmarker text");
+    const cited = f.retrieval.deskSearch({ access_token: "member", scope: global, query: "labelmarker" }).items[0]!;
+    const listed = f.retrieval.deskSearch({ access_token: "member", scope: global }).items[0]!;
+    for (const item of [cited, listed]) expectLabelAccepted(f, item);
+    expect([cited.label, listed.label]).toEqual([label, label]);
+  });
+
+  it("packs a note whose title is at most 1,024 bytes exactly as before, so no stored citation anchor moves", async () => {
+    const f = fixture();
+    const short = await f.admitTeamNote("Sync notes", "shortpackmarker stays in one packet");
+    // Right at the bound, in two-byte characters: 3,072 - 1,024 - 1 = 2,047 bytes of each packet are left for the text.
+    const full = "é".repeat(512);
+    const long = await f.admitTeamNote(full, `${"a".repeat(2_047)} fullpackmarker`);
+    for (const { context_id, marker, packets } of [
+      { context_id: short, marker: "shortpackmarker", packets: ["Sync notes\nshortpackmarker stays in one packet"] },
+      { context_id: long, marker: "fullpackmarker", packets: [`${full}\n${"a".repeat(2_047)}`, `${full}\n${"a".repeat(256)} fullpackmarker`] },
+    ]) {
+      const opened = openWhole(f, marker).items;
+      expect(opened.map(item => item.text)).toEqual(packets);
+      expect(opened.map(item => item.citation.anchor_sha256)).toEqual(packets.map((text, segment) => canonicalSha256({ kind: "text", context_id, segment, text })));
+    }
+  });
+
+  // Each heading is the longest run of whole characters within 1,024 bytes: the next character would pass the bound.
+  it.each([
+    { name: "two-byte", title: `a${"é".repeat(600)}`, heading: `a${"é".repeat(511)}`, bytes: 1_023 },
+    { name: "three-byte", title: `ab${"語".repeat(400)}`, heading: `ab${"語".repeat(340)}`, bytes: 1_022 },
+    { name: "four-byte (surrogate pair)", title: `abc${"😀".repeat(300)}`, heading: `abc${"😀".repeat(255)}`, bytes: 1_023 },
+  ])("cuts a longer title of $name characters on a character boundary, and packs the whole title with the text", async ({ title, heading, bytes }) => {
+    const f = fixture();
+    await f.admitTeamNote(title, "boundarymarker text");
+    expect(Buffer.byteLength(heading)).toBe(bytes);
+    expect(openWhole(f, "boundarymarker").items.map(item => item.text)).toEqual([`${heading}\n${title}\nboundarymarker text`]);
+  });
+
+  it("packs a 200 KB note under a 2,900-byte title by its text, never a packet for each character", async () => {
+    const f = fixture();
+    const title = `${"gamma ".repeat(483)}ab`;
+    const text = `countmarker ${"word ".repeat(40_000)}`;
+    await f.admitTeamNote(title, text);
+    expect([title, text].map(value => Buffer.byteLength(value))).toEqual([2_900, 200_012]);
+    const opened = openWhole(f, "countmarker").items;
+    // Under the cut heading and its line break every packet but the last holds 2,047 bytes of the 202,913 packed, and
+    // each begins 256 characters before the last one ended: one packet for each 1,791 bytes, 114 in all.
+    expect(opened).toHaveLength(114);
+    expect(opened.slice(0, -1).every(item => Buffer.byteLength(item.text!) === 3_072)).toBe(true);
+    expect(packed(opened)).toBe(`${title}\n${text}`);
+  });
+
+  it("lists, opens and searches a note under a 300 KB title without working out its label, or reading the note again, once for each packet", async () => {
+    const f = fixture();
+    // As the desktop saves a pasted blob with no line break in it: the title is the note's whole first line.
+    const title = `blobhead ${"blob ".repeat(60_000)}blobtail`;
+    const text = `${title}\nits second line`;
+    await f.admitTeamNote(title, text);
+    const meter = meteredReads(f.database, Number.POSITIVE_INFINITY);
+    const retrieval = new SqlitePersonOriginalContextRetrievalV1(meter.database, { authenticateAccess: () => authorization(MEMBER) }, OWNER.organization_id);
+    /** What a read releases, and how many strings as long as the title it normalized: a count, so the clock decides nothing. */
+    const counted = (read: () => Release) => {
+      const normalize = String.prototype.normalize;
+      let normalizations = 0;
+      const spy = vi.spyOn(String.prototype, "normalize").mockImplementation(function (this: string, form?: string) {
+        if (this.length > 100_000) normalizations += 1;
+        return normalize.call(this, form);
+      });
+      try {
+        const release = read();
+        return { release, normalizations };
+      } finally { spy.mockRestore(); }
+    };
+    const listed = counted(() => retrieval.deskSearch({ access_token: "member", scope: global }));
+    const opened = counted(() => retrieval.deskOpen({ access_token: "member", scope: global, citation: listed.release.items[0]!.citation }));
+    meter.reset();
+    const search = () => retrieval.deskSearch({ access_token: "member", scope: global, query: "blobhead" });
+    const found = counted(search);
+    // The list holds the note's first packet. There is one packet for each 1,791 bytes of the 300,033 packed, and each
+    // begins with the heading, so a word of the heading finds them all.
+    expect([listed, opened, found].map(read => read.release.items.length)).toEqual([1, 168, 168]);
+    expect(new Set([listed, opened, found].flatMap(read => read.release.items.map(item => item.label)))).toEqual(new Set([`${title.slice(0, 197)}…`]));
+    // Packing the note normalizes its title and its text, and its label normalizes the title once more. Each read does
+    // that twice: for what it hands over, and for the check every release gets before it leaves. A label worked out for
+    // each packet made the counts 173, 340 and 340.
+    expect({ list: listed.normalizations, open: opened.normalizations, search: found.normalizations }).toEqual({ list: 6, open: 6, search: 6 });
+    // The search reads the note from the database to scan it, to verify what it found and to check its release: about
+    // five times the bytes of its title and text. Read again for each packet it returned, that was 339 times.
+    expect(meter.bytes()).toBeLessThan((Buffer.byteLength(title) + Buffer.byteLength(text)) * 8);
+    // Verified once is still verified: the search is refused when the note's stored text no longer matches its source.
+    f.database.exec("DROP TRIGGER authority_person_updates_v2_immutable");
+    f.database.prepare("UPDATE authority_person_updates_v2 SET text=?").run(`${text} forged`);
+    expect(search).toThrow(expect.objectContaining({ code: "unavailable" }));
   });
 });

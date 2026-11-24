@@ -9,7 +9,7 @@ import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persiste
 import { SqliteSourceAdmissionStoreV1 } from '../src/adapters/persistence/sqlite/source-admission-v1.js';
 import { createPersonSourceEvidenceRouteV1 } from '../src/composition/person-source-evidence-route.js';
 import type { OriginalContextCitationV1 } from '../src/application/ports/person-original-context-retrieval-v1.js';
-import { assertActionable, REVIEW_POLICY } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
+import { assertActionable, meeting as fixtureMeeting, REVIEW_POLICY } from '../../../packages/organization-processing/test/admitted-meeting-processing/fixtures/sqlite-meeting-state.js';
 import { approvalCoreFixture } from './fixtures/approval-core.js';
 import { addMembership, authorization } from './fixtures/project-context-sqlite.js';
 
@@ -129,5 +129,28 @@ describe('the review badge on imported meeting notes', () => {
     const row = imported.rows(authorization(f.people.ari), GLOBAL, { source_id: again.citation.source_id, revision_id: again.citation.revision_id })[0]!;
     expect(imported.reviewState(authorization(f.people.ari), row)).toBe('nothing_to_review');
     expect(imported.reviewState(authorization(f.people.mina), row)).toBe('not_reviewed');
+  });
+});
+
+describe('an imported meeting title of any length', () => {
+  it("keeps its importer's search and source read working, and gives a meeting with no notes no passage", async () => {
+    const f = await world();
+    const title = `${'kickoff '.repeat(499)}closingword`;
+    const admit = (id: string, changes: Partial<MeetingDocument>) => new SqliteSourceAdmissionStoreV1(f.db).admit({
+      source: meetingSourceEnvelopeV1({ ...fixtureMeeting, ...changes, id, provenance: { ...fixtureMeeting.provenance, external_id: id, canonical_revision: canonicalSha256(id) } }),
+      scope: { organization_id: f.person.organization_id, custody_ref: `person:${f.person.membership_id}`, access_policy_ref: `personal-meeting:${f.sourceKey}`, analysis_policy: 'automatic' } });
+    // One meeting with notes under a title of about 4,000 bytes, and one that has only a transcript.
+    admit('long-title-notes', { title });
+    admit('long-title-transcript', { title: `${title} transcriptonly`, content: [{ id: 'block-1', kind: 'transcript', text: 'Spoken words stay out of every read.' }] });
+    const search = (query: string) => f.originals.deskSearch({ access_token: 'ari', scope: GLOBAL, query }).items;
+    // A word at the title's end is found, under the v1 heading cut to 1,024 bytes, and the source read names the meeting
+    // by a label it can carry.
+    const found = search('closingword');
+    expect(found).toHaveLength(1);
+    expect(found[0]!.text!.startsWith(`${`Imported meeting (unapproved): ${title}`.slice(0, 1_024)}\n`)).toBe(true);
+    expect(f.route.readSource({ access_token: 'ari', request: f.request(found[0]!.citation) }).citation.label).toBe(`${`Imported meeting: ${title}`.slice(0, 197)}…`);
+    // A meeting with only a transcript still has no passage, whatever its title, and the fixture's own notes are still found.
+    expect(search('transcriptonly')).toEqual([]);
+    expect(search('cohort')).not.toHaveLength(0);
   });
 });

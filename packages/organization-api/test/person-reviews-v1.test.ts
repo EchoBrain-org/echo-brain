@@ -228,4 +228,84 @@ describe('person-owned review contract', () => {
     expect(() => validatePersonReviewResultV1('review_open', opened({ review: { ...review, first_line: null, action_count: 0, meeting_at: null } }))).not.toThrow();
   });
 
+  // The list pages at its transport bound (ADR-0055: a list that outgrows its response pages, it never fails).
+  it('takes a reviews request with and without a cursor, and a cursor on no other operation', () => {
+    const paged = { schema_version: 1, operation: 'reviews', cursor: 'AbC_d-9' };
+    expect(validatePersonReviewRequestV1(paged)).toEqual(paged);
+    expect(validatePersonReviewRequestV1({ schema_version: 1, operation: 'reviews' })).toEqual({ schema_version: 1, operation: 'reviews' });
+    // Opaque here: the Authority reads it. A client only holds it to a cursor's own shape, one line of at most 512 characters.
+    expect(validatePersonReviewRequestV1({ ...paged, cursor: 'c'.repeat(512) })).toEqual({ ...paged, cursor: 'c'.repeat(512) });
+    for (const cursor of ['', 'c'.repeat(513), 5, null, ['AbC'], 'two\nlines']) expect(() => validatePersonReviewRequestV1({ ...paged, cursor })).toThrow();
+    // Unknown keys are still refused, beside a cursor too.
+    expect(() => validatePersonReviewRequestV1({ ...paged, limit: 10 })).toThrow();
+    expect(() => validatePersonReviewRequestV1({ ...paged, tool_id: 'granola' })).toThrow();
+    expect(() => validatePersonReviewRequestV1({ schema_version: 1, operation: 'review_open', approval_id: 'apr_123', cursor: 'AbC' })).toThrow();
+    expect(() => validatePersonReviewRequestV1({ ...decision, cursor: 'AbC' })).toThrow();
+  });
+
+  it('takes a reviews page with next_cursor, and the last page without the key and never with null', () => {
+    const page = { reviews: [review], next_cursor: 'AbC_d-9' };
+    expect(validatePersonReviewResultV1('reviews', page)).toEqual(page);
+    // A desktop from before the list paged takes exactly `reviews`: a list that ends on its first page has no other key.
+    expect(Object.keys(validatePersonReviewResultV1('reviews', { reviews: [review] }))).toEqual(['reviews']);
+    for (const next_cursor of [null, '', 5, 'c'.repeat(513), 'two\nlines']) expect(() => validatePersonReviewResultV1('reviews', { reviews: [review], next_cursor })).toThrow();
+    // Unknown keys are still refused, beside a cursor too.
+    expect(() => validatePersonReviewResultV1('reviews', { ...page, tool_id: 'hidden' })).toThrow();
+    // Only the list pages.
+    expect(() => validatePersonReviewResultV1('review', { status: 'approved', decided_on: 'slack', next_cursor: 'AbC' })).toThrow();
+    expect(() => validatePersonReviewResultV1('review_open', opened({ next_cursor: 'AbC' }))).toThrow();
+  });
+
+  it('holds one reviews page to the transport bound, and the list a client joined from every page to none', () => {
+    const rows = Array.from({ length: 30 }, (_, index) => ({ ...review, approval_id: `apr_${String(index).padStart(64, '0')}`, title: 'T'.repeat(40_000) }));
+    expect(jsonBytes({ reviews: rows })).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(() => validatePersonReviewResultV1('reviews', { reviews: rows })).toThrow('exceeds its bound');
+    expect(validatePersonReviewResultV1('reviews', { reviews: rows }, true).reviews).toHaveLength(30);
+    // Joined, every row is still checked.
+    expect(() => validatePersonReviewResultV1('reviews', { reviews: [...rows, { ...review, title: '' }] }, true)).toThrow('Invalid meeting review title');
+    // Only the list is joined: an opened review is always one response.
+    expect(() => validatePersonReviewResultV1('review_open', largestReviewV1(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 + 1), true)).toThrow('exceeds its bound');
+  });
+
+  it('reads every page of the list in one session, sending each next_cursor back, and joins them with each proposal once', async () => {
+    const row = (digit: string, status = 'pending') => ({ ...review, approval_id: `apr_${digit.repeat(64)}`, status });
+    // b was pending on the first page and rejected before the second was read, so it is on both.
+    const pages = [{ reviews: [row('a'), row('b')], next_cursor: 'cursor-1' }, { reviews: [row('c'), row('b', 'rejected')], next_cursor: 'cursor-2' }, { reviews: [row('d', 'rejected')] }];
+    const json = vi.fn(async (input: { body: unknown; validate_response: (value: unknown) => unknown }) => input.validate_response(pages[json.mock.calls.length - 1]));
+    const withToolSession = vi.fn((operation: (session: never) => Promise<unknown>) => operation({ transport: { json } } as never));
+    const listed = await personReviewCommandV1({ withToolSession } as never, { schema_version: 1, operation: 'reviews' });
+    expect(json.mock.calls.map(([input]) => input.body)).toEqual([{ schema_version: 1, operation: 'reviews' },
+      { schema_version: 1, operation: 'reviews', cursor: 'cursor-1' }, { schema_version: 1, operation: 'reviews', cursor: 'cursor-2' }]);
+    expect(withToolSession).toHaveBeenCalledOnce();
+    // b is kept as it was last read, where the list has it now; no cursor is left to follow.
+    expect(listed).toEqual({ reviews: [row('a'), row('c'), row('b', 'rejected'), row('d', 'rejected')] });
+  });
+
+  it('refuses a list whose page is not a reviews page, with no part of the list answered', async () => {
+    const pages: unknown[] = [{ reviews: [review], next_cursor: 'cursor-1' }, { reviews: [{ ...review, title: '' }] }];
+    const json = vi.fn(async (input: { validate_response: (value: unknown) => unknown }) => input.validate_response(pages[json.mock.calls.length - 1]));
+    await expect(personReviewCommandV1({ withToolSession: operation => operation({ transport: { json } } as never) }, { schema_version: 1, operation: 'reviews' }))
+      .rejects.toThrow('Invalid meeting review title');
+    expect(json).toHaveBeenCalledTimes(2);
+  });
+
+  // A list never comes to the same place twice. An Authority that gave a cursor again would be asked for the same pages for ever.
+  it('stops at a cursor it was already given, and never follows one twice', async () => {
+    const json = vi.fn(async (input: { validate_response: (value: unknown) => unknown }) => {
+      if (json.mock.calls.length > 5) throw new Error('followed a cursor it was given before');
+      return input.validate_response({ reviews: [review], next_cursor: json.mock.calls.length % 2 === 1 ? 'cursor-1' : 'cursor-2' });
+    });
+    await expect(personReviewCommandV1({ withToolSession: operation => operation({ transport: { json } } as never) }, { schema_version: 1, operation: 'reviews' }))
+      .rejects.toThrow('Personal review response repeats a cursor');
+    expect(json).toHaveBeenCalledTimes(3);
+    // The cursor a request itself named counts as given.
+    const same = vi.fn(async (input: { validate_response: (value: unknown) => unknown }) => {
+      if (same.mock.calls.length > 5) throw new Error('followed a cursor it was given before');
+      return input.validate_response({ reviews: [review], next_cursor: 'cursor-1' });
+    });
+    await expect(personReviewCommandV1({ withToolSession: operation => operation({ transport: { json: same } } as never) }, { schema_version: 1, operation: 'reviews', cursor: 'cursor-1' }))
+      .rejects.toThrow('Personal review response repeats a cursor');
+    expect(same).toHaveBeenCalledOnce();
+  });
+
 });

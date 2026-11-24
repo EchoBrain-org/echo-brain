@@ -94,6 +94,6 @@ it('catalogs, connects, maps, cites, and disconnects historical Granola evidence
     expect(home.status).toBe(200);
     expect(JSON.stringify(home.body)).toContain('"sources":[]');
     expect((await post('/v1/person/tools/granola/disconnect', { schema_version: 1 })).status).toBe(200);
-    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'granola', personal_status: 'revoked', external_subject_id: null })]));
+    expect(await tools()).toEqual(expect.arrayContaining([expect.objectContaining({ tool_id: 'granola', personal_status: 'unlinked', external_subject_id: null })]));
   } finally { await runtime.close(); }
 });

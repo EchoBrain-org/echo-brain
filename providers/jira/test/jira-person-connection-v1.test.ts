@@ -327,14 +327,38 @@ describe('Nango-backed personal Jira connection', () => {
     } finally { f.database.close(); }
   });
 
-  it('connects afresh after disconnect deleted the remote reference, while retaining the verified account fence', async () => {
+  it('connects another Jira account after Disconnect, which ends the account pin and leaves no remote reference to clean up', async () => {
     const f = fixture(); try {
-      await f.connected(); await f.service.disconnect({ access_token: f.token });
+      await f.connected(); const old = f.store.current(person)!;
+      await f.service.disconnect({ access_token: f.token });
+      expect(f.nango.disconnect).toHaveBeenLastCalledWith(old.reference, undefined);
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'unlinked', external_scope_id: null, external_subject_id: null });
+      vi.mocked(f.nango.disconnect).mockClear();
+      f.setAccount('another-account');
       const next = await f.service.connect({ access_token: f.token });
+      expect(f.nango.disconnect).not.toHaveBeenCalled();
       expect(f.nango.connect).toHaveBeenLastCalledWith(expect.objectContaining({ echo_attempt: next.attempt }), undefined);
       const fresh = f.finishAuthorization();
       await expect(f.service.status({ access_token: f.token, attempt: next.attempt })).resolves.toMatchObject({ status: 'complete' });
       expect(f.store.current(person)).toMatchObject({ active: true, reference: fresh });
+      expect(f.service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'linked', external_scope_id: cloud, external_subject_id: 'another-account' });
+    } finally { f.database.close(); }
+  });
+
+  it('lets a person who connected before the configured site changed connect to the new site after Disconnect', async () => {
+    const f = fixture(); try {
+      await f.connected();
+      // An operator points the Authority at another Jira site; the person's saved connection still names the former one.
+      const moved = '00000000-0000-4000-8000-000000000008'; f.setCloud(moved);
+      const service = createJiraPersonConnectionV1({ store: f.store, nango: f.nango, cloud_id: moved, fetch: f.transport as typeof fetch, authenticate: f.authenticate });
+      const refused = await service.connect({ access_token: f.token }); f.finishAuthorization();
+      await expect(service.status({ access_token: f.token, attempt: refused.attempt })).resolves.toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+      expect(service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'revoked' });
+      await service.disconnect({ access_token: f.token });
+      expect(service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'unlinked' });
+      const accepted = await service.connect({ access_token: f.token }); f.finishAuthorization();
+      await expect(service.status({ access_token: f.token, attempt: accepted.attempt })).resolves.toMatchObject({ status: 'complete' });
+      expect(service.tool({ access_token: f.token })).toMatchObject({ personal_status: 'linked', external_scope_id: moved, external_subject_id: 'synthetic-account' });
     } finally { f.database.close(); }
   });
 

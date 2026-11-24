@@ -22,6 +22,13 @@ function Mark({ tool }: { tool: ConnectedTool }) {
   return <span class={`tool-mark${tool.status === 'unavailable' ? ' off' : ''}`} aria-hidden="true">{tool.name.slice(0, 1).toUpperCase()}</span>;
 }
 
+/**
+ * A connection Disconnect can end: a live one, or a stopped one, which only Disconnect frees for a different account.
+ * A stopped Slack link is left out: it is tied to no account, and Slack's disconnect only ends a live link, so
+ * Disconnect would change nothing.
+ */
+const disconnectable = (tool: ConnectedTool) => tool.status === 'linked' || (tool.status === 'revoked' && tool.tool_id !== 'slack');
+
 function ToolRow({ tool }: { tool: ConnectedTool }) {
   return (
     <div class={`tool-row ${tool.status}`} data-testid="tool-row" data-tool={tool.tool_id}>
@@ -30,7 +37,7 @@ function ToolRow({ tool }: { tool: ConnectedTool }) {
         <span class="name">{tool.name}</span>
         <span class="state" data-testid="tool-state">{TOOL_STATES[tool.status]}</span>
       </span>
-      {(tool.status === 'linked' || (tool.tool_id === 'granola' && tool.status !== 'unavailable')) && (
+      {(disconnectable(tool) || (tool.tool_id === 'granola' && tool.status !== 'unavailable')) && (
         <button type="button" class="plain-button" data-testid="tool-manage" onClick={() => manageTool(tool)}>Manage</button>
       )}
       {(tool.status === 'unlinked' || tool.status === 'revoked') && (
@@ -140,8 +147,8 @@ function ConnectionManage({ sheet }: { sheet: ToolManageSheet }) {
           : <p>Disconnecting removes only your own {tool.name} connection; you can connect again later.</p>}
         {sheet.failure && <p class="error" aria-live="polite">{message(sheet.failure)}</p>}
         <div class={`choices${meetings ? ' between' : ''}`}>
-          {meetings && tool.status === 'linked' && <span class="notice-line">Disconnecting stops new imports. Retained meetings keep their audience.</span>}
-          {tool.status === 'linked' && <button type="button" class={`${meetings ? 'link-button' : 'plain-button'} danger`} data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
+          {meetings && disconnectable(tool) && <span class="notice-line">Disconnecting stops new imports. Retained meetings keep their audience.</span>}
+          {disconnectable(tool) && <button type="button" class={`${meetings ? 'link-button' : 'plain-button'} danger`} data-testid="tool-disconnect" disabled={sheet.busy} onClick={() => void disconnectTool()}>
             {sheet.busy ? 'Disconnecting…' : meetings ? 'Disconnect Granola' : 'Disconnect'}
           </button>}
           {!meetings && <button type="button" class="plain-button" ref={done} disabled={sheet.busy} onClick={closeSheet}>Done</button>}

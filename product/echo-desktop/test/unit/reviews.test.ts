@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { reviewsView } from '../../src/host/views.js';
 import { isWriteCall } from '../../src/shared/protocol.js';
 import { fail, Held, ok, rpcFor, startStore, storeLifecycle } from './harness.js';
 
@@ -55,5 +57,29 @@ describe('personal reviews are independent of the connector catalog', () => {
     expect(isWriteCall('reviews', { request: { operation: 'reviews' } })).toBe(false);
     expect(isWriteCall('reviews', { request: { operation: 'review_open' } })).toBe(false);
     expect(isWriteCall('reviews', { request: { operation: 'review' } })).toBe(true);
+  });
+});
+
+// The Authority answers the list a page at a time, each within one response's bound, and the client reads every page and
+// prints them as one list (ADR-0055). The host reads that list whole: a reviewer with more reviews than one response
+// holds still gets every Approve row on Home.
+describe('the host reads the list of reviews the client printed, however long', () => {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+  const printed = (result: unknown) => ({ ok: true, result });
+
+  it('takes a list longer than one response, each row checked, and nothing that is not a list of reviews', () => {
+    const reviews = Array.from({ length: 30 }, (_, index) => ({ ...review, approval_id: `apr_${String(index).padStart(64, '0')}`, title: 'T'.repeat(40_000) }));
+    expect(bytes({ reviews })).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(reviewsView('reviews', printed({ reviews }))).toEqual({ reviews });
+    expect(() => reviewsView('reviews', printed({ reviews: [...reviews, { ...review, title: '' }] }))).toThrow();
+    expect(() => reviewsView('reviews', printed({ reviews, tool_id: 'hidden' }))).toThrow();
+    expect(() => reviewsView('reviews', { ok: false, error: 'Person Authority request failed' })).toThrow();
+  });
+
+  it('still holds an opened review and a decision to one response', () => {
+    expect(reviewsView('review_open', printed(proposal))).toEqual(proposal);
+    expect(reviewsView('review', printed({ status: 'publishing', decided_on: 'desktop' }))).toEqual({ status: 'publishing', decided_on: 'desktop' });
+    const past = { ...proposal, participants: ['P'.repeat(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1)] };
+    expect(() => reviewsView('review_open', printed(past))).toThrow('exceeds its bound');
   });
 });

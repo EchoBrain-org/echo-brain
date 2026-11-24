@@ -4,8 +4,8 @@ export const PERSON_TOOL_SMALL_RESPONSE_MAX_BYTES_V1 = 8 * 1024;
 export const PERSON_TOOL_CONNECT_RESPONSE_MAX_BYTES_V1 = 32 * 1024;
 /**
  * The provider-route response transport bound (tool collections, meeting reviews and an open review): the same 1 MiB
- * as a Person route's response (PERSON_RUNS_MAX_RESPONSE_BYTES_V1), so every review a person has and a long meeting's
- * whole review card come back in one response.
+ * as a Person route's response (PERSON_RUNS_MAX_RESPONSE_BYTES_V1), so a long meeting's whole review card comes back in
+ * one response. A person's reviews come back a page of at most this size at a time (`next_cursor`), however many there are.
  */
 export const PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 = 1024 * 1024;
 /** The largest request a tool may send: the Authority's provider-route body, including a custom staging meeting. */

@@ -268,9 +268,10 @@ verified Jira account. An old connection cannot complete the new attempt, even i
 token refresh advances its `updated_at`. This slice uses replacement authorization
 rather than Nango's in-place reconnect endpoint because that endpoint's connection
 timestamp does not prove completed consent. Successful completion creates a new
-grant version; ordinary refresh preserves it. A connection after disconnect also
-uses fresh consent and preserves the same-tenure account fence. Unfinished or
-expired attempts never become grants.
+grant version; ordinary refresh preserves it. Disconnect removes the saved
+connection once its Nango connection is deleted, which ends the account fence: a
+connection after disconnect uses fresh consent and accepts whichever Jira account
+it verifies. Unfinished or expired attempts never become grants.
 Sources: [Connect sessions](https://nango.dev/docs/reference/backend/http-api/connect/sessions/create),
 [refresh behavior](https://nango.dev/docs/reference/backend/http-api/connections/get),
 [refresh implementation](https://github.com/NangoHQ/nango/blob/master/packages/shared/lib/services/connections/credentials/refresh.ts).

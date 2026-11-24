@@ -103,9 +103,10 @@ export async function createCoreIdentity({ state_directory, owner_membership_id,
       expected_email: OWNER.email,
     });
     const ownerSession = await completeBootstrap(ownerGrant.login_grant, OWNER);
+    // No external identity provider runs here, so a removal has no link to end.
     const employees = new PersonEmployeeLifecycleApplication(sessions, {
       next(prefix) { return `${prefix}_${randomUUID()}`; },
-    });
+    }, { endMembershipLinks() {} });
     const invitation = employees.invite({
       access_token: ownerSession.access_token,
       name: EMPLOYEE.name,

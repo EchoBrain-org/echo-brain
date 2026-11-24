@@ -344,7 +344,7 @@ export async function openOrganizationAuthorityService(
                   );
                 },
                 targetCurrent,
-                poster: (target) =>
+                poster: (target, reviewerActive) =>
                   createTargetBoundSlackApprovalPosterV1({
                     target,
                     activeConnection: () =>
@@ -353,6 +353,7 @@ export async function openOrganizationAuthorityService(
                         resources.coordinates,
                       ),
                     targetCurrent,
+                    reviewerActive,
                     botToken: slack.bot_token_source,
                     needsReinstall: (active) =>
                       slack.connection_health.needsReinstall(
