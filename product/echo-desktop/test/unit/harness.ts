@@ -121,10 +121,11 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         return ok({});
       }
       case 'timeline.move': {
-        // Compare and set, as the host moves: only while every named turn the file holds is where its group says.
+        // Compare and set, all or nothing, as the host moves: only while the file holds every named turn where its group says.
         const group = new Map((params.moves as { from: string | null; to: string; turns: string[] }[]).flatMap(move => move.turns.map(turn => [turn, move] as const)));
         const file = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
-        const moved = file.filter(turn => group.has(turn.id)).every(turn => (turn.thread ?? null) === group.get(turn.id)!.from);
+        const named = file.filter(turn => group.has(turn.id));
+        const moved = named.length === group.size && named.every(turn => (turn.thread ?? null) === group.get(turn.id)!.from);
         const now = moved ? file.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to } : turn)) : file;
         timelineFiles.set(fileOf(params.expect as Expect), now);
         return ok({ moved, turns: now.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: turn.thread ?? null })) });

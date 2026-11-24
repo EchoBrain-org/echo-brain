@@ -1614,6 +1614,24 @@ describe('merging threads, and Undo', () => {
     expect(store.getState().timeline.moving).toBe(false);
   });
 
+  it('keeps the line and its Undo when the file no longer holds a turn the Undo names: no turn moves back, and the page says so', async () => {
+    const { billing, pilot } = seeded();
+    const store = await opened();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    // The file lets one of the turns the merge moved go, as it lets the oldest go to make room.
+    timelineFiles.set(fileOf(ACCOUNT), kept().filter(each => each.id !== billing[1]!.id));
+    await store.undoMerge();
+    await flush();
+    expect(groups()[1]).toEqual([{ from: pilot[0]!.id, to: billing[0]!.id, turns: [billing[0]!.id, billing[1]!.id] }]);
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
+    expect(shown(store)).toMatchObject({ 'Who owns billing?': pilot[0]!.id, 'when is it due?': pilot[0]!.id });
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    expect(store.getState().timeline.moving).toBe(false);
+  });
+
   it('keeps a move that a save of a whole turn races, in the file and on the page: what a source check found of a moved turn stays, in its new thread', async () => {
     const { billing, pilot } = seeded();
     const store = await startStore();
@@ -2132,7 +2150,7 @@ describe('a question a model wrote goes only while every turn that could have in
     expect(JSON.stringify(asked().at(-1))).not.toContain(NAME);
   });
 
-  it('holds to what a request carried, as recorded, when a turn it carried was never saved and a merge left it behind', async () => {
+  it('moves no turn of a thread when the file does not hold one of them: a turn never saved is not left behind, and what a request carried still holds', async () => {
     const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
     seed(...ledger, ...pilot);
@@ -2145,7 +2163,7 @@ describe('a question a model wrote goes only while every turn that could have in
     // Its answer is not saved on this computer: it shows from memory until the timeline is read again.
     unsaved.add(leads);
     const store = await startStore();
-    const { TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
+    const { THREADS_NOT_SAVED, TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
     await store.openThread(pilot[0]!.id);
     await flush();
     await store.ask(leads);
@@ -2165,14 +2183,22 @@ describe('a question a model wrote goes only while every turn that could have in
     expect(signs.carried).toContain(lead.id);
     expect(signs.follows).not.toBe(lead.id);
     // Merged by hand into the ledger's thread, in one move that names every turn of the pilot's: the file has no such
-    // turn, so it is left behind.
+    // turn, so none of them moves, and the page says so.
     await store.openThread(ledger[0]!.id);
     await flush();
+    const before = filed();
     store.mergeThread(pilot[0]!.id);
     await flush();
-    expect(store.askThread().map(each => each.text)).not.toContain(leads);
-    expect(store.askThread().map(each => each.text)).toContain('and who signs it off?');
-    // Its source goes: the next follow-up names the turn it continues by the words typed for it.
+    expect((calls('timeline.move').at(-1)!.moves as { turns: string[] }[]).flatMap(group => group.turns)).toContain(lead.id);
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(filed()).toEqual(before);
+    expect(store.askThread().map(each => each.text)).toEqual(['Where is the ledger?']);
+    expect(store.mergedLine()).toBeNull();
+    // Back in the pilot's thread, every turn is still there. Its source goes: the next follow-up names the turn it
+    // continues by the words typed for it.
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    expect(store.askThread().map(each => each.text)).toContain(leads);
     orionGone();
     await store.ask('and where?');
     expect(asked().at(-1)!.previous).toMatchObject({ purpose: 'follow_up', question: 'and who signs it off?' });

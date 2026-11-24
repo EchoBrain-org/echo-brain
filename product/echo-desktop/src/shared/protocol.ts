@@ -794,9 +794,9 @@ export interface HostMethods {
    */
   'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
   /**
-   * Moves turns between threads in one write (ADR-0056), compare-and-set: only when every named turn the file holds is in
-   * its group's `from`; then sets only each one's thread. Answers whether it moved them, and the threads the file has the
-   * named turns it holds in now; a turn it does not hold is left out.
+   * Moves turns between threads in one write (ADR-0056), compare-and-set and all or nothing: only when the file holds every
+   * named turn, each in its group's `from`; then sets only each one's thread. Answers whether it moved them, and the
+   * threads the file has the named turns it holds in now; a turn it does not hold is left out.
    */
   'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { moved: boolean; turns: TimelineLabel[] } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */

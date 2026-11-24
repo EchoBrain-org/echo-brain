@@ -91,22 +91,25 @@ describe('the timeline file (C5)', () => {
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('moves turns between threads in one write, setting only their thread, and skips a turn the file does not hold (ADR-0056)', () => {
+  it('moves turns between threads in one write, setting only their thread, and none of them when the file does not hold one it names (ADR-0056)', () => {
     const first = turn(3, {});
     const second = turn(2, { unreadable: [0] });
     const third = turn(1);
     for (const each of [first, second, third]) putTimeline(person, ARI, { ...each, thread: first.id });
+    const before = readFileSync(timelinePath(person, ARI), 'utf8');
     vi.mocked(renameSync).mockClear();
+    // A turn it does not hold: the whole move is refused, nothing is written, and the answer says where each one it holds is.
     const absent = randomUUID();
-    const moved = moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }]);
-    expect(renameSync).toHaveBeenCalledTimes(1);
-    // The turn it does not hold is left out of the answer: skipped, and said so.
-    expect(moved).toEqual({ moved: true, turns: [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }] });
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }]);
-    // Nothing it holds named: nothing moves, nothing is written, and the answer names no turn.
-    vi.mocked(renameSync).mockClear();
-    expect(moveTimeline(person, ARI, [{ from: first.id, to: first.id, turns: [absent] }])).toEqual({ moved: true, turns: [] });
+    expect(moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }]))
+      .toEqual({ moved: false, turns: [{ turn: second.id, thread: first.id }, { turn: third.id, thread: first.id }] });
+    expect(moveTimeline(person, ARI, [{ from: first.id, to: first.id, turns: [absent] }])).toEqual({ moved: false, turns: [] });
     expect(renameSync).not.toHaveBeenCalled();
+    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
+    // Every one it names, in the thread the page believes: they move together.
+    expect(moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id] }]))
+      .toEqual({ moved: true, turns: [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }] });
+    expect(renameSync).toHaveBeenCalledTimes(1);
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }]);
   });
 
   it('moves nothing when a named turn is not in the thread the page believes, and answers where the file has each named turn', () => {
@@ -129,10 +132,11 @@ describe('the timeline file (C5)', () => {
     expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
   });
 
-  it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds nothing to move', () => {
+  it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds none of the turns named', () => {
     const first = turn(1);
     const move = [{ from: first.id, to: first.id, turns: [first.id] }];
-    expect(moveTimeline(person, ARI, move)).toEqual({ moved: true, turns: [] });
+    expect(moveTimeline(person, ARI, move)).toEqual({ moved: false, turns: [] });
+    expect(existsSync(timelinePath(person, ARI))).toBe(false);
     putTimeline(person, ARI, { ...first, thread: first.id });
     const path = timelinePath(person, ARI);
     for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {

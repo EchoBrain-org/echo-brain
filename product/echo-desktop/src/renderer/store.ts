@@ -4528,18 +4528,18 @@ function labelled(turn: TimelineTurn, thread: string | null): TimelineTurn {
 
 /**
  * Moves turns between threads (ADR-0056), each by id to the thread it goes
- * to, in one compare-and-set step the file confirms: the host moves them in
- * one write only while it has each in the thread it has here (`from`), and
- * answers where it has each now. Nothing shows moved before then. While it
- * lasts the timeline is `moving`, so no question, jump, merge or Undo starts
- * (askBusy), and a question still being prepared (Ask again's source check)
- * is dropped with the Ask it was prepared for (`ask.seq`). On the reply, for
- * the same account and move, the page takes where the file has each named turn
- * (its `thread` alone, so what a save made of it meanwhile stays): moved, that
- * is the move; refused because one was elsewhere than the page had it, nothing
- * moved and the page says the questions had moved; a turn the file does not
- * hold is skipped, and a move of none moved nothing and says so. A failure the
- * host answered moved nothing either, and the page says so. With no answer to
+ * to, in one compare-and-set step the file confirms, all or nothing: the host
+ * moves them in one write only while it holds each, in the thread it has here
+ * (`from`), and answers where it has each now. Nothing shows moved before
+ * then. While it lasts the timeline is `moving`, so no question, jump, merge
+ * or Undo starts (askBusy), and a question still being prepared (Ask again's
+ * source check) is dropped with the Ask it was prepared for (`ask.seq`). On
+ * the reply, for the same account and move, the page takes where the file has
+ * each named turn (its `thread` alone, so what a save made of it meanwhile
+ * stays): moved, that is the move. Refused, nothing moved: because the file
+ * does not hold a turn named, the page says so; because one was elsewhere
+ * than the page had it, it says the questions had moved. A failure the host
+ * answered moved nothing either, and the page says so. With no answer to
  * go by (none in time, or none at all) nothing changes here, any Undo goes,
  * since it would move turns the file may hold elsewhere, and the page says
  * ECHO could not confirm it: only reading the file again, as a restart does,
@@ -4550,12 +4550,14 @@ async function moveTurns(moves: readonly { readonly turn: string; readonly to: s
   const account = expect();
   const byId = new Map(state.timeline.turns.map(turn => [turn.id, turn]));
   const groups = new Map<string, { from: string | null; to: string; turns: string[] }>();
+  let named = 0;
   for (const { turn, to } of moves) {
     const from = byId.has(turn) ? byId.get(turn)!.thread ?? null : undefined;
     if (from === undefined) continue;
     const group = groups.get(`${from} ${to}`) ?? { from, to, turns: [] };
     group.turns.push(turn);
     groups.set(`${from} ${to}`, group);
+    named += 1;
   }
   if (!account || groups.size === 0) return null;
   const mine = ++moveSeq;
@@ -4568,8 +4570,8 @@ async function moveTurns(moves: readonly { readonly turn: string; readonly to: s
       const { moved, turns } = result.value;
       const held = new Map(turns.map(each => [each.turn, each.thread]));
       setTimeline({ ...state.timeline, turns: state.timeline.turns.map(turn => (held.has(turn.id) ? labelled(turn, held.get(turn.id)!) : turn)) });
-      if (moved && turns.length > 0) return turns.map(each => each.turn);
-      set({ toast: moved ? THREADS_NOT_SAVED : THREADS_MOVED });
+      if (moved) return turns.map(each => each.turn);
+      set({ toast: turns.length < named ? THREADS_NOT_SAVED : THREADS_MOVED });
       return 'failed';
     }
     if (result !== null) accountLost(result.failure);
