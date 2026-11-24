@@ -22,7 +22,7 @@ import {
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, behindEarlierLine, mergeable, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Caret, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -710,7 +710,8 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
 /**
  * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
  * first. A row jumps to its thread; the open thread's own is marked and does nothing. With a thread open every other row
- * has Merge, which merges that thread into the open one. The arrow keys move through the rows from the field, and Return
+ * of its home has Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another
+ * home has none. The arrow keys move through the rows from the field, and Return
  * there jumps to the first. While a question is on its way nothing here moves Ask.
  */
 export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
@@ -754,7 +755,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
                       title={thread.name} onClick={current ? undefined : then(() => void openThread(thread.id))}>
                       <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
                     </button>
-                    {open !== undefined && !current && (
+                    {mergeable(thread, open) && (
                       <button type="button" class="link-button thread-merge" data-testid="thread-merge" aria-label="Merge into this thread" disabled={busy}
                         onClick={then(() => mergeThread(thread.id))}>Merge</button>
                     )}

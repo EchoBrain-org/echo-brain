@@ -113,7 +113,9 @@ copy that a unit test proves equivalent.
   thread of the turn it followed in the same place. Ask shows one thread, and
   the list under the thread's name is the way to another: a row jumps to a
   thread at its place (Home, or its project's page), and Merge relabels a
-  thread's turns into the open one with `timeline.put`. A person is in a
+  thread's turns into the open one with `timeline.put`. Every turn of a
+  thread was asked in its home: a thread is asked in only there, and only
+  threads of one home merge. A person is in a
   thread once they have asked in it or picked it since Ask opened; the
   sidebar's Ask only shows the thread they last used. In a thread, `ask.run`
   carries the previous turn, the thread's older turns and the other threads,

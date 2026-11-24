@@ -97,6 +97,8 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(rows.locator('.name')).toHaveText(['Which tests fail?', 'When does the pilot start?', 'Who owns billing?']);
   await expect(rows.nth(0)).toHaveAttribute('aria-current', 'true');
   await expect(list.getByTestId('thread-find')).toBeFocused();
+  // No merge crosses homes (R9): the open thread is Apollo's only one, so no row offers Merge.
+  await expect(list.getByTestId('thread-merge')).toHaveCount(0);
   await picture(page, 'ask-thread-list');
   // Find a thread, by any question typed in it, in any case.
   await list.getByTestId('thread-find').fill('PILOT');
@@ -128,8 +130,10 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await expect(page.getByTestId('ask-field')).toBeFocused();
-  // A click jumps to Apollo's thread, on Apollo's page: the chip names it, and a question typed there is asked in Apollo.
+  // From a thread with no project, only the other thread with no project offers Merge: Apollo's row has none.
   await name.click();
+  await expect(list.locator('.thread-item').filter({ has: page.getByTestId('thread-merge') }).locator('.name')).toHaveText(['Who owns billing?']);
+  // A click jumps to Apollo's thread, on Apollo's page: the chip names it, and a question typed there is asked in Apollo.
   await rows.filter({ hasText: 'Which tests fail?' }).click();
   await expect(name).toHaveText('Which tests fail?');
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
