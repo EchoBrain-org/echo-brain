@@ -75,11 +75,12 @@ and ECHO works out which earlier conversation a question continues.
 7. **Merging.** The merged thread's turns join the open thread in time order.
    One faint line says "Merged with (name) · Undo". ECHO also merges on its
    own when the answer names another thread as plainly the same subject, in
-   the same home only, with the same line; when the answer moved Ask to
-   another thread, that merge happens once the question asked again there is
-   answered. Undo is offered until the next question, jump or close. While a
-   merge or an Undo is being saved nothing else can be asked, jumped to or
-   merged; if a save fails, the page shows what the file holds and says so.
+   the same home only, with the same line; when the answer moves Ask to
+   another thread, that merge happens there before the question is asked
+   again. Undo is offered until the next question, jump or close. A merge or
+   an Undo shows once this computer has saved it, and nothing else can be
+   asked, jumped to or merged until then. If it cannot be saved, nothing
+   moves and the page says so.
 8. **Unchanged:** the bar, the scope chip, progress, answers, sources, Copy,
    Ask again (it stays in its thread), "Which one?" between things inside one
    answer, drafted follow-ups, the sidebar's Ask (it opens the thread asked
@@ -265,8 +266,10 @@ interface PersonAnswerResponseV8 {
   Every turn saved from now on has it. The host accepts only a turn id there.
 - `'ask.run'` params gain `threads?`; `Answer` gains `thread?` and `merge?`,
   which are never saved on a turn.
-- A merge saves each moved turn with the open thread's id through
-  `timeline.put`. Undo saves them back.
+- A merge or an Undo is one `timeline.move`: the host relabels the turns in
+  one write of the file, and the page shows the move once the host says it
+  is saved. A `timeline.put` never relabels a turn that already has a thread,
+  so saving a turn for another reason cannot undo a move.
 - A thread's sources are checked when it opens, as a place's thread is today,
   with the five-minute freshness kept per thread.
 - A list the host's validator refuses is not sent: the Ask goes without
