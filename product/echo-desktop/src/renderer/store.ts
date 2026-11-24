@@ -65,9 +65,12 @@ type AskHow =
    * The person's own words. `follows`: the turn of the thread they are in that it continues, where the answer lands; null
    * for none, and the answer then starts a thread. `placed`: whether it is to be placed (ADR-0056), and so carries the
    * threads it may belong to, a list that goes even when empty; false once a jump or the person has said where it goes
-   * (asked again in a thread, or as a new question), so nothing moves it again.
+   * (asked again in a thread, or as a new question), so nothing moves it again. `merge`: the threads, by id, that the
+   * answer which sent the question to this thread said are on its subject. They join the thread when this question's
+   * answer lands in it and not before, so a question that is cancelled or fails has moved nothing, and Try again still
+   * knows them.
    */
-  | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean }
+  | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean; readonly merge: readonly string[] }
   /** A turn's question again: in its scope, carrying the turn (Ask again), or everywhere, carrying nothing (Ask everywhere). */
   | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
   /** A choice of "Which one?", model-written, for the person's follow-up `typed` (null: not known) that continued `follows`. */
@@ -3910,7 +3913,7 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
   const continued = open && open.asked.length === open.openedAt ? open.opened : null;
   // A thread is asked in only where it lives, and continues only a turn asked there (R9).
   const follows = followedTurn(homeTurns(threadIn(), scope), continued)?.id ?? null;
-  return askAs({ kind: 'typed', question: question.trim(), follows, placed: true }, scope);
+  return askAs({ kind: 'typed', question: question.trim(), follows, placed: true, merge: [] }, scope);
 }
 
 /**
@@ -3924,19 +3927,24 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
  *
  * The person's own question carries more (ADR-0056): behind the turn it continues, that thread's older turns, checked in
  * the same one check; and, while `how.placed`, the threads it may be placed in, a list that goes even when it is empty,
- * so the answer can always say the question starts a thread (askCarries). The answer lands in the thread of the turn it
- * continued or asked again, or starts one: when it continued none, asked everywhere, or says the subject is new. The
- * person is then in that thread. Every turn of a thread was asked in its home (R9), by the one check (homeTurns, threadAt):
- * a question continues a turn, carries its thread's turns and has its answer join the thread only when it is asked in
- * that thread's home, so no turn is ever kept in a thread of another scope. One that says the question belongs to other threads answers nothing: Ask moves to the
- * one thread named when that stays in the place asked, and asks the same words there; anything else waits for the
- * person ("Which one?"). `resumed`: the same question going on in the thread Ask just moved it to, so the merged line
- * that move made stays.
+ * so the answer can always say the question starts a thread (askCarries). The answer lands in the thread the question
+ * was asked in: that of the turn it continued or asked again, named when it was asked and never worked out again from
+ * that turn, while that is still a thread. It starts one when it continued none, asked everywhere, says the subject is
+ * new, or the thread is gone. The person is then in the thread it landed in. Every turn of a thread was asked in its
+ * home (R9), by the one check (homeTurns, threadAt): a question continues a turn, carries its thread's turns and has
+ * its answer join the thread only when it is asked in that thread's home, so no turn is ever kept in a thread of
+ * another scope.
+ *
+ * An answer that says the question belongs to other threads answers nothing: Ask moves to the one thread named when
+ * that stays in the place asked, and asks the same words there; anything else waits for the person ("Which one?"). The
+ * words asked again continue that thread's own latest turn, and the threads the answer said are on its subject
+ * (`how.merge`) join it only once that question's answer has landed there: a turn never follows one that an Undo of
+ * the merge would take out of its thread, and a question that is cancelled or fails has moved nothing.
  *
  * Every wait re-checks before it goes on: the Ask is still the one on its way (`seq`, which a cancel, a jump, closing
  * Ask and every page change replace), and the account is the one that asked.
  */
-async function askAs(how: AskHow, scope: AskScope, resumed = false): Promise<void> {
+async function askAs(how: AskHow, scope: AskScope): Promise<void> {
   const account = expect();
   if (!account || state.ask?.asking) return;
   const fromId = 'turn' in how ? how.turn : how.follows;
@@ -3973,7 +3981,7 @@ async function askAs(how: AskHow, scope: AskScope, resumed = false): Promise<voi
   // Ask again in the open thread is the person picking it: they are in it from here.
   const open = again && view.thread?.id === within ? { ...view.thread, entered: true } : view.thread;
   set({
-    ask: { ...view, seq: mine, thread: open, asking: { ...named, progress: startProgress(started) }, clarify: null, failed: null, merged: resumed ? view.merged : null,
+    ask: { ...view, seq: mine, thread: open, asking: { ...named, progress: startProgress(started) }, clarify: null, failed: null, merged: null,
       ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
@@ -4021,8 +4029,7 @@ async function askAs(how: AskHow, scope: AskScope, resumed = false): Promise<voi
       // One thread, living where the question was asked: Ask moves to it without a click, which never changes a scope
       // (R5), and asks the same words again there as a plain follow-up that nothing can place elsewhere.
       showThread(only.id, null, true, current.forQuestion);
-      mergeInto(only.id, same);
-      void askAs({ kind: 'typed', question: text, follows: followedTurn(askThread(), null)?.id ?? null, placed: false }, scope, true);
+      void askAs({ kind: 'typed', question: text, follows: followedTurn(homeTurns(only, scope), null)?.id ?? null, placed: false, merge: same }, scope);
       return;
     }
     set({ ask: { ...current, asking: null, clarify: { ...named, kind: 'threads', threads: belongs.map(other => other.id), merge: same } } });
@@ -4055,7 +4062,9 @@ async function askAs(how: AskHow, scope: AskScope, resumed = false): Promise<voi
   // the other from its start.
   const here = landed === current.thread?.id ? current : { ...current, latest: null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false };
   set({ ask: { ...here, thread: { id: landed, entered: true }, asking: null, asked: [...here.asked, turn.id], took: shown } });
-  mergeInto(landed, sent(merge).map(other => other.id));
+  // The threads on its subject join the thread it landed in: those this answer names, and those named when the question
+  // was sent to this thread, which is then the one it landed in.
+  mergeInto(landed, [...(how.kind === 'typed' && landed === within ? how.merge : []), ...sent(merge).map(other => other.id)]);
   startSources(turn.id);
   // Follow-ups it drafted wait, not sent, in your own list (ADR-0053): Home's Send rows list them.
   if (kept.follow_ups) void loadHome(false);
@@ -4160,8 +4169,9 @@ export function clarifyThreads(current: State = state): ThreadChoice[] {
 
 /**
  * A thread of "Which one?" (ADR-0056): Ask jumps to it, moving to its place when it lives elsewhere, and asks the typed
- * words again there, on purpose: as a plain follow-up of that thread, with no other thread riding, so nothing places it
- * again. The threads the answer said are on its subject merge into it where they share its home. The words are asked in
+ * words again there, on purpose: as a plain follow-up of that thread's own latest turn, with no other thread riding, so
+ * nothing places it again. The threads the answer said are on its subject merge into it, where they share its home, once
+ * that question's answer lands there (askAs). The words are asked in
  * the thread's home and nowhere else (R9): when that is a project the person cannot ask in now, nothing is asked and
  * nothing moves; the page says so, and that thread's button goes, leaving the others and "New question". A jump that
  * does not happen otherwise (the thread gone, its project's read failed, Ask left meanwhile) asks nothing.
@@ -4177,8 +4187,7 @@ export async function chooseThread(id: string): Promise<void> {
   }
   const thread = threadOf(id);
   if (jumped !== 'shown' || !thread || view?.thread?.id !== id || view.asking) return;
-  mergeInto(id, clarify.merge);
-  void askAs({ kind: 'typed', question: clarify.question, follows: followedTurn(askThread(), null)?.id ?? null, placed: false }, thread.home, true);
+  void askAs({ kind: 'typed', question: clarify.question, follows: followedTurn(homeTurns(thread, thread.home), null)?.id ?? null, placed: false, merge: clarify.merge }, thread.home);
 }
 
 /**
@@ -4188,7 +4197,7 @@ export async function chooseThread(id: string): Promise<void> {
 export function askNewQuestion(): void {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'threads' || state.ask?.asking) return;
-  void askAs({ kind: 'typed', question: clarify.question, follows: null, placed: false }, clarify.scope);
+  void askAs({ kind: 'typed', question: clarify.question, follows: null, placed: false, merge: [] }, clarify.scope);
 }
 
 /** Try again, on a question that failed: asked as it was, what it builds from an earlier turn built again (askAs). */
@@ -4450,6 +4459,11 @@ export function undoMerge(): void {
   set({ ask: { ...view, merged: null } });
   if (undo.length === 0) return;
   moveTurns(undo.map(({ turn, from }) => ({ turn, to: from })));
+  // A question that failed waits in the thread it was asked in, built from one of its turns. Were that turn among those
+  // that just left, Try again would ask it in another thread than the one that shows: the failed question goes instead.
+  const failed = state.ask?.failed;
+  const built = failed ? turnOf('turn' in failed.how ? failed.how.turn : failed.how.follows) : undefined;
+  if (failed && built && failed.thread !== null && threadIdOf(built) !== failed.thread) set({ ask: { ...state.ask!, failed: null } });
   // The pane may be on a turn that just left the thread.
   startSources();
 }

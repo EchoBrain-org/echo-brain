@@ -234,6 +234,38 @@ test('a question that belongs to one other thread jumps there and is asked again
   await expect.poll(filed).toMatchObject({ 'Who owns billing?': 'Who owns billing?', 'did the date slip, same as billing?': 'When does the pilot start?' });
 });
 
+test('the threads on the subject of the one a question jumps to join it when the answer lands there, and Undo takes them back out', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  await back(page);
+  await askAtHome(page, 'Is the ledger closed?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  // Typed in the pilot's thread: it belongs to billing's, and the answer says the ledger's is on the same subject.
+  const question = 'who approves billing invoices, same as ledger?';
+  await page.getByTestId('ask-field').fill(question);
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('thread-name')).toHaveText('Who owns billing?');
+  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText(question);
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Is the ledger closed\?\s*Undo$/u);
+  // Asked again as a follow-up of billing's own turn, before the ledger's thread joined: nothing of that thread rode on it.
+  expect(asks().at(-1)).toMatchObject({ question, previous: { purpose: 'follow_up', question: 'Who owns billing?' } });
+  expect(asks().at(-1)!.previous).not.toHaveProperty('earlier');
+  await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Who owns billing?', [question]: 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
+  // The ledger's question joined as an earlier line, between billing's own turn and the answer, both in full.
+  await expect(page.getByTestId('timeline-question')).toHaveText(['Is the ledger closed?']);
+  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
+  // Undo takes the ledger's thread back out; the answer stays with the turn it followed.
+  await page.getByTestId('thread-undo').click();
+  await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
+  await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Is the ledger closed?', [question]: 'Who owns billing?' });
+});
+
 test('a question that could belong to several threads asks which one: a thread in a project names it, and picking it opens the project\'s page and asks there; "New question" starts a thread', async () => {
   run = await launch('ask-threads');
   const { page } = run;

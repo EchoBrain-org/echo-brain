@@ -1212,40 +1212,120 @@ describe('merging threads, and Undo', () => {
     expect(filed()).toMatchObject({ 'and the budget?': pilot[0]!.id, 'Who owns billing?': billing[0]!.id, 'when is it due?': billing[0]!.id });
   });
 
-  it('merges beside a jump: the threads on the subject of the one the question belongs to join it after the jump, and the line stays while it is asked there', async () => {
-    const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
-    const invoices = threadIn(GLOBAL, ['Who signs invoices?', 5 * DAY]);
-    const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
-    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
-    seed(...billing, ...invoices, ...ledger, ...pilot);
-    const store = await opened();
-    const release = held.hold('ask.run');
-    const first = store.ask('who approves them?');
-    await flush();
-    release(elsewhere(asked()[0]!, [placeOf(asked()[0]!, 'Who owns billing?')], { merge: [placeOf(asked()[0]!, 'Who signs invoices?'), placeOf(asked()[0]!, 'Where is the ledger?')] }));
-    const again = held.hold('ask.run');
-    await flush();
-    // Jumped, merged, and asking again there: the line shows while the question is on its way.
-    expect(store.threadShown()?.id).toBe(billing[0]!.id);
-    expect(store.getState().ask?.asking?.question).toBe('who approves them?');
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id, 'When does the pilot start?': pilot[0]!.id });
-    // It continues the merged thread's latest turn, with nothing riding that could place it again.
-    expect(asked()[1]).toMatchObject({ previous: { question: 'Where is the ledger?' } });
-    expect(asked()[1]).not.toHaveProperty('threads');
-    // Undo waits for the answer, as every thread action does while a question is on its way.
-    store.undoMerge();
-    await flush();
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id });
-    again(ok(answerOf('who approves them?')));
-    await first;
-    await flush();
-    expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id });
-    expect(store.mergedLine()).toBe('Merged 2 threads');
-    // The person's next question ends the offer.
-    await store.ask('and since when?');
-    expect(store.mergedLine()).toBeNull();
+  describe('beside a jump', () => {
+    /** Four threads with no project, Ask on the pilot's; a question the answer sends to billing's, naming two more on its subject. */
+    const sent = async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const invoices = threadIn(GLOBAL, ['Who signs invoices?', 5 * DAY]);
+      const ledger = threadIn(GLOBAL, ['Where is the ledger?', 4 * DAY]);
+      const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+      seed(...billing, ...invoices, ...ledger, ...pilot);
+      const store = await opened();
+      const release = held.hold('ask.run');
+      const first = store.ask('who approves them?');
+      await flush();
+      const again = held.hold('ask.run');
+      release(elsewhere(asked()[0]!, [placeOf(asked()[0]!, 'Who owns billing?')], { merge: [placeOf(asked()[0]!, 'Who signs invoices?'), placeOf(asked()[0]!, 'Where is the ledger?')] }));
+      await flush();
+      return { store, first, again, billing, invoices, ledger, pilot };
+    };
+    /** Whether every kept turn that followed one is in the thread of the turn it followed. */
+    const followsHold = () => {
+      const ids = threadIds(kept());
+      return kept().every(each => each.follows == null || ids.get(each.follows) === ids.get(each.id));
+    };
+
+    it('joins the threads on the subject once the answer has landed, never before: the words asked again continue the thread\'s own latest turn', async () => {
+      const { store, first, again, billing, invoices, ledger, pilot } = await sent();
+      // Jumped, and asking again there. Nothing has moved yet, and no line offers an Undo.
+      expect(store.threadShown()?.id).toBe(billing[0]!.id);
+      expect(store.getState().ask?.asking).toMatchObject({ question: 'who approves them?', thread: billing[0]!.id });
+      expect(store.mergedLine()).toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      // It continues billing's own turn, though the ledger's is newer, with nothing riding that could place it again.
+      expect(asked()[1]).toMatchObject({ previous: { question: 'Who owns billing?' } });
+      expect(asked()[1]).not.toHaveProperty('threads');
+      again(ok(answerOf('who approves them?')));
+      await first;
+      await flush();
+      expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id, follows: billing[0]!.id });
+      expect(store.mergedLine()).toBe('Merged 2 threads');
+      expect(filed()).toMatchObject({ 'Who signs invoices?': billing[0]!.id, 'Where is the ledger?': billing[0]!.id, 'When does the pilot start?': pilot[0]!.id });
+      expect(followsHold()).toBe(true);
+      // Undo takes the two threads back out, and the answer still follows a turn of its own thread.
+      store.undoMerge();
+      await flush();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id, 'who approves them?': billing[0]!.id });
+      expect(store.askThread().map(each => each.text)).toEqual(['Who owns billing?', 'who approves them?']);
+      expect(followsHold()).toBe(true);
+      // The next question continues the answer, in billing's thread.
+      await store.ask('and since when?');
+      expect(asked().at(-1)).toMatchObject({ previous: { question: 'who approves them?' } });
+      expect(kept().at(-1)).toMatchObject({ thread: billing[0]!.id });
+    });
+
+    it('moves nothing when the words asked again fail: there is nothing to undo, Try again asks them the same way, and the threads join when that answer lands', async () => {
+      const { store, first, again, billing, invoices, ledger } = await sent();
+      again(fail('unavailable', { retryable: true }));
+      await first;
+      await flush();
+      expect(store.getState().ask).toMatchObject({ thread: { id: billing[0]!.id, entered: true }, merged: null, failed: { question: 'who approves them?', thread: billing[0]!.id } });
+      const puts = calls('timeline.put').length;
+      store.undoMerge();
+      await flush();
+      expect(calls('timeline.put')).toHaveLength(puts);
+      expect(store.getState().ask?.failed).not.toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      store.retryAsk();
+      await flush();
+      expect(asked()[2]).toMatchObject({ question: 'who approves them?', previous: { question: 'Who owns billing?' } });
+      expect(asked()[2]).not.toHaveProperty('threads');
+      expect(kept().at(-1)).toMatchObject({ text: 'who approves them?', thread: billing[0]!.id, follows: billing[0]!.id });
+      expect(store.mergedLine()).toBe('Merged 2 threads');
+      store.undoMerge();
+      await flush();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id, 'who approves them?': billing[0]!.id });
+      expect(followsHold()).toBe(true);
+    });
+
+    it('moves nothing when the words asked again are cancelled', async () => {
+      const { store, again, billing, invoices, ledger } = await sent();
+      store.cancelAsk();
+      again(ok(answerOf('who approves them?')));
+      await flush();
+      expect(kept()).toHaveLength(4);
+      expect(store.mergedLine()).toBeNull();
+      expect(filed()).toMatchObject({ 'Who signs invoices?': invoices[0]!.id, 'Where is the ledger?': ledger[0]!.id });
+      expect(store.threadShown()?.id).toBe(billing[0]!.id);
+    });
+
+    it('joins them after a pick of "Which one?" too, once the picked thread\'s answer lands, and only those that live where it does', async () => {
+      const billing = threadIn(GLOBAL, ['Who owns billing?', 6 * DAY]);
+      const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
+      const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
+      seed(...billing, ...tests, ...flaky);
+      // One thread named, in another home, so the page asks (R5); two more are said to be on its subject.
+      script = params => (params.threads
+        ? elsewhere(params, [placeOf(params, 'Which tests fail?')], { merge: [placeOf(params, 'Which tests are flaky?'), placeOf(params, 'Who owns billing?')] }) : null);
+      const store = await startStore();
+      await store.ask('are they fixed?');
+      await flush();
+      expect(store.getState().ask?.clarify).toMatchObject({ kind: 'threads', threads: [tests[0]!.id], merge: [flaky[0]!.id, billing[0]!.id] });
+      const release = held.hold('ask.run');
+      const pick = store.chooseThread(tests[0]!.id);
+      await flush();
+      // Jumped to Apollo and asking there, continuing the picked thread's own turn: nothing has moved yet.
+      expect(asked()[1]).toMatchObject({ scope: inApollo, previous: { question: 'Which tests fail?' } });
+      expect(filed()['Which tests are flaky?']).toBe(flaky[0]!.id);
+      expect(store.mergedLine()).toBeNull();
+      release(ok(answerOf('are they fixed?', inApollo)));
+      await pick;
+      await flush();
+      expect(kept().at(-1)).toMatchObject({ text: 'are they fixed?', scope: inApollo, thread: tests[0]!.id, follows: tests[0]!.id });
+      // Apollo's other thread joined; the one with no project lives elsewhere, and stays (R9).
+      expect(store.mergedLine()).toBe('Merged with Which tests are flaky?');
+      expect(filed()).toMatchObject({ 'Which tests are flaky?': tests[0]!.id, 'Who owns billing?': billing[0]!.id });
+    });
   });
 });
 
