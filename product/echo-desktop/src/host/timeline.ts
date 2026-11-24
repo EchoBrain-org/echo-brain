@@ -150,7 +150,8 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
  */
 export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): { moved: boolean; turns: TimelineLabel[] } {
   const group = new Map(moves.flatMap(move => move.turns.map(turn => [turn, move] as const)));
-  const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' ? turn.thread : null);
+  // A thread the file holds that is not a turn's id names none, as a put takes it: never compared or answered as one.
+  const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' && ID.test(turn.thread) ? turn.thread : null);
   const legacy = (turn: StoredTurn) => (turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {});
   let moved = true;
   const turns = rewriteTimeline(personDirectory, account, (held) => {

@@ -132,6 +132,16 @@ describe('the timeline file (C5)', () => {
     expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
   });
 
+  it('takes a thread the file holds that is not a turn\'s id as none, in what a move compares and in what it answers', () => {
+    const [first, second] = [turn(2), turn(1)];
+    putTimeline(person, ARI, { ...second, thread: second.id });
+    // Written by something other than a put, which takes only a turn's id there.
+    putTimeline(person, ARI, { ...first, thread: 'thread-1' });
+    expect(moveTimeline(person, ARI, [{ from: 'thread-1', to: second.id, turns: [first.id] }])).toEqual({ moved: false, turns: [{ turn: first.id, thread: null }] });
+    expect(moveTimeline(person, ARI, [{ from: null, to: second.id, turns: [first.id] }])).toEqual({ moved: true, turns: [{ turn: first.id, thread: second.id }] });
+    expect(readTimeline(person, ARI)[1]).toEqual({ ...first, thread: second.id });
+  });
+
   it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds none of the turns named', () => {
     const first = turn(1);
     const move = [{ from: first.id, to: first.id, turns: [first.id] }];
