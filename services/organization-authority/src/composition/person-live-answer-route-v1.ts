@@ -157,20 +157,16 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
     const scope = scopeOf(input.request);
     // The asker's previous turn (ADR-0047), when the request carries it: as sent, until the Authority has checked it.
     const sent = input.request.previous;
-    // The asker's other threads (ADR-0056), as sent: their own typed questions, which reach only the Ask's resolver. Nothing
-    // about them is stored, logged or audited beyond the request's prompt digest.
+    // Other threads (ADR-0056) reach only the resolver: nothing of them is kept beyond the prompt digest.
     const threads = input.request.threads;
-    // Without the client's clock (`time_context`), the server's day as the request arrived, read once: a snapshot restart
-    // after midnight is shown the same day, so its kept resolution still applies and is not paid for twice.
+    // Without the client's clock, the day is read once, so a restart after midnight reuses the resolution it paid for.
     const today = input.time_context === undefined ? new Date().toISOString().slice(0, 10) : undefined;
     input.signal?.throwIfAborted();
     // The resolver's paid result, held between this request's attempts; the Ask decides when one may reuse it (AgenticFollowUpCarryV1).
     let resolved: AgenticResolutionKeptV1 | undefined;
     // Authenticated and validated once it starts: anything that fails from then on fails inside the stream.
     return runPersonAskV1(options, input, async ({ authorization, context, signal }) => {
-      // Checked for the caller at the start of every attempt, a snapshot restart's included: only the sentences of the
-      // previous turn and of the thread's older turns whose every citation they read then reach the resolver or any model
-      // of that attempt.
+      // Checked again on every attempt, a restart's included (R6, readablePreviousV1).
       const previous = sent === undefined ? undefined
         : await readablePreviousV1(sent, { access_token: input.access_token, check: options.previous_check, signal });
       const follow_up: AgenticFollowUpCarryV1 = { ...(resolved === undefined ? {} : { resolved }), on_resolved: kept => { resolved = kept; } };
