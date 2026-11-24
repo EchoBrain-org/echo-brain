@@ -1,4 +1,4 @@
-import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAnswerThreadV1, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
 import type { AgenticFollowUpCarryV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
@@ -37,7 +37,10 @@ export interface AgenticAskProgressRequestV1 {
   elapsed(): number;
 }
 
-/** One streamed Ask: the question, its V3 sink, and the asker's previous turn when the request carried it (ADR-0047). */
+/**
+ * One streamed Ask: the question, its V3 sink, and what the request carried beside it: the asker's previous turn
+ * (ADR-0047) and their other threads (ADR-0056).
+ */
 export interface AgenticAskProgressInputV3 {
   readonly question: string;
   readonly signal?: AbortSignal;
@@ -45,7 +48,9 @@ export interface AgenticAskProgressInputV3 {
   /** The request this run is an attempt of; without it, the run is the whole request. */
   readonly request?: AgenticAskProgressRequestV1;
   readonly previous?: PersonAnswerPreviousV1;
-  /** A follow-up's resolution carried from an earlier attempt of the same request, or where to report this one's. */
+  /** The asker's other threads, as the request carried them: context for placing the question, never evidence. */
+  readonly threads?: readonly PersonAnswerThreadV1[];
+  /** What an earlier attempt of the same request resolved, and where to report what this one resolves. */
   readonly follow_up?: AgenticFollowUpCarryV1;
 }
 
