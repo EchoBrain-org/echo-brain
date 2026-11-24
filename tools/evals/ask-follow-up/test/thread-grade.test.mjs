@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gradeThreadTrial, summarizeThreadRules, THREAD_THRESHOLDS } from "../grade.mjs";
+import { gradeThreadTrial, loadThreadCases, summarizeThreadRules, THREAD_GROUPS, THREAD_THRESHOLDS, threadRunIsComplete } from "../grade.mjs";
 
 // Cases name threads from 1, as the resolver is shown them; the kernel's placement counts from 0.
 const continues = { group: "continues_open", expect: { thread: "open" } };
@@ -67,31 +67,127 @@ test("refuses a placement or a group it does not know, rather than grading it as
   assert.throws(() => gradeThreadTrial({ group: "another", expect: {} }, NEW), /unknown thread group/u);
 });
 
-test("rules: never guess, 90% routed, 90% left new, never a wrong merge; ECHO picks threads on rules 1 and 4", () => {
-  const trials = (group, passed, total, more = {}) => Array.from({ length: total }, (_, index) => ({ group, passed: index < passed, named_all: false, merged: false, ...more }));
-  const severalTrials = (namedAll) => Array.from({ length: 18 }, (_, index) => ({ group: "several_others", passed: index < namedAll, named_all: index < namedAll, merged: false }));
-  const twice = (passed) => Array.from({ length: 12 }, (_, index) => ({ group: "same_subject_twice", passed: index < passed, named_all: false, merged: index < passed }));
-  const base = [...trials("continues_open", 17, 18), ...trials("one_other", 16, 18), ...trials("new_subject", 17, 18), ...twice(9)];
-  const passing = summarizeThreadRules([...severalTrials(18), ...base]);
-  assert.deepEqual([passing.echo_picks_threads, passing.founder_review], [true, false]);
+/** A registered set shaped like the real one: each group's number of cases, by id. */
+const REGISTERED = Object.entries(THREAD_GROUPS).flatMap(([group, count]) => Array.from({ length: count }, (_, index) => ({ id: `${group}-${index + 1}`, group })));
+/** What a trial that meets its group's expectation is graded as. */
+const met = (group) => ({ passed: true, named_all: group === "several_others", merged: group === "same_subject_twice" });
+const MISSED = { passed: false, named_all: false, merged: false };
+/**
+ * The whole registered run: every case, trials 1 to 3. Every trial meets its expectation, but the first `misses[group]`
+ * trials of a group, which miss it, and any trial `change` returns another grade for.
+ */
+function wholeRun(misses = {}, change = () => undefined) {
+  const seen = {};
+  return REGISTERED.flatMap((entry) => [1, 2, 3].map((trial) => {
+    seen[entry.group] = (seen[entry.group] ?? 0) + 1;
+    const graded = seen[entry.group] <= (misses[entry.group] ?? 0) ? MISSED : met(entry.group);
+    return { case_id: entry.id, trial, group: entry.group, ...graded, ...change(entry, trial) };
+  }));
+}
+const decide = (trials) => summarizeThreadRules(trials, REGISTERED);
+
+test("rules: never guess, 90% routed, 90% left new, never a wrong merge; ECHO picks threads on rules 1, 2 and 4", () => {
+  const passing = decide(wholeRun({ continues_open: 1, one_other: 2, new_subject: 1, same_subject_twice: 3 }));
+  assert.deepEqual([passing.complete, passing.echo_picks_threads, passing.founder_review], [true, true, false]);
   assert.deepEqual(passing.rules.never_guess, { rule: 1, named_all_trials: 18, trials: 18, passed: true });
   assert.deepEqual(passing.rules.route_the_obvious, { rule: 2, passed_trials: 33, trials: 36, rate: 33 / 36, threshold: THREAD_THRESHOLDS.route_the_obvious, passed: true });
   assert.deepEqual(passing.rules.leave_new_subjects_alone, { rule: 3, passed_trials: 17, trials: 18, rate: 17 / 18, threshold: THREAD_THRESHOLDS.leave_new_subjects_alone, passed: true });
   assert.deepEqual(passing.rules.never_merge_wrongly, { rule: 4, merged_trials: 0, trials: 72, passed: true });
-  // Rule 5 is reported for the founder: it has no threshold and decides nothing.
+  // Rule 5 is reported for the founder: it has no threshold and decides nothing, even when no duplicate was merged.
   assert.deepEqual(passing.rules.merge_the_obvious, { rule: 5, passed_trials: 9, trials: 12, rate: 0.75 });
-  assert.equal(summarizeThreadRules([...severalTrials(18), ...base.filter((trial) => trial.group !== "same_subject_twice"), ...twice(0)]).echo_picks_threads, true);
+  assert.equal(decide(wholeRun({ same_subject_twice: 12 })).echo_picks_threads, true);
   // One trial that names a single thread where several fit, and ECHO does not pick threads.
-  const guessed = summarizeThreadRules([...severalTrials(17), ...base]);
-  assert.deepEqual([guessed.rules.never_guess.passed, guessed.echo_picks_threads], [false, false]);
+  const guessed = decide(wholeRun({ several_others: 1 }));
+  assert.deepEqual([guessed.rules.never_guess, guessed.echo_picks_threads], [{ rule: 1, named_all_trials: 17, trials: 18, passed: false }, false]);
   // One merge outside the same-subject-twice group, in any group, and ECHO does not pick threads.
   for (const group of ["continues_open", "one_other", "several_others", "new_subject"]) {
-    const merged = summarizeThreadRules([...severalTrials(18), ...base, { group, passed: true, named_all: group === "several_others", merged: true }]);
+    const merged = decide(wholeRun({}, (entry, trial) => (entry.id === `${group}-2` && trial === 3 ? { merged: true } : undefined)));
     assert.deepEqual([merged.rules.never_merge_wrongly.merged_trials, merged.rules.never_merge_wrongly.passed, merged.echo_picks_threads], [1, false, false], group);
   }
-  // Rules 2 and 3 are reported against their thresholds, and go to the founder when missed; they are not the gate.
-  const misrouted = summarizeThreadRules([...severalTrials(18), ...trials("continues_open", 16, 18), ...trials("one_other", 16, 18), ...trials("new_subject", 16, 18), ...twice(9)]);
-  assert.deepEqual([misrouted.rules.route_the_obvious.passed, misrouted.rules.leave_new_subjects_alone.passed, misrouted.echo_picks_threads, misrouted.founder_review], [false, false, true, true]);
-  // A run of part of the set cannot pass a rule whose trials it did not run.
-  assert.equal(summarizeThreadRules(trials("new_subject", 18, 18)).echo_picks_threads, false);
+  // Rule 2 decides too: 32 of 36 routed is under 90%, and ECHO does not pick threads, though it never guessed or merged.
+  const misrouted = decide(wholeRun({ continues_open: 2, one_other: 2 }));
+  assert.deepEqual([misrouted.rules.never_guess.passed, misrouted.rules.route_the_obvious.passed, misrouted.rules.never_merge_wrongly.passed, misrouted.echo_picks_threads], [true, false, true, false]);
+  assert.equal(decide(wholeRun({ continues_open: 2, one_other: 1 })).echo_picks_threads, true);
+  // Rule 3 is reported against its threshold and goes to the founder when missed; it is not the gate.
+  const filed = decide(wholeRun({ new_subject: 2 }));
+  assert.deepEqual([filed.rules.leave_new_subjects_alone.passed, filed.echo_picks_threads, filed.founder_review], [false, true, true]);
+});
+
+test("only the whole registered run decides: every case once, three trials each", () => {
+  const whole = wholeRun();
+  assert.equal(threadRunIsComplete(whole, REGISTERED), true);
+  assert.deepEqual([decide(whole).complete, decide(whole).echo_picks_threads], [true, true]);
+  // The same trials in another order are the same run.
+  assert.equal(threadRunIsComplete([...whole].reverse(), REGISTERED), true);
+  const lacking = {
+    "one trial short": whole.slice(1),
+    "two trials of each case": whole.filter((trial) => trial.trial <= 2),
+    "one case alone": whole.filter((trial) => trial.case_id === "several_others-1"),
+    "one group alone": whole.filter((trial) => trial.group === "several_others"),
+    "a case run twice in another's place": whole.map((trial) => (trial.case_id === "one_other-1" ? { ...trial, case_id: "one_other-2" } : trial)),
+    "a trial numbered twice": whole.map((trial) => (trial.case_id === "new_subject-1" && trial.trial === 3 ? { ...trial, trial: 2 } : trial)),
+    "a fourth trial": [...whole.slice(1), { ...whole[0], trial: 4 }],
+    "a case that is not registered": whole.map((trial) => (trial.case_id === "new_subject-1" ? { ...trial, case_id: "new_subject-9" } : trial)),
+    "a case graded as another group's": whole.map((trial) => (trial.case_id === "new_subject-1" ? { ...trial, group: "continues_open" } : trial)),
+    "every trial twice": [...whole, ...whole],
+    "no trial": [],
+  };
+  for (const [name, trials] of Object.entries(lacking)) {
+    assert.equal(threadRunIsComplete(trials, REGISTERED), false, name);
+    // Whatever its rules say, a run that is not the whole registered run never lets ECHO pick threads.
+    assert.deepEqual([decide(trials).complete, decide(trials).echo_picks_threads], [false, false], name);
+  }
+  // The single case with one passing trial that used to set the gate.
+  const single = decide([{ case_id: "several_others-1", trial: 1, group: "several_others", ...met("several_others") }]);
+  assert.deepEqual([single.rules.never_guess.passed, single.echo_picks_threads], [true, false]);
+  // A registered set that names a case twice has no whole run.
+  assert.equal(threadRunIsComplete(whole, [...REGISTERED, REGISTERED[0]]), false);
+});
+
+/** A placement as the kernel returns it for a policy that names these thread numbers (from 1), reading nothing. */
+const naming = (numbers) => ({ thread: "other", threads: numbers.map((n) => n - 1), merge: [] });
+/** The whole registered run of a policy over the real cases: three trials of what it places each case as. */
+function policyRun(document, policy) {
+  return document.cases.flatMap((entry) => [1, 2, 3].map((trial) => ({ case_id: entry.id, trial, group: entry.group, ...gradeThreadTrial(entry, policy(entry)) })));
+}
+
+test("no constant policy qualifies over the registered cases: one that reads nothing cannot let ECHO pick threads", () => {
+  const document = loadThreadCases();
+  const all = (entry) => entry.threads.map((_, index) => index + 1);
+  const verdict = (policy) => summarizeThreadRules(policyRun(document, policy), document.cases);
+  // The registered expectations themselves do qualify: the gate can be passed.
+  const expected = verdict((entry) => (entry.expect.thread === "open" ? { thread: "open", resolution: { resolution: "same" }, merge: (entry.expect.merge ?? []).map((n) => n - 1) }
+    : entry.expect.thread === "new" ? { thread: "new" } : { thread: "other", threads: entry.expect.threads.map((n) => n - 1), merge: (entry.expect.merge ?? []).map((n) => n - 1) }));
+  assert.deepEqual([expected.complete, expected.echo_picks_threads], [true, true]);
+
+  // "Name every other thread for every question" never guesses and never merges. It routes nothing, and rule 2 decides.
+  const every = verdict((entry) => naming(all(entry)));
+  assert.deepEqual([every.complete, every.rules.never_guess.passed, every.rules.never_merge_wrongly.passed], [true, true, true]);
+  assert.deepEqual([every.rules.route_the_obvious.passed_trials, every.rules.route_the_obvious.passed, every.echo_picks_threads], [0, false, false]);
+  // And it is not what any several-threads case expects: each leaves a thread that is no candidate.
+  assert.equal(policyRun(document, (entry) => naming(all(entry))).filter((trial) => trial.group === "several_others" && trial.passed).length, 0);
+
+  // "Name every thread but the last" used to be exactly right for all six several-threads cases. The thread that is no
+  // candidate now sits first, in the middle and last, so it misses a candidate and guesses.
+  const butLast = verdict((entry) => naming(all(entry).slice(0, -1)));
+  assert.deepEqual([butLast.rules.never_guess.named_all_trials, butLast.rules.never_guess.passed, butLast.rules.route_the_obvious.passed, butLast.echo_picks_threads], [6, false, false, false]);
+
+  // No other rule about position, and no single answer for everything, does better.
+  const constant = {
+    "every thread but the first": (entry) => naming(all(entry).slice(1)),
+    "the first thread": () => naming([1]),
+    "the second thread": () => naming([2]),
+    "the last thread": (entry) => naming([entry.threads.length]),
+    "the first two threads": () => naming([1, 2]),
+    "always the open thread": (entry) => (entry.previous === undefined ? { thread: "new" } : { thread: "open", resolution: { resolution: "same" }, merge: [] }),
+    "always a new thread": () => ({ thread: "new" }),
+  };
+  for (const [name, policy] of Object.entries(constant)) {
+    const judged = verdict(policy);
+    assert.equal(judged.complete, true, name);
+    assert.equal(judged.echo_picks_threads, false, name);
+    // Each fails on reading, not on a technicality: it guesses where several threads fit, or routes too little.
+    assert.ok(!judged.rules.never_guess.passed || !judged.rules.route_the_obvious.passed, name);
+    assert.ok(judged.rules.never_guess.named_all_trials < 18, `${name}: it names every candidate in some case only by luck of position`);
+  }
 });

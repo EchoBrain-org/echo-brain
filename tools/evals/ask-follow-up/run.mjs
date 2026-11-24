@@ -55,7 +55,7 @@ const groupCounts = (trials, more) => Object.freeze({ trials: trials.length, pas
 const SETS = Object.freeze({
   "follow-up": Object.freeze({
     cases_file: CASES_FILE, cases_path: "tools/evals/ask-follow-up/cases.json", groups: GROUPS, load: loadCases,
-    trial: (...args) => runTrial(...args), summarize: summarizeRules,
+    trial: (...args) => runTrial(...args), summarize: (results) => summarizeRules(results),
     group: (trials) => groupCounts(trials, (list) => ({ clarify: list.filter((entry) => entry.clarify).length })),
     report_kind: "echo-ask-follow-up-evaluation-v1", progress_kind: "echo-ask-follow-up-evaluation-progress-v1", report_prefix: "ask-follow-up-evaluation",
     progress: (result) => ({ resolution: result.resolution }),
@@ -64,11 +64,12 @@ const SETS = Object.freeze({
   }),
   threads: Object.freeze({
     cases_file: THREAD_CASES_FILE, cases_path: "tools/evals/ask-follow-up/thread-cases.json", groups: THREAD_GROUPS, load: loadThreadCases,
-    trial: (...args) => runThreadTrial(...args), summarize: summarizeThreadRules,
+    // The grader itself says whether the trials are the whole registered run: the gate is its, not the selection's.
+    trial: (...args) => runThreadTrial(...args), summarize: (results, document) => summarizeThreadRules(results, document.cases),
     group: (trials) => groupCounts(trials, (list) => ({ named_all: list.filter((entry) => entry.named_all).length, merged: list.filter((entry) => entry.merged).length })),
     report_kind: "echo-ask-thread-evaluation-v1", progress_kind: "echo-ask-thread-evaluation-progress-v1", report_prefix: "ask-thread-evaluation",
     progress: (result) => ({ thread: result.thread }),
-    // Rules 1 and 4 decide whether ECHO picks threads.
+    // Rules 1, 2 and 4 decide whether ECHO picks threads, and only over the whole registered run.
     ships: "echo_picks_threads",
   }),
 });
@@ -77,6 +78,8 @@ const caseCount = (set) => Object.values(set.groups).reduce((total, count) => to
 const maxModelCalls = (set) => caseCount(set) * MAX_TRIALS * 2;
 /** The set a run's options name: the follow-up set unless `--set threads` chose the other. */
 const setOf = (options) => SETS[options.set ?? "follow-up"];
+/** Whether a run's report says its set's deciding rules passed: what the exit status follows, and nothing else does. */
+export const qualifies = (report, options) => report[setOf(options).ships] === true;
 
 export function help() {
   return [
@@ -86,7 +89,7 @@ export function help() {
     "  npm run eval:ask-threads -- --run --credential-file /absolute/private/credential-file --out /absolute/private/report-directory [options]",
     "",
     "Options:",
-    `  --cases id,id     Select cases (default: all ${caseCount(SETS["follow-up"])} follow-up cases, or all ${caseCount(SETS.threads)} thread cases); only the whole set decides.`,
+    `  --cases id,id     Select cases, each once (default: all ${caseCount(SETS["follow-up"])} follow-up cases, or all ${caseCount(SETS.threads)} thread cases); only the whole set decides.`,
     `  --trials N        Trials per case, 1 through ${MAX_TRIALS} (default: ${MAX_TRIALS}, as pre-registered).`,
     "  --timeout-ms N    Per-trial timeout, at least 15000 (default: 60000).",
     "  --set NAME        The pre-registered set: follow-up (default), or threads, which eval:ask-threads passes.",
@@ -99,8 +102,9 @@ export function help() {
     "numbers and choices, synthetic text) or placement (its thread and merge numbers), its grade, and model metadata; never",
     "prompts, raw replies, credentials or provider payloads.",
     "",
-    "Exit 0 when the set's deciding rules pass (follow-up: rules 1 and 2, so follow-ups may ship; threads: rules 1 and 4,",
-    "so ECHO may pick threads), 1 when either fails, 2 on a usage error.",
+    "Exit 0 when the set's deciding rules pass (follow-up: rules 1 and 2, so follow-ups may ship; threads: rules 1, 2 and",
+    "4 over the whole set, every case once with three trials, so ECHO may pick threads), 1 when they do not, 2 on a usage",
+    "error. A run of some thread cases, or of fewer trials, reports its rules and always exits 1.",
   ].join("\n");
 }
 
@@ -119,7 +123,8 @@ export function parseArgs(argv) {
   options.trials = boundedInteger(options.trials, "--trials", 1, MAX_TRIALS);
   options.timeoutMs = boundedInteger(options.timeoutMs, "--timeout-ms", MIN_TIMEOUT_MS, Number.MAX_SAFE_INTEGER);
   const known = new Set(set.load().cases.map((entry) => entry.id));
-  if (options.caseIds !== null && (options.caseIds.length === 0 || options.caseIds.some((id) => !known.has(id)))) throw new Error("--cases must select known cases");
+  // A case named twice would be run twice: its trials would count twice toward every rule.
+  if (options.caseIds !== null && (options.caseIds.length === 0 || options.caseIds.some((id) => !known.has(id)) || new Set(options.caseIds).size !== options.caseIds.length)) throw new Error("--cases must select known cases, each once");
   if ((options.caseIds?.length ?? known.size) * options.trials * 2 > maxModelCalls(set)) throw new Error(`requested model-call budget exceeds ${maxModelCalls(set)}`);
   options.out = outputDirectory(ROOT, options.out);
   return Object.freeze(options);
@@ -239,13 +244,14 @@ export async function run(options, dependencies = {}) {
     }
   }
   const identityAfter = codeIdentity(ROOT, codeFiles);
-  const summary = set.summarize(results);
+  const summary = set.summarize(results, document);
   const report = Object.freeze({
     kind: set.report_kind,
     observed_at: new Date().toISOString(),
     synthetic_only: true,
-    // Only the whole pre-registered set, three trials each, decides.
-    complete: selected.length === caseCount(set) && options.trials === MAX_TRIALS,
+    // Only the whole pre-registered set, three trials each, decides. The thread set's grader says whether the trials
+    // are that run, case by case (a case run twice is not); the follow-up set's is its selection, as it was.
+    complete: summary.complete ?? (selected.length === caseCount(set) && options.trials === MAX_TRIALS),
     cases_sha256: sha256(readFileSync(set.cases_file)),
     code: Object.freeze({ before: identityBefore, after: identityAfter, unchanged: sha256(JSON.stringify(identityBefore)) === sha256(JSON.stringify(identityAfter)) }),
     model: Object.freeze({ adapter_id: loaded.generation.generation_adapter_id, answer_model: loaded.generation.answer_model }),
@@ -269,7 +275,7 @@ if (invokedDirectly) {
       const { ships } = setOf(options);
       const rules = Object.fromEntries(Object.entries(report.rules).map(([name, rule]) => [name, rule.passed ?? null]));
       process.stdout.write(`${JSON.stringify({ report_path: reportPath, complete: report.complete, [ships]: report[ships], founder_review: report.founder_review, rules })}\n`);
-      if (!report[ships]) process.exitCode = 1;
+      if (!qualifies(report, options)) process.exitCode = 1;
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : "resolution evaluation failed"}\n${help()}\n`);

@@ -142,6 +142,33 @@ describe('where a question belongs, on /v7 (ADR-0056)', () => {
     for (const text of [BLOCKED, LAUNCH_QUESTION, ...THREAD_TEXT]) expect(seenAfterResolver()).not.toContain(text);
   });
 
+  it('lets a person start a second thread from inside their only one: an empty list of threads is still placed', async () => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    const { model, resolver } = withThreadResolver([{ thread: 'new' }], tasks.model);
+    // The client keeps threads and the person has no other yet: the list goes, empty.
+    const sent = body({ previous: following(launchTurn, undefined), threads: [], question: 'What are my open tasks?' });
+    const answer = await streamedAnswer(await ask(await v7(f, model), { body: sent }));
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?', thread: { kind: 'new' } });
+    expect(answer).not.toHaveProperty('merge');
+    // The thread resolver ran, and was shown the open thread and no other.
+    expect(resolver).toHaveLength(1);
+    expect(JSON.parse(resolver[0]!.user_prompt)).toMatchObject({ threads: [], open: { turns: [{ question: LAUNCH_QUESTION }] } });
+    expect(tasks.steps[0]).toMatchObject({ question: 'What are my open tasks?', opened: [] });
+  });
+
+  it('answers a new subject in its thread, saying nothing of threads, when the request carried older turns and no list', async () => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    // The same reply, to a request that is not being placed: no `threads` field at all.
+    const { model, resolver } = withThreadResolver([{ thread: 'new' }], tasks.model);
+    const answer = await streamedAnswer(await ask(await v7(f, model), { body: body({ previous: following(latestLaunchTurn, [launchTurn]), question: 'What are my open tasks?' }) }));
+    expect(answer).toMatchObject({ outcome: 'answered', question: 'What are my open tasks?' });
+    for (const key of ['thread', 'merge']) expect(answer).not.toHaveProperty(key);
+    expect(resolver).toHaveLength(1);
+    expect(JSON.parse(resolver[0]!.user_prompt).threads).toEqual([]);
+  });
+
   it('resolves a reference to something only an older turn names, and starts research from that turn\'s citation', async () => {
     const f = await sentFixture();
     const research = fromOpened();
@@ -196,7 +223,7 @@ describe('where a question belongs, on /v7 (ADR-0056)', () => {
     const generate = vi.fn(async () => { throw new Error('no model call expected'); });
     const base = await v7(f, { generate });
     const invalid = [
-      body({ threads: [] }), body({ threads: [{ questions: [], asked_at: THREADS[0]!.asked_at }] }), body({ threads: [{ ...THREADS[0]!, title: 'Halvorsen' }] }),
+      body({ threads: [{ questions: [], asked_at: THREADS[0]!.asked_at }] }), body({ threads: [{ ...THREADS[0]!, title: 'Halvorsen' }] }), body({ threads: {} }),
       body({ previous: following(launchTurn, []), threads: THREADS }), body({ previous: following(launchTurn, [{ ...launchTurn, purpose: 'follow_up' } as never]) }),
       // An Ask again asks one earlier question again where it was asked: it carries neither.
       body({ question: LAUNCH_QUESTION, previous: { ...following(launchTurn, undefined), purpose: 'ask_again' }, threads: THREADS }),
@@ -311,6 +338,43 @@ describe('what a model may read of a thread, and what the audit keeps (ADR-0056,
     expect(prompts).toHaveLength(lost ? 2 : 1);
     expect(prompts[0]).toContain(ROSTER);
     if (lost) expect(prompts[1]).not.toContain(ROSTER);
+  });
+
+  it.each([
+    ['a question placed among threads', true],
+    // The follow-up path as it was before threads: it reused its resolution across midnight, and still does.
+    ['a follow-up with neither threads nor older turns', false],
+  ])('reads one day for the whole request when the client sent no clock: a restart after midnight resolves nothing again (%s)', async (_name, placed) => {
+    // Only the wall clock is faked; the server's own timers run as they are.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-23T23:59:40.000Z') });
+    try {
+      const f = await sentFixture();
+      const tasks = myOpenTasksPlanner();
+      const resolverDays: string[] = [];
+      const laterDays: string[] = [];
+      let restarted = false;
+      const model: StructuredGenerationPort = { async generate(input) {
+        const { today } = JSON.parse(input.user_prompt) as { readonly today: string };
+        if (isThreadResolver(input)) { resolverDays.push(today); return { thread: 'open', resolution: 'same' }; }
+        if (isFollowUpResolver(input)) { resolverDays.push(today); return { resolution: 'same' }; }
+        laterDays.push(today);
+        // The first research step sees the snapshot move, and the wall clock passes UTC midnight before the restart.
+        if (!restarted) { restarted = true; vi.setSystemTime(new Date('2026-11-24T00:00:20.000Z')); throw new PersonRecordSearchSnapshotChangedV1(); }
+        return tasks.model.generate(input);
+      } };
+      // No time headers: the server's day is the request's day.
+      const sent = placed ? body({ previous: following(latestLaunchTurn, [launchTurn]), threads: THREADS, question: 'And who leads it?' })
+        : body({ previous: following(launchTurn, undefined), question: 'And who leads it?' });
+      const answer = await streamedAnswer(await ask(await v7(f, model), { body: sent }));
+      expect(answer).toMatchObject({ outcome: 'answered', question: 'And who leads it?' });
+      expect(restarted).toBe(true);
+      expect(new Date().toISOString().slice(0, 10)).toBe('2026-11-24');
+      // The paid resolution was made on the day the request arrived, and the restarted attempt is shown that same day,
+      // so it is the same call and is not made twice.
+      expect(resolverDays).toEqual(['2026-11-23']);
+      expect(laterDays.length).toBeGreaterThan(1);
+      expect([...new Set(laterDays)]).toEqual(['2026-11-23']);
+    } finally { vi.useRealTimers(); }
   });
 });
 

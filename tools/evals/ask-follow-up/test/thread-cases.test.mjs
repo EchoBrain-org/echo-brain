@@ -51,6 +51,20 @@ test("grounds every expectation in the threads the resolver is shown", () => {
   assert.ok(of("same_subject_twice").some((entry) => entry.expect.thread === "open") && of("same_subject_twice").some((entry) => entry.expect.thread === "other"));
 });
 
+test("puts the threads that fit where no rule about position finds them", () => {
+  const place = (number, count) => (number === 1 ? "first" : number === count ? "last" : "middle");
+  const tally = (places) => Object.fromEntries(["first", "middle", "last"].map((name) => [name, places.filter((value) => value === name).length]));
+  // One other thread: the thread the question belongs to is first, in the middle and last, twice each.
+  assert.deepEqual(tally(of("one_other").map((entry) => place(entry.expect.threads[0], entry.threads.length))), { first: 2, middle: 2, last: 2 });
+  // Several other threads: each case leaves exactly one thread that is no candidate, and it too sits in each place twice.
+  const others = of("several_others").map((entry) => entry.threads.map((_, index) => index + 1).filter((n) => !entry.expect.threads.includes(n)).map((n) => place(n, entry.threads.length)));
+  assert.ok(others.every((places) => places.length === 1));
+  assert.deepEqual(tally(others.flat()), { first: 2, middle: 2, last: 2 });
+  // So naming every thread but the last, or but the first, is not what every several-threads case expects.
+  const exact = (pick) => of("several_others").filter((entry) => JSON.stringify(pick(entry.threads.map((_, index) => index + 1))) === JSON.stringify(entry.expect.threads)).length;
+  assert.deepEqual([exact((all) => all.slice(0, -1)), exact((all) => all.slice(1)), exact((all) => all)], [2, 2, 0]);
+});
+
 test("places near misses, threads that are related and not the same subject, in every group, so no merge and no guess is free", () => {
   const near = document.cases.filter((entry) => entry.near_miss !== undefined);
   for (const group of Object.keys(THREAD_GROUPS)) assert.ok(near.some((entry) => entry.group === group), `${group} has a near miss`);
@@ -70,6 +84,8 @@ test("refuses a set that is not the registered one", () => {
   assert.match(altered((copy) => { first(copy, "one_other").expect.threads = [1, 2]; }).join(), /expects exactly one of threads/u);
   assert.match(altered((copy) => { first(copy, "one_other").expect.threads = [9]; }).join(), /expects exactly one of threads 1 to 3/u);
   assert.match(altered((copy) => { first(copy, "several_others").expect.threads = [1]; }).join(), /expects two or more of threads/u);
+  // A several-threads case in which every thread is a candidate would pay a resolver that names them all unread.
+  assert.match(altered((copy) => { const entry = first(copy, "several_others"); entry.expect.threads = entry.threads.map((_, index) => index + 1); }).join(), /never all of them/u);
   assert.match(altered((copy) => { first(copy, "new_subject").expect = { thread: "open" }; }).join(), /expects a new thread and no merge/u);
   assert.match(altered((copy) => { first(copy, "same_subject_twice").expect.merge = []; }).join(), /the other threads to merge with it/u);
   assert.match(altered((copy) => { const entry = copy.cases.find((item) => item.expect.thread === "other" && item.expect.merge !== undefined); entry.expect.merge = entry.expect.threads; }).join(), /the other threads to merge with it/u);
