@@ -113,10 +113,12 @@ const TOO_LONG: ReadonlyMap<string, { readonly held: string; readonly again: str
 const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
 /**
  * What the rows of one `reviews` page may take: the bound the response is held to (the tool transport's, ADR-0055), less
- * the page's own keys and the longest cursor (512 characters, the cursor framing's maximum). The route fills a page up to
- * this, so the bound can no longer refuse a list for being long.
+ * what the page sends around them and no more. That is its `reviews` key and, when a row is left, the `next_cursor` it
+ * gives, measured as it is sent. The last page gives no cursor and keeps no room for one, so a list that fits one response
+ * is answered in one: a client from before the list paged reads that, and refuses a page with a cursor. The route fills a
+ * page up to this, so the bound cannot refuse a list for being long.
  */
-const REVIEW_PAGE_ROWS_MAX_BYTES = PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes({ reviews: [], next_cursor: '' }) - 512;
+const reviewRowsRoom = (next_cursor?: string): number => PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes({ reviews: [], next_cursor });
 /** `text` whole when its JSON is at most `bytes` long; else its longest start that is, with the ellipsis that says it was cut, and never half a surrogate pair. */
 function cutToJsonBytes(text: string, bytes: number): string {
   if (jsonBytes(text) <= bytes) return text;
@@ -129,15 +131,20 @@ function cutToJsonBytes(text: string, bytes: number): string {
   return `${text.slice(0, kept)}…`;
 }
 /**
- * A review row too large for a page of its own, made to fit one: its title and its first line are cut, to half the room
- * each. Every other field stays, and the row stays on the list: a pending proposal that is not listed cannot be decided.
- * Only the list's row is cut; `review_open` still answers from the whole text. The other fields are ids and counts: they
- * would fill a page only with tens of thousands of projects on one proposal, and the response's own check would say so.
+ * A review row too large for the page it is alone on, made to fit the `room` that page has for its rows (reviewRowsRoom):
+ * its title and its first line are cut. The two share what the row's other fields leave. Each may take half, and one
+ * shorter than its half leaves the rest to the other, so neither is cut while there is room for it. Every other field
+ * stays, and the row stays on the list: a pending proposal that is not listed cannot be decided. Only the list's row is
+ * cut; `review_open` still answers from the whole text. The other fields are ids and counts: they would fill a page only
+ * with tens of thousands of projects on one proposal, and the response's own check would say so.
  */
-function fitReviewRow(row: PersonMeetingReviewV2): PersonMeetingReviewV2 {
-  const room = REVIEW_PAGE_ROWS_MAX_BYTES - jsonBytes({ ...row, title: '', first_line: row.first_line === null ? null : '' });
-  const each = Math.floor(room / (row.first_line === null ? 1 : 2));
-  return { ...row, title: cutToJsonBytes(row.title, each), first_line: row.first_line === null ? null : cutToJsonBytes(row.first_line, each) };
+function fitReviewRow(row: PersonMeetingReviewV2, room: number): PersonMeetingReviewV2 {
+  // A text's JSON bytes inside its quotes. The quotes are counted with the row's other fields.
+  const inside = (text: string | null): number => text === null ? 0 : jsonBytes(text) - 2;
+  const shared = room - jsonBytes({ ...row, title: '', first_line: row.first_line === null ? null : '' });
+  // The first line is cut to its half, or to all that a shorter title leaves. The title then has whatever the line did not take.
+  const first_line = row.first_line === null ? null : cutToJsonBytes(row.first_line, 2 + Math.max(Math.floor(shared / 2), shared - inside(row.title)));
+  return { ...row, title: cutToJsonBytes(row.title, 2 + shared - inside(first_line)), first_line };
 }
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
@@ -393,21 +400,30 @@ export function createPersonMeetingRuntimeV1(options: {
   /**
    * One page of a reviewer's list, from the start or from just after a cursor's place: rows in the list's order for as long
    * as they fit the response, so a list of any length is answered and none fails for its size (ADR-0055). `next_cursor` is
-   * there only when a row is left: it names the last row given, and the next page is read after that row.
+   * there only when a row is left: it names the last row given, and the next page is read after that row. A page keeps room
+   * for the cursor it gives and for nothing else, so the last page, which gives none, may fill the whole response.
    */
   function reviewPage(core: ApprovalCoreV1, reviewer: MeetingIntakePersonV1, after: ApprovalProposalPlaceV1 | undefined): PersonReviewResultsV1['reviews'] {
-    const reviews: PersonMeetingReviewV2[] = [];
-    // The JSON bytes of the rows taken, commas included, and the place of the last one.
-    let bytes = 0, last: ApprovalProposalPlaceV1 | undefined;
+    const reviews: PersonMeetingReviewV2[] = [], places: ApprovalProposalPlaceV1[] = [];
+    // The JSON bytes of the rows taken, commas included, and whether the list has a row this page does not give.
+    let bytes = 0, more = false;
+    // Rows are taken for as long as they fit a last page; a page's first row is always taken. The list builds each view only
+    // as it is asked for, so this reads the page's rows and the one that did not fit, and never the rest of the list to
+    // learn whether the page is the last.
     for (const { place, view } of core.proposalsAfter(reviewer, after)) {
-      let row = reviewView(view), size = jsonBytes(row);
-      // A row that does not fit after the rows before it (its comma counted) starts the next page.
-      if (last !== undefined && bytes + 1 + size > REVIEW_PAGE_ROWS_MAX_BYTES) return { reviews, next_cursor: encodePersonReviewsCursorV1(reviewer, last) };
-      // So only a page's first row can be too large here: one that not even a page of its own holds whole.
-      if (size > REVIEW_PAGE_ROWS_MAX_BYTES) { row = fitReviewRow(row); size = jsonBytes(row); }
-      bytes += size + (last === undefined ? 0 : 1); reviews.push(row); last = place;
+      const row = reviewView(view), size = jsonBytes(row) + (reviews.length === 0 ? 0 : 1);
+      if (reviews.length > 0 && bytes + size > reviewRowsRoom()) { more = true; break; }
+      bytes += size; reviews.push(row); places.push(place);
     }
-    return { reviews };
+    for (;;) {
+      // With a row left, the page gives the cursor of its last row, and needs room for that too.
+      const next_cursor = more ? encodePersonReviewsCursorV1(reviewer, places.at(-1)!) : undefined, room = reviewRowsRoom(next_cursor);
+      // Rows that leave their cursor no room give up the last of them: it starts the next page, whole, and is read again there.
+      if (bytes > room && reviews.length > 1) { bytes -= jsonBytes(reviews.pop()) + 1; places.pop(); continue; }
+      // A row alone on its page has no other page to go to: it is cut to the room this one has.
+      if (bytes > room) reviews[0] = fitReviewRow(reviews[0]!, room);
+      return next_cursor === undefined ? { reviews } : { reviews, next_cursor };
+    }
   }
   /**
    * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion

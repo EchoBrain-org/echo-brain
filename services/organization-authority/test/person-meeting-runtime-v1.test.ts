@@ -1648,6 +1648,30 @@ describe('the reviews list pages at its transport bound', () => {
     } while (cursor !== undefined);
     return pages;
   }
+  /** A reviewer whose list is one undecided proposal per length given, in the list's order: each titled 'Test meeting' and that many more characters. */
+  async function listed(...pads: readonly number[]) {
+    const f = await fixture(), runtime = f.create();
+    // The list is newest first, so its first row is the last one made.
+    for (const [index, pad] of pads.entries()) await proposeAt(`2026-11-01T10:00:0${pads.length - index}.000Z`, f, runtime, 1, 'T'.repeat(pad), index);
+    return { f, runtime };
+  }
+  /** The padding `rows` of `listed`'s rows have between them when their `{"reviews":[…]}` is the response bound to the byte. */
+  async function filling(rows: number) {
+    // One row with no padding. Every row is as long before its padding: its id is as long, and the rest is the same.
+    const { f, runtime } = await listed(0), [row] = (await f.reviewCall(runtime, { operation: 'reviews' })).reviews;
+    return PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - bytes({ reviews: [] }) - (rows - 1) - rows * bytes(row);
+  }
+  /** An extraction whose one decision reads `line`: the first line of the proposal's row. */
+  const deciding = (line: string): DecisionProcessorBundleV1 => ({ processor_adapter_id: 'llm', assert_admission_commitments() {},
+    current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }),
+    create_processor(admission) {
+      const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
+      return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
+        async extract(meeting) {
+          return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
+            signals: decisions.signals.map(signal => ({ ...signal, text: line, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) };
+        } };
+    } });
 
   it("answers a reviewer whose proposals are past the bound in pages, each within it, with every proposal once and in the list's order", async () => {
     const f = await fixture(), runtime = f.create();
@@ -1706,6 +1730,35 @@ describe('the reviews list pages at its transport bound', () => {
     expect(Object.keys(await f.reviewCall(runtime, { operation: 'reviews' }, 'other'))).toEqual(['reviews']);
   });
 
+  // The last page sends no cursor, so it keeps no room for one: what was one response before the list paged still is.
+  it('answers a list that fills one response to the byte in one page, with no cursor key and no row cut', async () => {
+    const padding = await filling(2), { f, runtime } = await listed(500_000, padding - 500_000);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(page.reviews.map(row => row.title.length)).toEqual([500_000, padding - 500_000].map(pad => 'Test meeting'.length + pad));
+    expect(bytes(page)).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  it('pages a list one byte past one response: two pages within the bound, a cursor on the first only, each row once and whole', async () => {
+    const padding = await filling(2) + 1, { f, runtime } = await listed(500_000, padding - 500_000);
+    const pages = await walk(f, runtime), rows = pages.flatMap(page => page.reviews);
+    expect(bytes({ reviews: rows })).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 + 1);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    for (const page of pages) expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(rows.map(row => row.approval_id)).toEqual((await runtime.approvals()).proposals(f.person).map(view => view.approval_id));
+  });
+
+  it('keeps room for the cursor on a page with a row left: two rows that fill a last page are not one page when a third follows', async () => {
+    const padding = await filling(2), { f, runtime } = await listed(500_000, padding - 500_000, 0);
+    const pages = await walk(f, runtime), rows = pages.flatMap(page => page.reviews);
+    // The second row has no room beside the first page's cursor, so it starts the next page, whole. No row is cut.
+    expect(pages.map(page => page.reviews.length)).toEqual([1, 2]);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    for (const page of pages) expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes({ reviews: rows.slice(0, 2) })).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(rows.map(row => row.approval_id)).toEqual((await runtime.approvals()).proposals(f.person).map(view => view.approval_id));
+  });
+
   it('refuses a cursor it did not write for this reviewer and this list, as an invalid request that says why', async () => {
     const f = await fixture(), runtime = f.create();
     const { pending } = await f.pendingReview(runtime);
@@ -1722,6 +1775,30 @@ describe('the reviews list pages at its transport bound', () => {
       PERSON_LIST_START_V1) })).rejects.toMatchObject(refused);
     // A cursor that is no text at all is no review request.
     await expect(f.reviewCall(runtime, { operation: 'reviews', cursor: 5 } as never)).rejects.toMatchObject({ code: 'invalid_request', message: 'Invalid review request' });
+  });
+
+  it('leaves a single row that fills the last page to the byte whole', async () => {
+    const pad = await filling(1), { f, runtime } = await listed(pad);
+    const page = await f.reviewCall(runtime, { operation: 'reviews' });
+    expect(Object.keys(page)).toEqual(['reviews']);
+    expect(page.reviews.map(row => row.title.length)).toEqual(['Test meeting'.length + pad]);
+    expect(bytes(page)).toBe(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+  });
+
+  it('cuts a row that fills a last page when a row follows it, by no more than the cursor its page then carries takes', async () => {
+    const pad = await filling(1), { f, runtime } = await listed(pad, 0);
+    const [large, small] = (await runtime.approvals()).proposals(f.person);
+    const pages = await walk(f, runtime);
+    // Both proposals are listed, once each and in the list's order: the first page is the large row and the cursor.
+    expect(pages.map(page => page.reviews.map(row => row.approval_id))).toEqual([[large!.approval_id], [small!.approval_id]]);
+    expect(pages.map(page => Object.keys(page))).toEqual([['reviews', 'next_cursor'], ['reviews']]);
+    // The row gave up what the cursor takes and no more: its page ends within a character of the bound, and never past it.
+    expect(bytes(pages[0])).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(pages[0])).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
+    const cut = pages[0]!.reviews[0]!;
+    expect(cut.title.endsWith('…')).toBe(true);
+    expect(large!.title.startsWith(cut.title.slice(0, -1))).toBe(true);
+    expect(cut.first_line).toBe('Ship the cohort onboarding.');
   });
 
   it('keeps a proposal whose row alone is past the bound on the list, its title cut to fit a page', async () => {
@@ -1743,12 +1820,12 @@ describe('the reviews list pages at its transport bound', () => {
     // Both proposals are listed, once each: the large one is never dropped. It does not fit after the small one, so it
     // starts the next page, and there it is cut.
     expect(pages.map(page => page.reviews.map(row => row.approval_id))).toEqual([[small!.approval_id], [large!.approval_id]]);
-    // Its title is the start of the whole one, cut between characters and marked as cut. It keeps the half of a page a
-    // title may take beside a first line; the rest of the row is whole.
+    // Its title is the start of the whole one, cut between characters and marked as cut. The first line is short, so the
+    // title has the room it leaves: the page ends within a character of the bound. The rest of the row is whole.
     const cut = pages[1]!.reviews[0]!;
     expect(cut.title.endsWith('…')).toBe(true);
     expect(title.startsWith(cut.title.slice(0, -1))).toBe(true);
-    expect(bytes(cut.title)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 / 2 - 1024);
+    expect(bytes(pages[1])).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(cut.title)).toBe(false);
     expect(cut).toMatchObject({ status: 'pending', first_line: 'Ship the cohort onboarding.', action_count: 0 });
     // Only the list's row is cut: the proposal an opened review reads keeps its whole title.
@@ -1757,18 +1834,8 @@ describe('the reviews list pages at its transport bound', () => {
 
   it('cuts the first line with the title when the two together are past the bound, and the row fills its page', async () => {
     const line = 'L'.repeat(600_000), title = `Test meeting${'T'.repeat(600_000)}`;
-    // An extraction whose one decision is as long as the title: neither is past a page alone, the two together are.
-    const processor: DecisionProcessorBundleV1 = { processor_adapter_id: 'llm', assert_admission_commitments() {},
-      current_commitments: instance_id => ({ adapter_id: 'llm', instance_id, version: '1.0.0', configuration_sha256: canonicalSha256('processor'), credential_reference_sha256: canonicalSha256('ref') }),
-      create_processor(admission) {
-        const identity = { kind: 'decision-processor' as const, adapter_id: 'llm', instance_id: admission.processor.instance_id, version: admission.processor.version };
-        return { identity, validateConfig: () => ({ ok: true, errors: [] }), healthCheck: async () => ({ status: 'healthy', checked_at: new Date().toISOString() }),
-          async extract(meeting) {
-            return { ...decisions, meeting_id: meeting.id, meeting_revision: meeting.provenance.canonical_revision, processor: identity,
-              signals: decisions.signals.map(signal => ({ ...signal, text: line, evidence: signal.evidence.map(evidence => ({ ...evidence, meeting_id: meeting.id })) })) };
-          } };
-      } };
-    const f = await fixture(), runtime = f.create(undefined, { processor });
+    // The one decision is as long as the title: neither is past a page alone, the two together are.
+    const f = await fixture(), runtime = f.create(undefined, { processor: deciding(line) });
     await propose(f, runtime, 1, title.slice('Test meeting'.length));
     const [view] = (await runtime.approvals()).proposals(f.person);
     expect(view!.title).toBe(title);
@@ -1785,6 +1852,20 @@ describe('the reviews list pages at its transport bound', () => {
       expect(kept.endsWith('…')).toBe(true);
       expect(whole.startsWith(kept.slice(0, -1))).toBe(true);
     }
+  });
+
+  it('cuts only the first line when it alone is past the bound: a short title is whole, and the line has the room it leaves', async () => {
+    const line = 'L'.repeat(1_100_000);
+    const f = await fixture(), runtime = f.create(undefined, { processor: deciding(line) });
+    await propose(f, runtime, 1, '');
+    const [page, ...more] = await walk(f, runtime);
+    expect(more).toEqual([]);
+    const [cut] = page!.reviews;
+    expect(cut!.title).toBe('Test meeting');
+    expect(cut!.first_line!.endsWith('…')).toBe(true);
+    expect(line.startsWith(cut!.first_line!.slice(0, -1))).toBe(true);
+    expect(bytes(page)).toBeLessThanOrEqual(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
+    expect(bytes(page)).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 - 8);
   });
 });
 
