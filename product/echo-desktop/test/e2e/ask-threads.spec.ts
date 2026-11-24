@@ -81,9 +81,10 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
   await back(page);
   await askInApollo(page, 'Which tests fail?');
-  // A project Ask carries only that project's threads (R3): Apollo had none, so nothing rode on it. Home's carried Home's.
-  expect(asks().map(body => 'threads' in body)).toEqual([false, true, false]);
-  expect(asks()[1]!.threads).toEqual([{ questions: ['Who owns billing?'], asked_at: expect.any(String) }]);
+  // Each carried the threads it could be placed in, a list that goes even when empty. A project Ask carries only that
+  // project's (R3): Apollo had none, so its list is empty though Home has two. Home's carried Home's.
+  expect(asks().map(body => body.threads)).toEqual([[], [{ questions: ['Who owns billing?'], asked_at: expect.any(String) }], []]);
+  expect(asks().map(body => 'previous' in body)).toEqual([false, false, false]);
   expect(asks()[2]).toMatchObject({ question: 'Which tests fail?', project_id: APOLLO });
 
   // The list: the open thread's home first, then no project, the newest first in each; the open one marked.
@@ -134,8 +135,8 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
   await ask(page, 'and who fixes them?');
   expect(asks().at(-1)).toMatchObject({ question: 'and who fixes them?', project_id: APOLLO, previous: { purpose: 'follow_up', question: 'Which tests fail?' } });
-  // Still only Apollo's other threads would ride on it, and it has none: nothing from Home does.
-  expect(asks().at(-1)).not.toHaveProperty('threads');
+  // Still only Apollo's other threads ride on it, and it has none: nothing from Home does.
+  expect(asks().at(-1)!.threads).toEqual([]);
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?',
     'Which tests fail?': 'Which tests fail?', 'and who fixes them?': 'Which tests fail?' });
 });
@@ -273,4 +274,81 @@ test('a question that could belong to several threads asks which one: a thread i
   await expect(clarify).toHaveCount(0);
   expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'who audits the ledger?' });
   await expect.poll(filed).toMatchObject({ 'who audits the ledger?': 'who audits the ledger?', 'Is the ledger closed?': 'Is the ledger closed?' });
+});
+
+test('back in Ask from the sidebar a question is placed among every thread, the one shown included; asked in a thread it continues it', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  await back(page);
+  // The sidebar's Ask shows the thread asked in last. Showing it is not being in it.
+  await page.getByTestId('sidebar-ask').click();
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
+  await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
+  await page.getByTestId('ask-field').fill('what changed for billing and the pilot?');
+  await page.getByTestId('ask-field').press('Enter');
+  // It could be either thread, so the page asks: alone under "New thread", the thread that was showing among the buttons.
+  const clarify = page.getByTestId('clarify');
+  await expect(clarify.getByTestId('choice')).toHaveText(['When does the pilot start?', 'Who owns billing?', 'New question']);
+  await expect(page.getByTestId('thread-name')).toHaveText('New thread');
+  await expect(page.getByTestId('turn')).toHaveCount(0);
+  await picture(page, 'ask-which-one-shown-thread');
+  // It carried no earlier turn, and every thread it could be placed in, the one shown included.
+  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'what changed for billing and the pilot?', threads: [
+    { questions: ['When does the pilot start?'], asked_at: expect.any(String) }, { questions: ['Who owns billing?'], asked_at: expect.any(String) }] });
+  // Picked, the person is in the pilot's thread: the words are asked there, with nothing that could place them again.
+  await clarify.getByTestId('choice').nth(0).click();
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
+  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('what changed for billing and the pilot?');
+  await expect(page.getByTestId('asking')).toHaveCount(0);
+  expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' } });
+  expect(asks().at(-1)).not.toHaveProperty('threads');
+  // A question typed now, in the thread, continues it: the turn before it, and only the other thread.
+  await ask(page, 'did that change?');
+  expect(asks().at(-1)).toMatchObject({ question: 'did that change?', previous: { purpose: 'follow_up' } });
+  expect(asks().at(-1)!.threads).toEqual([{ questions: ['Who owns billing?'], asked_at: expect.any(String) }]);
+  await expect.poll(filed).toMatchObject({ 'did that change?': 'When does the pilot start?', 'what changed for billing and the pilot?': 'When does the pilot start?' });
+
+  // Back again, a question about the one thread that is showing: asked with no earlier turn, it is placed there without
+  // asking, and asked in it.
+  await back(page);
+  await page.getByTestId('sidebar-ask').click();
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
+  const before = asks().length;
+  await ask(page, 'is the pilot still on?');
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
+  await expect(page.getByTestId('clarify')).toHaveCount(0);
+  const [placed, again] = asks().slice(before);
+  expect(placed).not.toHaveProperty('previous');
+  expect((placed!.threads as { questions: string[] }[]).map(thread => thread.questions[0])).toEqual(['When does the pilot start?', 'Who owns billing?']);
+  expect(again).toMatchObject({ question: 'is the pilot still on?', previous: { purpose: 'follow_up' } });
+  expect(again).not.toHaveProperty('threads');
+  expect(asks()).toHaveLength(before + 2);
+  await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
+});
+
+test('from a person\'s only thread a new subject starts a second thread: the question carries an empty list', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'When does the pilot start?');
+  // The first question ever is one to be placed too: its list is empty.
+  expect(asks()[0]).toEqual({ schema_version: 3, question: 'When does the pilot start?', threads: [] });
+  // In that thread, a question about it continues it.
+  await ask(page, 'who decided that?');
+  expect(asks()[1]).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' }, threads: [] });
+  await expect(page.getByTestId('thread-name')).toHaveText('When does the pilot start?');
+  // An unrelated one, typed in the same thread: the list still goes, empty, so the answer can say the subject is new.
+  await ask(page, 'an unrelated one: what is for lunch?');
+  expect(asks()[2]).toMatchObject({ question: 'an unrelated one: what is for lunch?', previous: { purpose: 'follow_up' }, threads: [] });
+  await expect(page.getByTestId('thread-name')).toHaveText('an unrelated one: what is for lunch?');
+  await expect(page.getByTestId('question')).toHaveText(['an unrelated one: what is for lunch?']);
+  await expect.poll(filed).toEqual({ 'When does the pilot start?': 'When does the pilot start?', 'who decided that?': 'When does the pilot start?',
+    'an unrelated one: what is for lunch?': 'an unrelated one: what is for lunch?' });
+  // Two threads to list now.
+  await page.getByTestId('thread-name').click();
+  await expect(page.getByTestId('thread-row').locator('.name')).toHaveText(['an unrelated one: what is for lunch?', 'When does the pilot start?']);
 });

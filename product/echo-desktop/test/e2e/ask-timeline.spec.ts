@@ -45,11 +45,11 @@ test('the timeline stays through navigation, on this computer only, Ask shows on
   await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?']);
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
   await expect(page.getByTestId('thread-name')).toHaveText('What is left in Apollo?');
-  // From a page a question goes alone; typed with Ask open it carried the turn before it. No thread from outside a project
-  // rides on a project's Ask.
+  // From a page a question carries no earlier turn; typed after an answer, in its thread, it carried the turn before it.
+  // Each carried the list of threads it could be placed in, empty here: nothing from outside a project rides on its Ask.
   expect(asks().map(body => 'previous' in body)).toEqual([false, true, false]);
   expect(asks().map(body => body.project_id)).toEqual([undefined, undefined, 'prj_11111111-1111-4111-8111-111111111111']);
-  expect(asks().map(body => 'threads' in body)).toEqual([false, false, false]);
+  expect(asks().map(body => body.threads)).toEqual([[], [], []]);
   // Kept in one owner-only file for the account, beside the session.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
   // The answer renders before its atomic save finishes. Wait for the committed file, without a temporary write beside it.

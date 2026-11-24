@@ -73,9 +73,11 @@ or another account signing in here, deletes it; a session that merely ended
 keeps it. The Authority never stores it. Ask opens over the page on one
 thread (ADR-0056, proposed): the turns that carry the same thread label, under
 the thread's name, which opens the list of every thread by home (a project, or
-none) to jump to one or merge one into the open thread. A question from a page
-starts a thread, or is asked in the one the answer says it belongs to; typed
-with Ask open it continues the open thread. The latest turn, and those asked since Ask opened, show in
+none) to jump to one or merge one into the open thread. You are in a thread
+once you have asked in it or picked it since Ask opened; the sidebar's Ask
+only shows the one you last used. In a thread, a typed question continues it.
+Otherwise it is placed among all your threads, the one shown included: it
+starts a thread, or is asked in the one the answer says it belongs to. The latest turn, and those asked since Ask opened, show in
 full; every earlier turn is one line with its
 project's square (none for all context), its full question,
 **Changed** when a source it cited changed, and when it was asked, with a quiet
@@ -98,7 +100,7 @@ on a thread: one asked again word for word in the same place folds the one
 before. The empty bar suggests the questions asked in its place first,
 newest first; one opens its thread at its turn instead of asking it again.
 
-Typed while Ask is open, a question continues the conversation: it carries the
+Typed in a thread you are in, a question continues the conversation: it carries the
 earlier turn opened, or else the latest one, however long ago it was asked
 (the question, and the sentences a check of the last five minutes found you can
 still read, within the Ask's request body bound). It waits for that check; with none, it

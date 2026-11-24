@@ -62,9 +62,10 @@ export interface OpenThread {
  */
 type AskHow =
   /**
-   * The person's own words. `follows`: the turn of its thread they continue, where the answer lands; null for none, and
-   * the answer then starts a thread. `placed`: whether the other threads ride with it, so the answer may say the question
-   * belongs elsewhere (ADR-0056); false once a jump or the person has said where it goes, so nothing moves it again.
+   * The person's own words. `follows`: the turn of the thread they are in that it continues, where the answer lands; null
+   * for none, and the answer then starts a thread. `placed`: whether it is to be placed (ADR-0056), and so carries the
+   * threads it may belong to, a list that goes even when empty; false once a jump or the person has said where it goes
+   * (asked again in a thread, or as a new question), so nothing moves it again.
    */
   | { readonly kind: 'typed'; readonly question: string; readonly follows: string | null; readonly placed: boolean }
   /** A turn's question again: in its scope, carrying the turn (Ask again), or everywhere, carrying nothing (Ask everywhere). */
