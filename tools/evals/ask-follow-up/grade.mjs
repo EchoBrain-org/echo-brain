@@ -135,6 +135,8 @@ export const THREAD_CASES_FILE = new URL("./thread-cases.json", import.meta.url)
 export const THREAD_GROUPS = Object.freeze({ continues_open: 6, one_other: 6, several_others: 6, new_subject: 6, same_subject_twice: 4 });
 /** Rules 2 and 3 pass at or above; rules 1 and 4 allow no miss at all; rule 5 is reported for the founder. */
 export const THREAD_THRESHOLDS = Object.freeze({ route_the_obvious: 0.9, leave_new_subjects_alone: 0.9 });
+/** Trials of each case in the run that decides, as pre-registered. */
+export const THREAD_TRIALS = 3;
 
 /** Distinct thread numbers as a case names them: from 1, as the resolver is shown the threads. */
 const threadNumbers = (value, threads) => Array.isArray(value) && value.length > 0 && new Set(value).size === value.length
@@ -175,7 +177,8 @@ export function threadCaseProblems(document) {
         if (expect.thread !== "other" || !threadNumbers(expect.threads, others) || expect.threads.length !== 1 || expect.merge !== undefined) problems.push(`${where}: expects exactly one of threads 1 to ${others} and no merge`);
         break;
       case "several_others":
-        if (expect.thread !== "other" || !threadNumbers(expect.threads, others) || expect.threads.length < 2 || expect.merge !== undefined) problems.push(`${where}: expects two or more of threads 1 to ${others} and no merge`);
+        // Never every thread: a case in which naming them all is right would pay a resolver that reads nothing.
+        if (expect.thread !== "other" || !threadNumbers(expect.threads, others) || expect.threads.length < 2 || expect.threads.length >= others || expect.merge !== undefined) problems.push(`${where}: expects two or more of threads 1 to ${others}, never all of them, and no merge`);
         break;
       case "new_subject":
         if (expect.thread !== "new" || expect.merge !== undefined) problems.push(`${where}: expects a new thread and no merge`);
@@ -243,13 +246,37 @@ export function gradeThreadTrial(caseDefinition, placement, fallback = false) {
 }
 
 /**
- * The five pre-registered thread rules over graded trials (`{ group, passed, named_all, merged }`). Rule 1: every
- * several-other-threads trial names every candidate. Rule 2: at least 90% of continues-the-open-thread and
- * one-other-thread trials pass. Rule 3: at least 90% of new-subject trials return `new`. Rule 4: no trial outside
- * same-subject-twice names a merge. Rule 5: same-subject-twice trials that pass, reported for the founder to judge.
- * ECHO picks threads only when rules 1 and 4 pass.
+ * Whether graded trials are the whole registered run, which alone decides: every registered case (`cases`, each an id
+ * and its group), tried exactly THREAD_TRIALS times as trials 1 to 3, and no other trial. A selection of some cases, a
+ * case run twice, or fewer trials is a run that may be reported and never decides.
  */
-export function summarizeThreadRules(trials) {
+export function threadRunIsComplete(trials, cases) {
+  const registered = new Map(cases.map((entry) => [entry.id, entry.group]));
+  if (registered.size !== cases.length || trials.length !== registered.size * THREAD_TRIALS) return false;
+  const seen = new Set();
+  for (const trial of trials) {
+    if (!registered.has(trial.case_id) || registered.get(trial.case_id) !== trial.group) return false;
+    if (!Number.isSafeInteger(trial.trial) || trial.trial < 1 || trial.trial > THREAD_TRIALS) return false;
+    const key = `${trial.case_id} ${trial.trial}`;
+    // As many trials as the registered run has, each of a registered case and trial number, none twice: all of them.
+    if (seen.has(key)) return false;
+    seen.add(key);
+  }
+  return true;
+}
+
+/**
+ * The five pre-registered thread rules over graded trials (`{ case_id, trial, group, passed, named_all, merged }`), and
+ * the one decision they make. Rule 1: every several-other-threads trial names every candidate. Rule 2: at least 90% of
+ * continues-the-open-thread and one-other-thread trials pass. Rule 3: at least 90% of new-subject trials return `new`.
+ * Rule 4: no trial outside same-subject-twice names a merge. Rule 5: same-subject-twice trials that pass, reported for
+ * the founder to judge.
+ *
+ * ECHO picks threads only when rules 1, 2 and 4 pass over the whole registered run (`threadRunIsComplete`, against
+ * `cases`, the registered set). Rule 2 decides with the other two because a resolver that names every other thread for
+ * every question never guesses and never merges, and routes nothing. Rules 3 and 5 are for the founder.
+ */
+export function summarizeThreadRules(trials, cases) {
   const of = (...groups) => trials.filter((trial) => groups.includes(trial.group));
   const count = (list, pick) => list.filter(pick).length;
   const rate = (list, pick) => (list.length === 0 ? null : count(list, pick) / list.length);
@@ -270,11 +297,14 @@ export function summarizeThreadRules(trials) {
     // No threshold: the founder judges how many of the plain duplicates were merged.
     merge_the_obvious: Object.freeze({ rule: 5, passed_trials: count(twice, (trial) => trial.passed), trials: twice.length, rate: rate(twice, (trial) => trial.passed) }),
   });
+  const complete = threadRunIsComplete(trials, cases);
   return Object.freeze({
     rules,
-    // Rules 1 and 4 decide whether ECHO picks threads at all; rules 2 and 3 are reported with their thresholds, and
-    // rule 5 always goes to the founder.
-    echo_picks_threads: rules.never_guess.passed && rules.never_merge_wrongly.passed,
-    founder_review: !rules.route_the_obvious.passed || !rules.leave_new_subjects_alone.passed,
+    // Only the whole registered set, each case once with three trials, decides anything.
+    complete,
+    // Rules 1, 2 and 4 decide whether ECHO picks threads at all, and only over the whole registered run.
+    echo_picks_threads: complete && rules.never_guess.passed && rules.route_the_obvious.passed && rules.never_merge_wrongly.passed,
+    // Rule 3 is reported with its threshold and goes to the founder when missed; rule 5 always does.
+    founder_review: !rules.leave_new_subjects_alone.passed,
   });
 }

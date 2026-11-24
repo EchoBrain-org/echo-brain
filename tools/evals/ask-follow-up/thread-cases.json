@@ -484,15 +484,15 @@
         },
         {
           "questions": [
-            "Why did the drop test fail on MECH-214?",
-            "is the bezel redesign approved?"
+            "What did Kestrel quote for the heater block tooling?",
+            "when does that quote expire?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "What did Kestrel quote for the heater block tooling?",
-            "when does that quote expire?"
+            "Why did the drop test fail on MECH-214?",
+            "is the bezel redesign approved?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         }
@@ -501,7 +501,7 @@
       "expect": {
         "thread": "other",
         "threads": [
-          2
+          3
         ]
       }
     },
@@ -729,14 +729,14 @@
         },
         {
           "questions": [
-            "When is the FCC pre-scan booked?",
-            "which lab are we using?"
+            "What's blocking the DVT gate?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "What's blocking the DVT gate?"
+            "When is the FCC pre-scan booked?",
+            "which lab are we using?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         }
@@ -745,7 +745,7 @@
       "expect": {
         "thread": "other",
         "threads": [
-          2
+          3
         ]
       }
     },
@@ -818,19 +818,19 @@
       "threads": [
         {
           "questions": [
-            "Why did the drop test fail on MECH-214?"
+            "Who signs off the PVT build plan?"
           ],
           "asked_at": "2026-11-22T17:10:00.000Z"
         },
         {
           "questions": [
-            "Why did the thermal soak fail on THERM-482?"
+            "Why did the drop test fail on MECH-214?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "Who signs off the PVT build plan?"
+            "Why did the thermal soak fail on THERM-482?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         }
@@ -839,8 +839,8 @@
       "expect": {
         "thread": "other",
         "threads": [
-          1,
-          2
+          2,
+          3
         ]
       }
     },
@@ -883,19 +883,19 @@
         },
         {
           "questions": [
-            "When do the Nordlake enclosure samples arrive?"
+            "When is the FCC pre-scan booked?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "When do the Voltaris cell samples arrive?"
+            "When do the Nordlake enclosure samples arrive?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         },
         {
           "questions": [
-            "When is the FCC pre-scan booked?"
+            "When do the Voltaris cell samples arrive?"
           ],
           "asked_at": "2026-11-16T20:31:00.000Z"
         }
@@ -905,8 +905,8 @@
         "thread": "other",
         "threads": [
           1,
-          2,
-          3
+          3,
+          4
         ]
       }
     },
@@ -952,13 +952,13 @@
         },
         {
           "questions": [
-            "Who owns the fixture redesign?"
+            "Has Voltaris confirmed the cell delivery date?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "Has Voltaris confirmed the cell delivery date?"
+            "Who owns the fixture redesign?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         }
@@ -968,7 +968,7 @@
         "thread": "other",
         "threads": [
           1,
-          2
+          3
         ]
       }
     },
@@ -1005,19 +1005,19 @@
       "threads": [
         {
           "questions": [
-            "What did we decide in the DVT readiness review?"
+            "What's the status of FW-77?"
           ],
           "asked_at": "2026-11-22T17:10:00.000Z"
         },
         {
           "questions": [
-            "What did we decide in the supplier quality review?"
+            "What did we decide in the DVT readiness review?"
           ],
           "asked_at": "2026-11-20T18:17:00.000Z"
         },
         {
           "questions": [
-            "What's the status of FW-77?"
+            "What did we decide in the supplier quality review?"
           ],
           "asked_at": "2026-11-18T19:24:00.000Z"
         }
@@ -1026,8 +1026,8 @@
       "expect": {
         "thread": "other",
         "threads": [
-          1,
-          2
+          2,
+          3
         ]
       }
     },
