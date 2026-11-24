@@ -143,6 +143,16 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   expect(asks().at(-1)!.threads).toEqual([]);
   await expect.poll(filed).toEqual({ 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?',
     'Which tests fail?': 'Which tests fail?', 'and who fixes them?': 'Which tests fail?' });
+  // With the bar widened by ×, Apollo's page asks all context, and is still not where a thread with no project lives: a
+  // jump to one puts Home under Ask.
+  await page.getByTestId('scope-clear').click();
+  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
+  await name.click();
+  await rows.filter({ hasText: 'Who owns billing?' }).click();
+  await expect(name).toHaveText('Who owns billing?');
+  await back(page);
+  await expect(page.getByTestId('home')).toBeVisible();
+  await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 });
 
 test('Merge joins a thread to the open one in this computer\'s file, and Undo puts it back', async () => {

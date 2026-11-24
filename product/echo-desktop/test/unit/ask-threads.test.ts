@@ -964,6 +964,46 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     await flush();
   });
 
+  it('puts the thread\'s own page under Ask on a jump, whatever the bar asks: Home for a thread with no project, even from a project\'s page with its bar widened', async () => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 4 * DAY]);
+    const blocked = threadIn(inZephyr, ['What is blocked?', 3 * DAY]);
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
+    seed(...tests, ...blocked, ...pilot);
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.openThread(tests[0]!.id);
+    store.widenScope();
+    expect(store.getState().barScope).toEqual(GLOBAL);
+    // The bar asks all context already, and Apollo's page is still not where the pilot's thread lives.
+    expect(await store.openThread(pilot[0]!.id)).toBe(true);
+    expect(store.getState().route).toEqual({ page: 'home' });
+    expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+    // So with the sidebar's Ask, which opens the thread asked in last.
+    await store.openProject(apollo);
+    store.widenScope();
+    store.returnToAsk();
+    await flush();
+    expect(store.getState().route).toEqual({ page: 'home' });
+    // On its own project's page a thread stays there, and a widened bar narrows back.
+    await store.openProject(apollo);
+    store.widenScope();
+    const route = store.getState().route;
+    await store.openThread(tests[0]!.id);
+    expect(store.getState().route).toBe(route);
+    expect(store.getState().barScope).toEqual(inApollo);
+    // Another project's thread opens that project, however the bar was widened.
+    store.widenScope();
+    await store.openThread(blocked[0]!.id);
+    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: zephyr.project_id } });
+    expect(store.getState().barScope).toEqual(inZephyr);
+    // A page that is no project's stays under a thread with no project.
+    store.openTools();
+    const tools = store.getState().route;
+    await store.openThread(pilot[0]!.id);
+    expect(store.getState().route).toBe(tools);
+    expect(store.threadShown()?.id).toBe(pilot[0]!.id);
+  });
+
   it('reads a project the sidebar has not loaded before it jumps, and drops the jump when Ask moved on meanwhile', async () => {
     active = numbered(12);
     const later = active[11]!;

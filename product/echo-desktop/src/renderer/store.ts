@@ -4287,8 +4287,10 @@ function movedSince(route: Route, asked: number | undefined): boolean {
  * A jump (ADR-0056): Ask moves to a thread's place and opens the thread, at
  * the turn `at` when a suggestion chose one. The place is the thread's home:
  * Home for no project; the project's page otherwise, so the bar's chip names
- * it. The page stays when its bar asks there already; on that project's own
- * page a widened bar narrows back; otherwise Home or the project opens first.
+ * it. A page that is no project's stays for a thread with no project; on the
+ * thread's own project's page a widened bar narrows back; otherwise Home or
+ * the project opens first, so a project's page is never left under a thread
+ * that does not live in it, whatever its bar asks.
  * A project the sidebar has not loaded (one on a later page) is read by its
  * id first, as following the open project does; a read that fails says why
  * and opens nothing. A project that is not one of the person's active ones
@@ -4327,11 +4329,13 @@ async function jump(id: string, at: string | null, picked: boolean, toAsk: boole
   }
   if (project?.status !== 'active') project = undefined;
   if (toAsk && home.kind === 'project' && !project) return 'unreachable';
-  if (!sameScope(state.barScope, project ? home : { kind: 'global' })) {
-    if (!project) goHome();
-    else if (state.route.page === 'project' && state.route.project.project_id === project.project_id) set({ barScope: { kind: 'project', project_id: project.project_id } });
-    else void openProject(project);
-  }
+  // The page under Ask is the thread's place, as well as the bar's scope: a project's page with its bar widened asks all
+  // context, and is still not where a thread with no project lives.
+  const on = state.route.page === 'project' ? state.route.project.project_id : null;
+  if (project) {
+    if (on !== project.project_id) void openProject(project);
+    else if (!sameScope(state.barScope, home)) set({ barScope: home });
+  } else if (on !== null || !sameScope(state.barScope, { kind: 'global' })) goHome();
   showThread(id, at, picked);
   return 'shown';
 }
