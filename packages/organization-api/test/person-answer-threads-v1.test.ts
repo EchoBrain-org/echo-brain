@@ -89,6 +89,7 @@ const elsewhere = (threads: readonly number[], extra: Record<string, unknown> = 
   schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: { kind: 'global' }, outcome: 'clarify', citations: [], parts: [],
   question: 'did that change?', thread: { kind: 'other', threads }, ...extra,
 });
+const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
 
 describe('where an answer says the question belongs (ADR-0056)', () => {
   it('places an ordinary answer in a new thread, or names other threads on a clarify that offers no choices', () => {
@@ -103,9 +104,7 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
   it('names threads on the same subject beside the open thread or the one other thread, never beside a new one or several', () => {
     expect(validatePersonAnswerResponseV8(answered({ merge: [1, 4] })).merge).toEqual([1, 4]);
     expect(validatePersonAnswerResponseV8(elsewhere([2], { merge: [0] })).merge).toEqual([0]);
-    const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
-    const asking = { ...elsewhere([2]), thread: undefined, choices };
-    delete (asking as { thread?: unknown }).thread;
+    const asking = (({ thread: _thread, ...rest }) => ({ ...rest, choices }))(elsewhere([2]));
     expect(validatePersonAnswerResponseV8(asking).choices).toHaveLength(1);
     for (const value of [
       // An answer that offers choices names no merge: the answer to the choice does.
@@ -116,7 +115,6 @@ describe('where an answer says the question belongs (ADR-0056)', () => {
   });
 
   it('refuses a placement that does not fit its outcome, or is not one', () => {
-    const choices = [{ label: 'THERM-482', question: 'What are the details on THERM-482?' }];
     for (const value of [
       // Other threads are a clarify, with no choices; a new subject is an answer.
       answered({ thread: { kind: 'other', threads: [1] } }), elsewhere([1], { choices }), elsewhere([1], { thread: { kind: 'new' } }),

@@ -332,21 +332,15 @@ export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerReque
   assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : []), ...(Object.hasOwn(input, 'threads') ? ['threads'] : [])], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
   const question = validatePersonQuestionText(input.question);
-  // Read in the order the fields were always read, so a request wrong in two places fails on the same one as before.
-  const project = Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {};
-  const previous = Object.hasOwn(input, 'previous') ? validatePersonAnswerPreviousV1(input.previous, question) : undefined;
-  const threads = Object.hasOwn(input, 'threads') ? validatePersonAnswerThreadsV1(input.threads) : undefined;
+  const request = { schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}), ...(Object.hasOwn(input, 'threads') ? { threads: validatePersonAnswerThreadsV1(input.threads) } : {}) };
   // An Ask again asks one earlier question again where it was asked: nothing places it.
-  if (threads !== undefined && previous?.purpose === 'ask_again') fail('Ask again carries no threads');
-  return boundedRequest({ schema_version: 3 as const, question, ...project, ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }) }, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
+  if (request.threads !== undefined && request.previous?.purpose === 'ask_again') fail('Ask again carries no threads');
+  return boundedRequest(request, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
 }
 
 /**
- * The asker's other threads an Ask carries (ADR-0056), checked on their own, as a client checks them before sending:
- * each with at least one question the asker typed (the question rule) and when it was last asked in. The list may be
- * empty: a client that keeps threads sends it with every question it wants placed, so that the answer can say the
- * question starts a new thread even when the asker has no other. There is no count of threads or questions: the
- * request's transport bound is what limits them.
+ * The asker's other threads an Ask carries (ADR-0056), checked on their own as a client checks them before sending.
+ * The list may be empty, so an answer can still say the question starts a new thread; only the transport bound limits it.
  */
 export function validatePersonAnswerThreadsV1(value: unknown): readonly PersonAnswerThreadV1[] {
   return Object.freeze(boundedList(value, 'Ask threads', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerThreadV1 => {
@@ -532,9 +526,8 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   if (result.outcome === 'partial' && !result.parts.some((item) => item.status === 'partial' || item.status === 'not_found' || item.status === 'records_only')) fail('Partial outcome is inconsistent');
   if (result.outcome === 'not_found' && (result.direct !== undefined || result.citations.length !== 0 || result.parts.some((item) => item.status !== 'not_found' || item.statements.length !== 0 || item.records !== undefined))) fail('No-evidence outcome is inconsistent');
   if (result.outcome === 'not_found' && result.parts.some(item => item.gap_details?.unsupported_action || item.gap_details?.interrupted)) fail('No-match outcome cannot be an unsupported action or interrupted research');
-  // Choices come only with clarify, which names the question asked and says nothing else. A clarify offers choices
-  // unless it names the other threads the question belongs to (ADR-0056).
-  if ((!clarify && previous.includes('choices')) || (clarify && (previous.includes('choices') === (elsewhere !== undefined) || result.citations.length !== 0 || result.direct !== undefined || result.notice !== undefined || !previous.includes('question') || previous.includes('since')))) fail('Clarify outcome is inconsistent');
+  // Choices come only with clarify, which names the question asked and says nothing else.
+  if ((!clarify && previous.includes('choices')) || (clarify && (result.citations.length !== 0 || result.direct !== undefined || result.notice !== undefined || !previous.includes('question') || previous.includes('since')))) fail('Clarify outcome is inconsistent');
   // `since` answers an Ask again, which names its question; an answer that cites nothing cannot say what is different.
   if (previous.includes('since') && (!previous.includes('question') || result.citations.length === 0)) fail('Ask response since is inconsistent');
   if (canonicalJsonBytes(result).byteLength > PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) fail('Ask response exceeds JSON byte bound');

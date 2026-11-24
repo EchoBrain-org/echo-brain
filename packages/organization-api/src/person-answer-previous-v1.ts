@@ -58,12 +58,7 @@ export interface PersonAnswerPreviousV1 {
 }
 
 /** One older turn of the thread a follow-up continues (ADR-0056): a previous turn without a purpose. */
-export interface PersonAnswerEarlierTurnV1 {
-  readonly question: string;
-  readonly asked_at: string;
-  readonly statements: readonly PersonAnswerPreviousStatementV1[];
-  readonly citations: readonly PersonAnswerCitationV8[];
-}
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier'>;
 
 /**
  * One of the asker's other threads on an Ask (ADR-0056): the questions the asker typed in it, oldest first and at
