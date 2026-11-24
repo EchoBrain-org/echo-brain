@@ -368,7 +368,7 @@ export interface Answer {
    * `new` is a new subject, answered as asked; `other` names threads by their place among those sent, comes with outcome
    * `clarify` and no choices, and nothing was answered.
    */
-  readonly thread?: AskPlacement;
+  readonly thread?: PersonAnswerThreadPlacementV1;
   /** Only for an Ask that carried `threads`: the places, among those sent, of threads on the same subject as the one the question belongs to. */
   readonly merge?: readonly number[];
 }
@@ -500,8 +500,6 @@ export type AskPrevious = PersonAnswerPreviousV1;
  * was last asked in. Their own words only: never an answer's text or a question a model wrote. Never stored.
  */
 export type AskThread = PersonAnswerThreadV1;
-/** Where an answer says the question belongs when not in the thread it continued (ADR-0056). */
-export type AskPlacement = PersonAnswerThreadPlacementV1;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;

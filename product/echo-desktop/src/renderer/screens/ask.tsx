@@ -790,8 +790,7 @@ function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  // The list is of what Ask showed when it opened. A question started, or another thread shown under it (an answer that
-  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find. With the
+  // The list is of what Ask showed when it opened: a question started or another thread shown closes it. With the
   // keyboard in it, the caret goes back to the bar, never to the page.
   const shown = threadShown(state)?.id ?? null;
   const asking = Boolean(state.ask?.asking);
