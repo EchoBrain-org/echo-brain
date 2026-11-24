@@ -70,16 +70,21 @@ Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
 this computer only, in one owner-only file per account beside the person
 session (`ask-timeline-v1`), every turn until the file would pass what the runtime can read back as one string. Our own sign-out,
 or another account signing in here, deletes it; a session that merely ended
-keeps it. The Authority never stores it. Ask opens over the page on the
-thread of its place (ADR-0049): from Home every turn, from a project only
-that project's. The latest turn, and those asked since Ask opened, show in
+keeps it. The Authority never stores it. Ask opens over the page on one
+thread (ADR-0056, proposed): the turns that carry the same thread label, under
+the thread's name, which opens the list of every thread by home (a project, or
+none) to jump to one or merge one into the open thread. You are in a thread
+once you have asked in it or picked it since Ask opened; the sidebar's Ask
+only shows the one you last used. In a thread, a typed question continues it.
+Otherwise it is placed among all your threads, the one shown included: it
+starts a thread, or is asked in the one the answer says it belongs to. The latest turn, and those asked since Ask opened, show in
 full; every earlier turn is one line with its
 project's square (none for all context), its full question,
 **Changed** when a source it cited changed, and when it was asked, with a quiet
 Today line above today's first turn. Back, Escape or any page closes Ask and
 keeps the timeline. Opening Ask checks what the newest ten turns of its thread
 cited in one content-free read (`person ask-check`): at most every five
-minutes for each place, and quiet when it fails. A turn opened from its line or
+minutes for each thread, and quiet when it fails. A turn opened from its line or
 a suggestion is checked too when nothing in the last five minutes said what
 its sources are now, and what a check said shows for five minutes only. A line
 opens its answer as it was, dimmed, under the line as its heading: a sentence
@@ -92,10 +97,10 @@ before it went, at Home): the new answer lands at the bottom, opening with
 "Changed since Oct 14" and what is different, each cited, or nothing when
 nothing material changed, and the old turn folds away. A question shows once
 on a thread: one asked again word for word in the same place folds the one
-before. The empty bar suggests the questions of its place's thread first,
-newest first; one opens Ask at its turn instead of asking it again.
+before. The empty bar suggests the questions asked in its place first,
+newest first; one opens its thread at its turn instead of asking it again.
 
-Typed while Ask is open, a question continues the conversation: it carries the
+Typed in a thread you are in, a question continues the conversation: it carries the
 earlier turn opened, or else the latest one, however long ago it was asked
 (the question, and the sentences a check of the last five minutes found you can
 still read, within the Ask's request body bound). It waits for that check; with none, it

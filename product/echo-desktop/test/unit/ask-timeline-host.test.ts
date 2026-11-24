@@ -26,7 +26,7 @@ vi.mock('node:fs', async original => {
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
   deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelinePath, timelineTurn,
@@ -241,11 +241,13 @@ describe('the timeline file (C5)', () => {
   });
 
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
-    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true, typed: 'whats open', follows: randomUUID() });
+    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true, typed: 'whats open', follows: randomUUID(), thread: randomUUID() });
     expect(timelineTurn(good)).toEqual(good);
-    // A turn an older desktop saved has no mark, and is read as it was.
-    const { citations_complete: _mark, ...older } = good;
+    // A turn an older desktop saved has no mark and names no thread (ADR-0056), and is read as it was.
+    const { citations_complete: _mark, thread: _thread, ...older } = good;
     expect(timelineTurn(older)).toEqual(older);
+    // A thread is named by a turn's id, its first: anything else is not one a put writes.
+    for (const thread of ['thread-1', '', 7, null, { id: good.id }]) expect(timelineTurn({ ...good, thread })).toBeNull();
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
       // Never what a put writes: a part's statements without blocks (ADR-0051), a scope the page has not got, and blocks with nothing to arrange.
@@ -377,6 +379,33 @@ describe('what the page sends with an Ask and a check', () => {
     // No count or length of its own: many sentences, a long one, and many citations all go.
     expect(asked({ ...previous, statements: many(previous.statements[0], 300) })).not.toBeNull();
     expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(5_000), citation_indexes: [0] }] })).not.toBeNull();
+  });
+
+  it('carries the asker\'s other threads as the client takes them, only on an Ask that has some (ADR-0056)', () => {
+    const threads = [{ questions: ['When does Apollo launch?', 'did that change?'], asked_at: '2026-10-24T09:00:00.000Z' }];
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous)).not.toContainEqual(expect.stringMatching(/^--threads=/u));
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, threads).slice(-2)).toEqual([`--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify(threads)}`]);
+    expect(askArgv('Who owns it?', { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' }, undefined, threads).at(-1)).toBe(`--threads=${JSON.stringify(threads)}`);
+  });
+
+  it('takes the other threads only as the request carries them: a list it would refuse is not sent, and the Ask goes without it', () => {
+    const thread = { questions: ['When does Apollo launch?'], asked_at: '2026-10-24T09:00:00.000Z' };
+    const earlier = { question: 'When does Apollo launch?', asked_at: '2026-10-20T09:00:00.000Z', statements: [], citations: [] };
+    expect(askThreads([thread], 'Who owns it?', undefined)).toEqual([thread]);
+    expect(askThreads([thread], 'Who owns it?', { ...previous, earlier: [earlier] })).toEqual([thread]);
+    // No count of its own: many threads, of many questions, all go.
+    expect(askThreads(Array.from({ length: 300 }, () => ({ ...thread, questions: Array.from({ length: 20 }, (_, at) => `Question ${at}?`) })), 'Who owns it?', previous)).toHaveLength(300);
+    for (const bad of [
+      [{ ...thread, questions: [] }], [{ ...thread, questions: [' padded '] }], [{ ...thread, asked_at: 'today' }], [{ ...thread, name: 'Apollo' }], [{ questions: thread.questions }],
+      'threads', null, {},
+    ]) expect(askThreads(bad, 'Who owns it?', previous)).toBeNull();
+    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
+    expect(askThreads([], 'Who owns it?', previous)).toEqual([]);
+    expect(askThreads([], 'Who owns it?', undefined)).toEqual([]);
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, []).at(-1)).toBe('--threads=[]');
+    // An Ask again carries none, and the list and the turn fit the body together.
+    expect(askThreads([thread], previous.question, { ...previous, purpose: 'ask_again' })).toBeNull();
+    expect(askThreads([{ ...thread, questions: ['é'.repeat(600_000)] }], 'Who owns it?', previous)).toBeNull();
   });
 
   it('checks any number of items, each a citation that can go, within the 1 MiB request body', () => {

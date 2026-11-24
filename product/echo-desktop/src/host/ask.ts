@@ -3,9 +3,9 @@
 // prints while it works. Kept apart from host.ts so the whole path, Authority
 // to page, is tested as it runs.
 import {
-  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAskCheckRequestV1, validateProjectIdV1,
+  PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskPrevious, AskProgressNotice, AskScope, AskStep, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
+import type { AskPrevious, AskProgressNotice, AskScope, AskStep, AskThread, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
@@ -16,12 +16,14 @@ import { askStepView } from './views.js';
  * account the page shows, as every call: a client signed in as another by
  * then asks nothing and prints no step, so the page's account check of each
  * step is the client's own. A follow-up or Ask again carries the earlier turn
- * (`previous`, ADR-0047), already checked by askPrevious.
+ * (`previous`, ADR-0047), already checked by askPrevious, and an Ask the
+ * asker's other threads (`threads`, ADR-0056), already checked by askThreads.
  */
-export function askArgv(text: string, scope: AskScope, previous?: AskPrevious): string[] {
+export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[]): string[] {
   return ['ask', `--question=${text}`, '--progress',
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
-    ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`])];
+    ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`]),
+    ...(threads === undefined ? [] : [`--threads=${JSON.stringify(threads)}`])];
 }
 
 /** Whether the API's own validator takes `value`. */
@@ -43,6 +45,18 @@ export function askPrevious(value: unknown, question: string, scope: AskScope): 
   } catch {
     return null;
   }
+}
+
+/**
+ * The asker's other threads an Ask of `question` (already askText's) carries
+ * beside `previous` (already askPrevious's, or none), checked as the request
+ * will carry them (ADR-0056): by the API's own validator, the list with the
+ * turn, so an Ask again carries none and the two fit the body together. Null
+ * when that refuses them: they are context, so the Ask then goes without them.
+ */
+export function askThreads(value: unknown, question: string, previous: AskPrevious | undefined): AskThread[] | null {
+  const request = { schema_version: 3, question, ...(previous === undefined ? {} : { previous }), threads: value };
+  return checks(validatePersonAnswerRequestV3, request) ? value as AskThread[] : null;
 }
 
 /** The request a check sends (C1), as the API's own validator takes it, or null when the page's items are not one. */

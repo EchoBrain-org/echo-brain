@@ -16,7 +16,7 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, askThreads, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
@@ -606,7 +606,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
-      const { expect, question, scope, cancel_id, previous: earlier } = params as Params<'ask.run'>;
+      const { expect, question, scope, cancel_id, previous: earlier, threads: others } = params as Params<'ask.run'>;
       // A retired or malformed scope is refused, never widened to all accessible context.
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
@@ -616,13 +616,18 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (text === '') return code('invalid_request');
       if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
       const previous = checked ?? undefined;
+      // The asker's other threads (ADR-0056), checked beside that turn as the request carries them. Context too: a list
+      // the validator refuses is not sent, and the answer then places the question nowhere.
+      const listed = others === undefined ? undefined : askThreads(others, text, previous);
+      if (listed === null && __ECHO_TEST_HOOK__) console.error('[client] ask threads refused; asking without them');
+      const threads = listed ?? undefined;
       // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
       const steps = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
       const progress = (line: string) => { alive(); steps?.(line); };
-      return forAccount(method, expect, askArgv(text, scope, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, previous, threads), stdout => answerView(lastJson(stdout), scope, threads?.length), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
       const { expect } = params as Params<'timeline.read'>;

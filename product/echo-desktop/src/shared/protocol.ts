@@ -1,6 +1,6 @@
 import type {
   PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
-  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1,
+  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1, PersonAnswerThreadPlacementV1, PersonAnswerThreadV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -352,7 +352,7 @@ export interface Answer {
   readonly outcome: 'answered' | 'partial' | 'not_found' | 'clarify';
   /** What the Ask looked through, from its stream's receipt. The saved turn (TimelineAnswer) never keeps it. */
   readonly receipt: AskReceipt;
-  /** Only for an Ask that carried `previous`: the full question the answer answers ("Who owns THERM-482?"). */
+  /** Only for an Ask that carried `previous` or `threads`: the full question the answer answers ("Who owns THERM-482?"). */
   readonly question?: string;
   /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
@@ -363,15 +363,24 @@ export interface Answer {
    * waits, not sent, in the asker's own list; the page reads each card live (`runs` `item`), so a turn keeps only the ids.
    */
   readonly follow_ups?: readonly string[];
+  /**
+   * Only for an Ask that carried `threads` (ADR-0056): where the question belongs when not in the thread it continued.
+   * `new` is a new subject, answered as asked; `other` names threads by their place among those sent, comes with outcome
+   * `clarify` and no choices, and nothing was answered.
+   */
+  readonly thread?: AskPlacement;
+  /** Only for an Ask that carried `threads`: the places, among those sent, of threads on the same subject as the one the question belongs to. */
+  readonly merge?: readonly number[];
 }
 
 /**
  * An answer as the timeline keeps it: what the page reads back of a turn.
  * What only the Ask that brought it reads (what it looked through, "Which
- * one?"'s choices) and what the turn keeps itself (the full question, Ask
- * again's "since") are not kept twice.
+ * one?"'s choices, where the question belongs among the threads that Ask
+ * sent) and what the turn keeps itself (the full question, Ask again's
+ * "since") are not kept twice.
  */
-export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices'>;
+export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge'>;
 
 /**
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
@@ -423,6 +432,12 @@ export interface TimelineTurn {
    * none, and fails that.
    */
   readonly follows?: string | null;
+  /**
+   * The thread it belongs to (ADR-0056): the id of the thread's first turn, its own for the first. A label only: the
+   * Authority never sees it, and merging threads changes nothing else of a turn. A turn saved before this field has none,
+   * and belongs to the thread of the turn it followed in the same place (threadIdOf) until it is next saved.
+   */
+  readonly thread?: string;
 }
 
 /**
@@ -453,6 +468,14 @@ export const MAX_REQUEST_BYTES = 1024 * 1024;
  * `ask_again` has the writer say what is different since `asked_at`.
  */
 export type AskPrevious = PersonAnswerPreviousV1;
+
+/**
+ * One of the asker's other threads an Ask carries (ADR-0056): the questions they typed in it, oldest first, and when it
+ * was last asked in. Their own words only: never an answer's text or a question a model wrote. Never stored.
+ */
+export type AskThread = PersonAnswerThreadV1;
+/** Where an answer says the question belongs when not in the thread it continued (ADR-0056). */
+export type AskPlacement = PersonAnswerThreadPlacementV1;
 
 /** The newest thing that arrived in one of your projects from someone else that you can read, or null (C2). */
 export type ProjectActivity = PersonProjectActivityItemV1;
@@ -735,8 +758,8 @@ export interface HostMethods {
     params: { expect: Expect; request_id: string; file_handle: string; title: string; audience: Audience; project_ids: readonly string[] };
     result: Receipt;
   };
-  /** `previous`: the earlier turn a follow-up or Ask again carries (C3). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious }; result: Answer };
+  /** `previous`: the earlier turn a follow-up or Ask again carries (C3). `threads`: the asker's other threads (ADR-0056). */
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
   /** Keeps one turn: a new one at the end, or one already kept in its place; then the oldest past the bounds go. */

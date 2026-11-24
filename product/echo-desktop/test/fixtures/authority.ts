@@ -53,7 +53,9 @@ interface Contract {
   validatePersonListResponseV1(value: unknown): unknown;
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
-  validatePersonAnswerRequestV3(value: unknown): { question: string; project_id?: string };
+  validatePersonAnswerRequestV3(value: unknown): {
+    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string }; threads?: readonly { readonly questions: readonly string[] }[];
+  };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
   validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
   validatePersonAskCheckV1(value: unknown): unknown;
@@ -316,6 +318,44 @@ function timelineAnswer(question: string, scope: Record<string, unknown>, previo
 /** Readability only: the follow-up is no longer readable, everything else is. */
 function timelineCheck(items: readonly { citation: Record<string, unknown> }[]): Record<string, unknown> {
   return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => ({ state: citation.kind === 'follow_up' ? 'unreadable' : 'same' })) };
+}
+
+// ---- Ask threads (ADR-0056) --------------------------------------------------------
+
+/** The subjects `ask-threads` knows a question, and a thread, to be about. */
+const THREAD_SUBJECTS = ['billing', 'pilot', 'tests', 'ledger'] as const;
+/** The prefix of the question an `ask-threads` follow-up's answer names: a resolver's rewrite, which no one typed. */
+export const RESOLVED_PREFIX = 'Resolved:';
+
+/**
+ * `ask-threads` places a question among the threads its request carries, as the thread resolver would (Ask threads v1
+ * T2), from the words alone. A question is about each of THREAD_SUBJECTS it names, and a thread sent is on a subject
+ * when a question typed in it names it:
+ * - about a subject some sent threads are on: it belongs to them (`other`), and nothing is answered;
+ * - "same as <subject>": the sent threads on that subject are on the subject of the one it belongs to (`merge`);
+ * - "unrelated", or a request with no open thread (no `previous`): a new subject (`new`);
+ * - otherwise it continues the open thread.
+ * The list may be empty: the question can still be a new subject. An answer to a request with threads names its
+ * question. A follow-up's names one no one typed ("Resolved: …"), which must never come back as a thread's question.
+ * A request without threads is never placed, and is answered as any other.
+ */
+function threadsAnswer(request: { readonly question: string; readonly previous?: { readonly purpose: string; readonly question: string }; readonly threads?: readonly { readonly questions: readonly string[] }[] },
+  plain: Record<string, unknown>): Record<string, unknown> {
+  const { question, previous, threads } = request;
+  const full = previous?.purpose === 'follow_up' ? `${RESOLVED_PREFIX} ${question} (after "${previous.question}")` : question;
+  if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full };
+  const on = (subject: string) => threads.flatMap((thread, at) => (thread.questions.some(typed => typed.toLowerCase().includes(subject)) ? [at] : []));
+  const words = question.toLowerCase();
+  const same = /same as (\w+)/u.exec(words)?.[1];
+  const about = words.replace(/same as \w+/u, '');
+  const belongs = [...new Set(THREAD_SUBJECTS.filter(subject => about.includes(subject)).flatMap(on))].sort((left, right) => left - right);
+  const merge = same === undefined ? [] : on(same).filter(at => !belongs.includes(at));
+  if (belongs.length > 0) {
+    return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: plain.scope, outcome: 'clarify', citations: [], parts: [], question,
+      thread: { kind: 'other', threads: belongs }, ...(belongs.length === 1 && merge.length > 0 ? { merge } : {}) };
+  }
+  if (previous === undefined || /\bunrelated\b/u.test(words)) return { ...plain, question, thread: { kind: 'new' } };
+  return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}) };
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
@@ -1742,6 +1782,11 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       const answer = { ...desktop.answer, schema_version: 8, kind: 'echo-clean-person-answer-v8' };
       // The Ask timeline's answers, by the earlier turn the Ask carries; every other mode's take one and answer as if none came.
       if (mode === 'ask-timeline-unreadable') return answered(timelineAnswer(question, scope, body?.previous as Record<string, unknown> | undefined));
+      // `ask-threads` (ADR-0056) places the question among the threads the request carries (threadsAnswer).
+      if (mode === 'ask-threads') {
+        const [part] = desktop.answer.parts as Record<string, unknown>[];
+        return answered(threadsAnswer(request, { ...answer, scope, parts: [{ ...part, question }] }));
+      }
       // `ask-progress` streams the Ask's steps, then its answer and receipt; every other mode streams its answer alone.
       if (mode === 'ask-progress') return progressStream(question, scope, init?.signal ?? undefined);
       // `ask-completion` answers what it can and says, typed, that it cannot make changes.
@@ -1783,9 +1828,12 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
           blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
         }] });
       }
-      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
+      // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources. To a request that carried
+      // threads (ADR-0056) it names its question, and with no open thread to continue says the subject is new, as the
+      // Authority does.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
-      return answered({ ...answer, scope, parts: [{ ...part, question }] });
+      const placed = request.threads === undefined ? {} : { question, ...(request.previous === undefined ? { thread: { kind: 'new' } } : {}) };
+      return answered({ ...answer, scope, parts: [{ ...part, question }], ...placed });
     }
     if (method === 'POST' && path === '/v2/person/ask/source') {
       const citation = body?.citation as Record<string, unknown>;
