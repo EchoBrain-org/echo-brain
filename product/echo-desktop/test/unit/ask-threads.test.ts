@@ -959,6 +959,11 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     const screens = await import('../../src/renderer/screens/ask.js');
     const list = () => render(screens.ThreadList({ state: store.getState(), onDone: () => undefined }));
     expect(byTestId(list(), 'thread-group').map(text)).toEqual(['No project', 'Apollo']);
+    // A dialog the name opens: the name says so, and names it as what it controls only while it is there.
+    const dialog = byTestId(list(), 'thread-list')[0]!;
+    expect([dialog.props.role, dialog.props['aria-label']]).toEqual(['dialog', 'Threads']);
+    const name = byTestId(await page(store), 'thread-name')[0]!;
+    expect([name.props['aria-haspopup'], name.props['aria-expanded'], name.props['aria-controls']]).toEqual(['dialog', false, undefined]);
     const rows = byTestId(list(), 'thread-row');
     expect(rows.map(row => text((row.props.children as unknown[])[0]))).toEqual(['When does the pilot start?', 'Who owns billing?', 'Which tests fail?']);
     expect(rows.map(row => row.props['aria-current'])).toEqual(['true', undefined, undefined]);

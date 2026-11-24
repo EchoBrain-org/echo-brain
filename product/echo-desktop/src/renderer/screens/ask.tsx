@@ -707,6 +707,9 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   );
 }
 
+/** The thread list's id on the page, for the name that opens it to say what it controls. */
+const THREAD_LIST_ID = 'ask-thread-list';
+
 /**
  * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
  * first. A row jumps to its thread. The open thread's own row is marked, and picking it is picking that thread: the
@@ -714,6 +717,10 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
  * Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another home has none.
  * The arrow keys move through the rows from the field, and Return there picks the first row, the open thread's too.
  * While Ask is busy (askBusy) nothing here moves it.
+ *
+ * It is a dialog the name opens, not a menu or a listbox: it holds a field to type in, focus really moves from row to
+ * row, and a row has a second button beside it. So each home is a list, a row a button in a list item, and the open
+ * thread's row is the current one.
  */
 export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
   const [find, setFind] = useState('');
@@ -739,19 +746,20 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
     }
   };
   return (
-    <div class="menu thread-list" data-testid="thread-list" role="group" aria-label="Threads" aria-live="off" tabIndex={-1} ref={list} onKeyDown={onKeyDown}>
+    <div class="menu thread-list" id={THREAD_LIST_ID} data-testid="thread-list" role="dialog" aria-label="Threads" aria-live="off" tabIndex={-1} ref={list} onKeyDown={onKeyDown}>
       <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find a thread" aria-label="Find a thread" data-testid="thread-find"
         value={find} onInput={event => setFind((event.target as HTMLInputElement).value)} />
       <div class="thread-groups">
         {threadList(state, find).map((group) => {
           const heading = group.home.kind === 'project' ? scopeName(group.home, state) : 'No project';
+          // Each home is a list named by its heading, which is then not read a second time.
           return (
-            <div class="thread-group" role="group" aria-label={heading} key={group.home.kind === 'project' ? group.home.project_id : ''}>
-              <div class="menu-label" data-testid="thread-group">{heading}</div>
+            <div class="thread-group" role="list" aria-label={heading} key={group.home.kind === 'project' ? group.home.project_id : ''}>
+              <div class="menu-label" data-testid="thread-group" aria-hidden="true">{heading}</div>
               {group.threads.map((thread) => {
                 const current = thread.id === open?.id;
                 return (
-                  <div class="thread-item" key={thread.id}>
+                  <div class="thread-item" role="listitem" key={thread.id}>
                     <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy}
                       title={thread.name} onClick={then(current ? enterThread : () => void openThread(thread.id))}>
                       <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
@@ -810,7 +818,8 @@ function ThreadHead({ state }: { state: State }) {
   const merged = mergedLine(state);
   return (
     <div class="thread-head" ref={head} onKeyDown={onKeyDown} onFocusOut={onFocusOut}>
-      <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="dialog" aria-expanded={open}
+        aria-controls={open ? THREAD_LIST_ID : undefined} onClick={() => setOpen(!open)}>
         <span class="name">{threadShown(state)?.name ?? 'New thread'}</span><Caret />
       </button>
       {open && <ThreadList state={state} onDone={() => setOpen(false)} />}

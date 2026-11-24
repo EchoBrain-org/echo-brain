@@ -91,8 +91,19 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   const name = page.getByTestId('thread-name');
   const list = page.getByTestId('thread-list');
   const rows = list.getByTestId('thread-row');
+  await expect(name).toHaveAttribute('aria-haspopup', 'dialog');
+  await expect(name).toHaveAttribute('aria-expanded', 'false');
+  await expect(name).not.toHaveAttribute('aria-controls');
   await name.click();
   await expect(name).toHaveAttribute('aria-expanded', 'true');
+  // What the name opens is what it says it controls: a dialog, a list a home, a row a button in it, the open thread's the current one.
+  const dialog = page.getByRole('dialog', { name: 'Threads' });
+  await expect(dialog).toHaveAttribute('id', (await name.getAttribute('aria-controls'))!);
+  await expect(dialog.getByRole('searchbox', { name: 'Find a thread' })).toBeFocused();
+  await expect(dialog.getByRole('list')).toHaveCount(2);
+  await expect(dialog.getByRole('list', { name: 'Apollo' }).getByRole('listitem')).toHaveCount(1);
+  await expect(dialog.getByRole('list', { name: 'No project' }).getByRole('listitem')).toHaveCount(2);
+  await expect(dialog.getByRole('list', { name: 'Apollo' }).getByRole('button', { name: /Which tests fail\?/u })).toHaveAttribute('aria-current', 'true');
   await expect(list.getByTestId('thread-group')).toHaveText(['Apollo', 'No project']);
   await expect(rows.locator('.name')).toHaveText(['Which tests fail?', 'When does the pilot start?', 'Who owns billing?']);
   await expect(rows.nth(0)).toHaveAttribute('aria-current', 'true');
