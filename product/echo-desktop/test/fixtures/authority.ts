@@ -324,8 +324,6 @@ function timelineCheck(items: readonly { citation: Record<string, unknown> }[]):
 
 /** The subjects `ask-threads` knows a question, and a thread, to be about. */
 const THREAD_SUBJECTS = ['billing', 'pilot', 'tests', 'ledger'] as const;
-/** The prefix of the question an `ask-threads` follow-up's answer names: a resolver's rewrite, which no one typed. */
-export const RESOLVED_PREFIX = 'Resolved:';
 
 /**
  * `ask-threads` places a question among the threads its request carries, as the thread resolver would (Ask threads v1
@@ -342,7 +340,7 @@ export const RESOLVED_PREFIX = 'Resolved:';
 function threadsAnswer(request: { readonly question: string; readonly previous?: { readonly purpose: string; readonly question: string }; readonly threads?: readonly { readonly questions: readonly string[] }[] },
   plain: Record<string, unknown>): Record<string, unknown> {
   const { question, previous, threads } = request;
-  const full = previous?.purpose === 'follow_up' ? `${RESOLVED_PREFIX} ${question} (after "${previous.question}")` : question;
+  const full = previous?.purpose === 'follow_up' ? `Resolved: ${question} (after "${previous.question}")` : question;
   if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full };
   const on = (subject: string) => threads.flatMap((thread, at) => (thread.questions.some(typed => typed.toLowerCase().includes(subject)) ? [at] : []));
   const words = question.toLowerCase();
