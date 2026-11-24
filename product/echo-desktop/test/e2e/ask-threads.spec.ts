@@ -348,8 +348,10 @@ test('the threads on the subject of the one a question jumps to join it first, t
   // The ledger's question joined as an earlier line, between billing's own turn and the answer, both in full.
   await expect(page.getByTestId('timeline-question')).toHaveText(['Is the ledger closed?']);
   await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
-  // The words were the next question after the merge, and could build on what joined: the merge has no Undo (R10).
+  // The words were the next question after the merge, and could build on what joined: the merge has no Undo (R10), and
+  // a note says it was made.
   await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText('Merged with Is the ledger closed?');
 });
 
 test('a question a model wrote is sent again only while every turn its request carried is still readable, one a merge brought in included', async () => {

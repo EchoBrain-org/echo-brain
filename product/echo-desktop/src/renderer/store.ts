@@ -4299,8 +4299,9 @@ async function askThere(thread: Thread, question: string, merge: readonly string
     if (state.barText.trim() === '') set({ barText: question });
     return;
   }
-  // What the move said of itself (not kept, or not confirmed) stays over the question, which would clear it.
-  const said = state.toastShown === toasts ? null : state.toast;
+  // What the move said of itself (not kept, or not confirmed) stays over the question, which would clear it; and so, made,
+  // does the merge itself ("Merged with …"), whose line and Undo the question ends (R10).
+  const said = state.toastShown === toasts ? mergedLine() : state.toast;
   const asking = askAs({ kind: 'typed', question, follows, placed: false }, scope);
   if (said !== null) set({ toast: said });
   await asking;

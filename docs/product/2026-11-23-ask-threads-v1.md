@@ -78,12 +78,12 @@ and ECHO works out which earlier conversation a question continues.
    thread as plainly the same subject, in the same home only, with the same
    line. When the answer moved Ask to another thread, that merge is made there
    first, and the question is then asked again there: that question is the
-   next one, so this merge has no Undo. Undo is offered until the next
-   question, jump or close. While a merge or an Undo is being kept nothing
-   else can be asked, jumped to or merged. One this computer refused moves
-   nothing and the page says so, and an Undo refused can be tried again; one
-   it cannot confirm changes nothing on the page and says it will show
-   correctly after ECHO restarts.
+   next one, so this merge has no Undo, and a note says it was made. Undo is
+   offered until the next question, jump or close. While a merge or an Undo
+   is being kept nothing else can be asked, jumped to or merged. One this
+   computer refused moves nothing and the page says so, and an Undo refused
+   can be tried again; one it cannot confirm changes nothing on the page and
+   says it will show correctly after ECHO restarts.
 8. **Unchanged:** the bar, the scope chip, progress, answers, sources, Copy,
    Ask again (it stays in its thread), "Which one?" between things inside one
    answer, drafted follow-ups, the sidebar's Ask (it opens the thread asked

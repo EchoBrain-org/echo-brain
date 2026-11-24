@@ -1865,7 +1865,9 @@ describe('merging threads, and Undo', () => {
       expect(asked()[1]).toMatchObject({ previous: { question: 'Who owns billing?' } });
       expect(asked()[1]!.previous).not.toHaveProperty('earlier');
       expect(asked()[1]).not.toHaveProperty('threads');
+      // The merge has no line and no Undo, the question being the next one: a toast says it was made, over the question.
       expect(store.mergedLine()).toBeNull();
+      expect(store.getState().toast).toBe('Merged 2 threads');
       again(answered(asked()[1]!));
       await first;
       await flush();
@@ -2002,6 +2004,7 @@ describe('merging threads, and Undo', () => {
       expect(moves()).toEqual([[{ turn: flaky[0]!.id, thread: tests[0]!.id }]]);
       expect(filed()).toMatchObject({ 'Which tests are flaky?': tests[0]!.id, 'Who owns billing?': billing[0]!.id });
       expect(asked()[1]).toMatchObject({ scope: inApollo, previous: { question: 'Which tests fail?' } });
+      expect(store.getState().toast).toBe('Merged with Which tests are flaky?');
       release(answered(asked()[1]!));
       await pick;
       await flush();
