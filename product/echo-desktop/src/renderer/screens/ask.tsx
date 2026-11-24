@@ -14,7 +14,7 @@ import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
-  chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
+  chooseThread, clarifyThreads, closeSources, copyAnswer, enterThread, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
   retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
   toggleTurn, turnOf, undoMerge, widenScope,
@@ -709,10 +709,11 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
 
 /**
  * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
- * first. A row jumps to its thread; the open thread's own is marked and does nothing. With a thread open every other row
- * of its home has Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another
- * home has none. The arrow keys move through the rows from the field, and Return
- * there jumps to the first. While a question is on its way nothing here moves Ask.
+ * first. A row jumps to its thread. The open thread's own row is marked, and picking it is picking that thread: the
+ * person is in it from there, which Ask merely showing it is not. With a thread open every other row of its home has
+ * Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another home has none.
+ * The arrow keys move through the rows from the field, and Return there picks the first row, the open thread's too.
+ * While Ask is busy (askBusy) nothing here moves it.
  */
 export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
   const [find, setFind] = useState('');
@@ -734,7 +735,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
       next?.focus();
     } else if (event.key === 'Enter' && event.target === field.current) {
       event.preventDefault();
-      all.find(row => row.getAttribute('aria-current') !== 'true' && !row.disabled)?.click();
+      all.find(row => !row.disabled)?.click();
     }
   };
   return (
@@ -751,8 +752,8 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
                 const current = thread.id === open?.id;
                 return (
                   <div class="thread-item" key={thread.id}>
-                    <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy && !current}
-                      title={thread.name} onClick={current ? undefined : then(() => void openThread(thread.id))}>
+                    <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy}
+                      title={thread.name} onClick={then(current ? enterThread : () => void openThread(thread.id))}>
                       <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
                     </button>
                     {mergeable(thread, open) && (

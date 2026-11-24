@@ -134,13 +134,14 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(page.getByTestId('ask-view')).toHaveCount(0);
   await page.getByTestId('sidebar-ask').click();
   await expect(name).toHaveText('Which tests fail?');
-  // The open thread's row does nothing.
+  // The open thread's own row picks that thread: nothing moves, the list closes, and the caret is back in the bar.
   await name.click();
   await rows.nth(0).click();
-  await expect(list).toBeVisible();
+  await expect(list).toHaveCount(0);
   await expect(name).toHaveText('Which tests fail?');
+  await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
+  await expect(page.getByTestId('ask-field')).toBeFocused();
   // The arrow keys move through the rows, and Return jumps: to the pilot's thread, at Home, where the bar asks all context.
-  await page.keyboard.press('Escape');
   await name.click();
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('ArrowDown');
@@ -491,6 +492,23 @@ test('back in Ask from the sidebar a question is placed among every thread, the 
   expect(again).not.toHaveProperty('threads');
   expect(asks()).toHaveLength(before + 2);
   await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
+
+  // Back once more, and the thread that is showing is picked from the list, by Return on it as the one found: the
+  // person is in it, so the next question continues it, in one request.
+  await back(page);
+  await page.getByTestId('sidebar-ask').click();
+  await page.getByTestId('thread-name').click();
+  await page.getByTestId('thread-find').fill('PILOT');
+  await expect(page.getByTestId('thread-row')).toHaveCount(1);
+  await expect(page.getByTestId('thread-row')).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('thread-list')).toHaveCount(0);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
+  const picked = asks().length;
+  await ask(page, 'and who runs it?');
+  expect(asks()).toHaveLength(picked + 1);
+  expect(asks().at(-1)).toMatchObject({ question: 'and who runs it?', previous: { purpose: 'follow_up', question: 'is the pilot still on?' } });
+  await expect.poll(filed).toMatchObject({ 'and who runs it?': 'When does the pilot start?' });
 });
 
 test('the thread list closes when Ask shows another thread under it, and opens again with nothing to find', async () => {

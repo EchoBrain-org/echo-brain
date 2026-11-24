@@ -862,7 +862,19 @@ describe('being in a thread, or only shown it (What a person sees, 5)', () => {
     store.cancelAsk();
     expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
     await back();
-    // Its row in the list.
+    // Its own row in the list, when it is the thread shown; refused, like every row, while a question is on its way.
+    const onItsWay = held.hold('ask.run');
+    void store.ask('Something else?');
+    await flush();
+    store.enterThread();
+    expect(store.getState().ask?.thread).toEqual({ id: pilot[0]!.id, entered: false });
+    store.cancelAsk();
+    onItsWay(fail('unavailable', { retryable: true }));
+    await flush();
+    store.enterThread();
+    expect(open(store)).toEqual({ id: pilot[0]!.id, entered: true });
+    await back();
+    // Another thread's row in the list.
     await store.openThread(billing[0]!.id);
     expect(open(store)).toEqual({ id: billing[0]!.id, entered: true });
     // A suggestion of one of its questions.
@@ -950,8 +962,16 @@ describe('opening a thread: the sidebar\'s Ask, a suggestion, the list', () => {
     const rows = byTestId(list(), 'thread-row');
     expect(rows.map(row => text((row.props.children as unknown[])[0]))).toEqual(['When does the pilot start?', 'Who owns billing?', 'Which tests fail?']);
     expect(rows.map(row => row.props['aria-current'])).toEqual(['true', undefined, undefined]);
-    // The open thread's row does nothing, and has no Merge; every other row of its home has one, and Apollo's none (R9).
-    expect(rows[0]!.props.onClick).toBeUndefined();
+    // The open thread's own row picks that thread: shown by the sidebar's Ask the person was not in it, and now is, with
+    // nothing else of Ask changed. A second pick changes nothing at all.
+    const shown = store.getState().ask!;
+    expect(shown.thread).toEqual({ id: pilot[0]!.id, entered: false });
+    click(rows[0]);
+    expect(store.getState().ask).toEqual({ ...shown, thread: { id: pilot[0]!.id, entered: true } });
+    const entered = store.getState().ask;
+    click(byTestId(list(), 'thread-row')[0]);
+    expect(store.getState().ask).toBe(entered);
+    // It has no Merge; every other row of its home has one, and Apollo's none (R9).
     const merges = byTestId(list(), 'thread-merge');
     expect(merges.map(button => button.props['aria-label'])).toEqual(['Merge into this thread']);
     expect(byTestId(list(), 'thread-find')[0]!.props.placeholder).toBe('Find a thread');

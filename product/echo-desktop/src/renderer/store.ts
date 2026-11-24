@@ -4307,6 +4307,16 @@ export function returnToAsk(): boolean {
   return true;
 }
 
+/**
+ * The row of the thread Ask already shows, picked in the list: the person is in that thread from here (OpenThread), as
+ * by any other way of picking it, and nothing else of Ask changes. Refused while Ask is busy, as every row is.
+ */
+export function enterThread(): void {
+  const view = state.ask;
+  if (!view?.thread || view.thread.entered || askBusy() || threadShown()?.id !== view.thread.id) return;
+  set({ ask: { ...view, thread: { ...view.thread, entered: true } } });
+}
+
 /** Which jump is the latest: one still reading its project when a later one starts is dropped. */
 let jumpSeq = 0;
 

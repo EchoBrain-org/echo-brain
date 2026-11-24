@@ -304,7 +304,7 @@ button.account-row:hover { background: var(--raise); }
 .thread-row { flex-grow: 1; min-width: 0; height: 34px; gap: 12px; }
 .thread-row .name { flex-grow: 1; }
 .thread-row .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
-.thread-row[aria-current="true"] { cursor: default; background: var(--selected); }
+.thread-row[aria-current="true"] { background: var(--selected); }
 /* Merge shows on the row the pointer or the keyboard is on, over the end of its line. */
 .thread-merge { position: absolute; right: 4px; opacity: 0; font-size: 12.5px; background: var(--raise); }
 .thread-item:hover .thread-merge, .thread-item:focus-within .thread-merge { opacity: 1; }
