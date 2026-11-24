@@ -72,15 +72,18 @@ and ECHO works out which earlier conversation a question continues.
      asks the words with nothing carried and starts a new thread. A thread
      whose project the person can no longer open asks nothing: its button
      goes, and the page says "This is no longer available to you."
-7. **Merging.** The merged thread's turns join the open thread in time order.
-   One faint line says "Merged with (name) · Undo". ECHO also merges on its
-   own when the answer names another thread as plainly the same subject, in
-   the same home only, with the same line; when the answer moves Ask to
-   another thread, that merge happens there before the question is asked
-   again. Undo is offered until the next question, jump or close. A merge or
-   an Undo shows once this computer has saved it, and nothing else can be
-   asked, jumped to or merged until then. If it cannot be saved, nothing
-   moves and the page says so.
+7. **Merging.** The merged thread's turns join the open thread in time order,
+   once this computer has kept the merge. One faint line says "Merged with
+   (name) · Undo". ECHO also merges on its own when the answer names another
+   thread as plainly the same subject, in the same home only, with the same
+   line. When the answer moved Ask to another thread, that merge is made there
+   first, and the question is then asked again there: that question is the
+   next one, so this merge has no Undo. Undo is offered until the next
+   question, jump or close. While a merge or an Undo is being kept nothing
+   else can be asked, jumped to or merged. One this computer refused moves
+   nothing and the page says so, and an Undo refused can be tried again; one
+   it cannot confirm changes nothing on the page and says it will show
+   correctly after ECHO restarts.
 8. **Unchanged:** the bar, the scope chip, progress, answers, sources, Copy,
    Ask again (it stays in its thread), "Which one?" between things inside one
    answer, drafted follow-ups, the sidebar's Ask (it opens the thread asked
@@ -121,9 +124,10 @@ and ECHO works out which earlier conversation a question continues.
   otherwise it starts its own.
 - **R9. Every turn of a thread was asked in its home.** A thread is asked in
   only in its home's scope, and a merge, by hand or ECHO's own, joins only
-  threads of one home. So what a thread carries on a request never comes from
-  outside that request's scope, which is what R3 needs of `previous` and
-  `earlier` as well as of `threads`.
+  threads of one home, every turn of the joining thread asked there (an older
+  file can hold a thread mixed). So what a thread carries on a request never
+  comes from outside that request's scope, which is what R3 needs of
+  `previous` and `earlier` as well as of `threads`.
 
 ## Contracts
 
@@ -266,10 +270,10 @@ interface PersonAnswerResponseV8 {
   Every turn saved from now on has it. The host accepts only a turn id there.
 - `'ask.run'` params gain `threads?`; `Answer` gains `thread?` and `merge?`,
   which are never saved on a turn.
-- A merge or an Undo is one `timeline.move`: the host relabels the turns in
-  one write of the file, and the page shows the move once the host says it
-  is saved. A `timeline.put` never relabels a turn that already has a thread,
-  so saving a turn for another reason cannot undo a move.
+- A merge is one `timeline.move`: in one write the host sets only each moved
+  turn's thread to the open thread's id, and answers the turns moved. Undo is
+  one move back. A `timeline.put` keeps the thread the file has a turn in,
+  so only a move relabels a turn.
 - A thread's sources are checked when it opens, as a place's thread is today,
   with the five-minute freshness kept per thread.
 - A list the host's validator refuses is not sent: the Ask goes without

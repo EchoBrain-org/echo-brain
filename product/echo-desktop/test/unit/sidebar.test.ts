@@ -188,15 +188,17 @@ describe('Ask', () => {
     };
     expect(await projectRow(false)).toBe(true);
     expect(await projectRow(true)).toBe(false);
-    // Nothing asked yet: the cursor goes to the bar instead.
+    // Nothing asked yet, or nothing opened: the cursor goes to the bar instead.
     const focus = vi.fn();
     vi.stubGlobal('document', { getElementById: vi.fn((id: string) => (id === 'ask-field' ? { focus } : null)) });
     const row = elements(Sidebar({ state: await on({ page: 'home' }, false) })).find(node => node.props['data-testid'] === 'sidebar-ask');
-    returnToAsk.mockReturnValueOnce(true);
+    returnToAsk.mockResolvedValueOnce(true);
     (row?.props.onClick as () => void)();
+    await Promise.resolve();
     expect(focus).not.toHaveBeenCalled();
-    returnToAsk.mockReturnValueOnce(false);
+    returnToAsk.mockResolvedValueOnce(false);
     (row?.props.onClick as () => void)();
+    await Promise.resolve();
     expect(returnToAsk).toHaveBeenCalledTimes(2);
     expect(focus).toHaveBeenCalledOnce();
     vi.unstubAllGlobals();

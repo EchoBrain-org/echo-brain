@@ -109,9 +109,9 @@ export function Sidebar({ state }: { state: State }) {
             onClick={() => openHome()} onDragOver={noDrop} onDrop={noDrop}>
             <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
           </button>
-          {/* With nothing asked yet there is nothing to go back to: the cursor goes to the bar. */}
+          {/* With nothing asked yet, or nothing opened (the jump refused, or its project not read), the cursor goes to the bar. */}
           <button type="button" class={`side-row${askOpen ? ' current' : ''}`} data-testid="sidebar-ask" aria-current={askOpen ? 'page' : undefined}
-            onClick={() => { if (!returnToAsk()) document.getElementById('ask-field')?.focus(); }} onDragOver={noDrop} onDrop={noDrop}>
+            onClick={() => void returnToAsk().then((shown) => { if (!shown) document.getElementById('ask-field')?.focus(); })} onDragOver={noDrop} onDrop={noDrop}>
             <Ask /><span class="label">Ask</span>
           </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>

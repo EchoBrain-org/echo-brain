@@ -1,10 +1,10 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
-// keeps one turn (a new one at the end, an old one in its place). Every turn
-// stays, however old and however many, until the file would pass what this
-// computer can read back as one file; only then do the oldest go. A put writes
-// a private temporary file and renames it over the old one, so a reader never
-// meets half a file.
+// keeps one turn (a new one at the end, an old one in its place); a move sets
+// the thread of several at once (ADR-0056). Every turn stays, however old and
+// however many, until the file would pass what this computer can read back as
+// one file; only then do the oldest go. Each write puts a private temporary
+// file in place of the old one, so a reader never meets half a file.
 // A file that cannot be read at all, or is not a timeline file, reads as empty
 // and is replaced by the next put. Inside a timeline file, one turn the page
 // cannot show is skipped on read and the others show; a put keeps it in the
@@ -21,7 +21,7 @@ import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openS
 import { join } from 'node:path';
 import {
   ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
-  type TimelineAnswer, type TimelineTurn,
+  type TimelineAnswer, type TimelineMove, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -115,19 +115,57 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
 
 /**
  * Keeps `turn` in the account's file: in place of the turn with its id, or at
- * the end; then prunes, and writes the file whole, as the person session's
- * store writes its own: every byte and then the new name on disk before it
- * returns, so a crash leaves the old file or the new one, never part of one.
+ * the end. A turn the file already has in a thread keeps that thread: only a
+ * move relabels it (ADR-0056), so a save of a whole turn (what a source check
+ * found) never takes back a move that landed before it. A turn new to the
+ * file, or one it holds with no thread (saved before threads), takes the
+ * thread the put names.
  */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
+  rewriteTimeline(personDirectory, account, (turns) => {
+    const put = turn as unknown as StoredTurn;
+    const at = turns.findIndex(kept => kept.id === turn.id);
+    if (at < 0) return [...turns, put];
+    const { thread } = turns[at]!;
+    turns[at] = typeof thread === 'string' && ID.test(thread) ? { ...put, thread } : put;
+    return turns;
+  });
+}
+
+/**
+ * A move between threads (ADR-0056), in one write: each turn named that the
+ * file holds takes the thread named for it, and nothing else of it changes; a
+ * turn the file does not hold is skipped. Answers the turns moved, as the file
+ * now holds them.
+ */
+export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): TimelineTurn[] {
+  const to = new Map(moves.map(move => [move.turn, move.thread]));
+  const written = rewriteTimeline(personDirectory, account, turns => (turns.some(turn => to.has(turn.id))
+    ? turns.map(turn => (to.has(turn.id) ? { ...turn, thread: to.get(turn.id)! } : turn)) : null));
+  return written.filter(turn => to.has(turn.id)).map(timelineTurn).filter((turn): turn is TimelineTurn => turn !== null);
+}
+
+/**
+ * A write that gave the new file its name, after which the folder could not be
+ * synced: the file reads as written, so the write may well have happened.
+ */
+export class TimelineWriteUnsure extends Error {}
+
+/**
+ * The account's file, changed by `change` from every turn it holds (a turn
+ * this page cannot show included; null: nothing to change), then pruned and
+ * written whole, as the person session's store writes its own: every byte and
+ * then the new name on disk before it returns, so a crash leaves the old file
+ * or the new one, never part of one. Answers the turns written, none when
+ * nothing changed.
+ */
+function rewriteTimeline(personDirectory: string, account: Expect, change: (turns: StoredTurn[]) => StoredTurn[] | null): StoredTurn[] {
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
-  // Every turn the file holds stays, a turn this page cannot show included.
-  const turns: StoredTurn[] = storedTurns(personDirectory, account);
-  const at = turns.findIndex(kept => kept.id === turn.id);
-  const put = turn as unknown as StoredTurn;
-  if (at >= 0) turns[at] = put; else turns.push(put);
-  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns: pruneTurns(turns) }), 'utf8');
+  const changed = change(storedTurns(personDirectory, account));
+  if (changed === null) return [];
+  const turns = pruneTurns(changed);
+  const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns }), 'utf8');
   const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
@@ -150,7 +188,12 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
     throw error;
   }
   // The folder's new entry on disk too.
-  syncFolder(directory);
+  try {
+    syncFolder(directory);
+  } catch (cause) {
+    throw new TimelineWriteUnsure('The Ask timeline folder could not be synced', { cause });
+  }
+  return turns;
 }
 
 /** A folder's entries on disk: a file renamed into it stays renamed after a crash. */
@@ -305,6 +348,14 @@ function retired(turn: unknown): boolean {
   const parts = record(turn) && record(turn.answer) && Array.isArray(turn.answer.parts) ? turn.answer.parts : [];
   return (record(turn) && record(turn.scope) && turn.scope.kind === 'mine')
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
+}
+
+/** A move as the page sends one (ADR-0056): each turn once, with the thread it goes to, both by a turn's id; null for anything else. */
+export function timelineMoves(value: unknown): TimelineMove[] | null {
+  if (!Array.isArray(value)) return null;
+  const moves = value.filter((move): move is TimelineMove => record(move) && Object.keys(move).sort().join() === 'thread,turn'
+    && string(move.turn) && ID.test(move.turn) && string(move.thread) && ID.test(move.thread));
+  return moves.length === value.length && new Set(moves.map(move => move.turn)).size === moves.length ? moves : null;
 }
 
 /** A turn as a put writes it, or null for anything else. */

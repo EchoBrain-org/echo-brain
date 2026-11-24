@@ -111,14 +111,20 @@ copy that a unit test proves equivalent.
   labels on turns in that same file: each turn names its thread by the id of
   the thread's first turn, and a turn saved before the label belongs to the
   thread of the turn it followed in the same place. Ask shows one thread, and
-  the list under the thread's name is the way to another: a row jumps to a
-  thread at its place (Home, or its project's page), and Merge relabels a
-  thread's turns into the open one with `timeline.put`. Every turn of a
-  thread was asked in its home: a thread is asked in only there, and only
-  threads of one home merge. Turns move one move at a time: until a merge's
-  or an Undo's saves have settled nothing else asks, jumps, merges or undoes,
-  and when a save fails or never answers the page reads `timeline.read` again
-  and shows what the file holds. A person is in a
+  the list under the thread's name is the way to another: a row, the open
+  thread's own included, jumps to a thread at its home (Home, or its
+  project's page), and Merge relabels a thread's turns into the open one.
+  Every turn of a thread was asked in its home: a thread is asked in only
+  there, and only threads of one home, every turn of them asked there,
+  merge. A merge or its Undo is one `timeline.move`, which sets only each
+  named turn's thread in one write and answers the turns moved; nothing shows
+  moved before that answer, and until it comes nothing else asks, jumps,
+  merges or undoes. A move the host refused moves nothing and the page says
+  so; one with no answer to go by (none in time, or none at all) changes
+  nothing on the page and says ECHO could not confirm it, since only reading
+  the file again, as a restart does, says what it holds. `timeline.put` keeps
+  the thread the file has a turn in, so a turn saved whole never takes a move
+  back. A person is in a
   thread once they have asked in it or picked it since Ask opened, its own row
   in the list included; the
   sidebar's Ask only shows the thread they last used. In a thread, `ask.run`

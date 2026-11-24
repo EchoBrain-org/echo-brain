@@ -225,7 +225,7 @@ test('Merge joins a thread to the open one in this computer\'s file, and Undo pu
   await expect(page.getByTestId('thread-row')).toHaveCount(2);
 });
 
-test('a merge this computer could not save is not shown as made: the questions are where they were, with no Undo, and the page says so', async () => {
+test('a merge this computer refuses is not shown as made: the questions stay where they were and the page says so; the same merge then goes through, and an Undo it refuses keeps its Undo', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -234,27 +234,52 @@ test('a merge this computer could not save is not shown as made: the questions a
   await askAtHome(page, 'When does the pilot start?');
   const before = { 'Who owns billing?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' };
   await expect.poll(filed).toEqual(before);
-  // The timeline's folder becomes a link, which the host neither writes through nor reads: every save of the merge fails.
+  // The timeline's folder becomes a link, which the host never writes through: the one move is refused, and moves nothing.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
-  renameSync(folder, `${folder}.kept`);
-  symlinkSync(`${folder}.kept`, folder);
-  try {
+  const refusing = async (act: () => Promise<void>) => {
+    renameSync(folder, `${folder}.kept`);
+    symlinkSync(`${folder}.kept`, folder);
+    try {
+      await act();
+    } finally {
+      rmSync(folder);
+      renameSync(`${folder}.kept`, folder);
+    }
+  };
+  const refused = 'Some questions could not be moved on this computer, so they are where they were.';
+  const merge = async () => {
     await page.getByTestId('thread-name').click();
     const billing = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Who owns billing?' });
     await billing.hover();
     await billing.getByTestId('thread-merge').click();
-    await expect(page.getByTestId('toast')).toHaveText('Some questions could not be moved on this computer, so they are where they were.');
-    // The page shows no merge the file does not hold.
+  };
+  await refusing(async () => {
+    await merge();
+    await expect(page.getByTestId('toast')).toHaveText(refused);
+    // The page shows no merge the file does not hold, and offers no Undo.
     await expect(page.getByTestId('thread-merged')).toHaveCount(0);
     await expect(page.getByTestId('timeline-row')).toHaveCount(0);
     await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
-    await page.getByTestId('thread-name').click();
-    await expect(page.getByTestId('thread-row').locator('.name')).toHaveText(['When does the pilot start?', 'Who owns billing?']);
-  } finally {
-    rmSync(folder);
-    renameSync(`${folder}.kept`, folder);
-  }
-  expect(filed()).toEqual(before);
+    expect(filed()).toEqual(before);
+  });
+  // Nothing is left half done, and Ask is not left busy: the same merge goes through now.
+  await merge();
+  await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
+  await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
+  await expect.poll(filed).toEqual({ 'Who owns billing?': 'When does the pilot start?', 'When does the pilot start?': 'When does the pilot start?' });
+  // Its Undo refused, the merge stays, and so do the line and its Undo, to be tried again.
+  await expect(page.getByTestId('toast')).toHaveCount(0, { timeout: 15_000 });
+  await refusing(async () => {
+    await page.getByTestId('thread-undo').click();
+    await expect(page.getByTestId('toast')).toHaveText(refused);
+    await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Who owns billing\?\s*Undo$/u);
+    await expect(page.getByTestId('thread-undo')).toBeEnabled();
+    await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
+  });
+  await page.getByTestId('thread-undo').click();
+  await expect(page.getByTestId('thread-merged')).toHaveCount(0);
+  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await expect.poll(filed).toEqual(before);
 });
 
 test('a question that belongs to one other thread jumps there and is asked again in it, and no question a model wrote is ever sent as a thread\'s', async () => {
@@ -299,7 +324,7 @@ test('a question that belongs to one other thread jumps there and is asked again
   await expect.poll(filed).toMatchObject({ 'Who owns billing?': 'Who owns billing?', 'did the date slip, same as billing?': 'When does the pilot start?' });
 });
 
-test('the threads on the subject of the one a question jumps to join it when the answer lands there, and Undo takes them back out', async () => {
+test('the threads on the subject of the one a question jumps to join it first, then the words are asked there, continuing its own turn, and the merge has no Undo', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -315,20 +340,16 @@ test('the threads on the subject of the one a question jumps to join it when the
   await expect(page.getByTestId('thread-name')).toHaveText('Who owns billing?');
   await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText(question);
   await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('thread-merged')).toHaveText(/^Merged with Is the ledger closed\?\s*Undo$/u);
-  // Asked again as a follow-up of billing's own turn, before the ledger's thread joined: nothing of that thread rode on it.
+  // The ledger's thread joined billing's first; the words asked again there continue billing's own turn, and the
+  // ledger's question, newer than it, rode on nothing.
   expect(asks().at(-1)).toMatchObject({ question, previous: { purpose: 'follow_up', question: 'Who owns billing?' } });
   expect(asks().at(-1)!.previous).not.toHaveProperty('earlier');
   await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Who owns billing?', [question]: 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?' });
   // The ledger's question joined as an earlier line, between billing's own turn and the answer, both in full.
   await expect(page.getByTestId('timeline-question')).toHaveText(['Is the ledger closed?']);
   await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
-  // Undo takes the ledger's thread back out; the answer stays with the turn it followed.
-  await page.getByTestId('thread-undo').click();
+  // The words were the next question after the merge, and could build on what joined: the merge has no Undo (R10).
   await expect(page.getByTestId('thread-merged')).toHaveCount(0);
-  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
-  await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Is the ledger closed?', [question]: 'Who owns billing?' });
 });
 
 test('a question a model wrote is sent again only while every turn of its thread before it is still readable, one a merge brought in included', async () => {
@@ -543,13 +564,44 @@ test('the thread list closes when Ask shows another thread under it, and opens a
   await expect(list.getByTestId('thread-row')).toHaveCount(1);
   // While the question is on its way no row moves Ask.
   await expect(list.getByTestId('thread-row')).toBeDisabled();
-  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone.
+  // The answer lands in a thread of its own: Ask shows that thread now, and the list that was of the other is gone. The
+  // keyboard was in it: the caret is back in the bar, not lost to the page.
+  await expect(list.getByTestId('thread-find')).toBeFocused();
   writeFileSync(release, '');
   await expect(name).toHaveText('Who owns billing?');
   await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-field')).toBeFocused();
   await name.click();
   await expect(list.getByTestId('thread-find')).toHaveValue('');
   await expect(list.getByTestId('thread-row')).toHaveCount(2);
+});
+
+test('Capture opened by its shortcut over the thread list keeps its own Escape and the keyboard', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'Who owns billing?');
+  const list = page.getByTestId('thread-list');
+  await page.getByTestId('thread-name').click();
+  await expect(list.getByTestId('thread-find')).toBeFocused();
+  // An Escape lands where the keyboard still is as Capture comes up over Ask, before Capture takes the keyboard.
+  const landed = page.evaluate(() => new Promise<string | null>((resolve) => {
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector('[data-testid="compose"]')) return;
+      observer.disconnect();
+      const target = document.activeElement as HTMLElement | null;
+      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      resolve(target?.getAttribute('data-testid') ?? null);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }));
+  // What ⌘⇧E has main send the page.
+  await run.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.send('event', { name: 'capture.open', payload: {} }); });
+  expect(await landed).toBe('thread-find');
+  // The list did not take it: it was Capture's, which closed, leaving Ask as it was.
+  await expect(page.getByTestId('compose')).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  await expect(page.getByTestId('thread-name')).toHaveText('Who owns billing?');
 });
 
 test('an answer that does not say where a question asked with the threads belongs is refused, and nothing of it is kept', async () => {

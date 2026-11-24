@@ -14,9 +14,9 @@ import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
-  chooseThread, clarifyThreads, closeSources, copyAnswer, enterThread, foundNothingInProject, fullTurns,
+  chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
-  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
+  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
   toggleTurn, turnOf, undoMerge, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
@@ -625,7 +625,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
           {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
-            <button type="button" class="link-button" data-testid="ask-everywhere" onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
+            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
           )}
         </div>
       )}
@@ -712,10 +712,10 @@ const THREAD_LIST_ID = 'ask-thread-list';
 
 /**
  * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
- * first. A row jumps to its thread. The open thread's own row is marked, and picking it is picking that thread: the
- * person is in it from there, which Ask merely showing it is not. With a thread open every other row of its home has
- * Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of another home has none.
- * The arrow keys move through the rows from the field, and Return there picks the first row, the open thread's too.
+ * first. A row jumps to its thread, the open thread's own row too, which is marked: picking it is picking that thread,
+ * so the person is in it from there (which Ask merely showing it is not), at its home. With a thread open every other
+ * row of its home has Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of
+ * another home has none. The arrow keys move through the rows from the field, and Return there picks the first row.
  * While Ask is busy (askBusy) nothing here moves it.
  *
  * It is a dialog the name opens, not a menu or a listbox: it holds a field to type in, focus really moves from row to
@@ -761,7 +761,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
                 return (
                   <div class="thread-item" role="listitem" key={thread.id}>
                     <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy}
-                      title={thread.name} onClick={then(current ? enterThread : () => void openThread(thread.id))}>
+                      title={thread.name} onClick={then(() => void openThread(thread.id))}>
                       <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
                     </button>
                     {mergeable(thread, open) && (
@@ -791,11 +791,16 @@ function ThreadHead({ state }: { state: State }) {
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
   // The list is of what Ask showed when it opened. A question started, or another thread shown under it (an answer that
-  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find.
+  // landed elsewhere, a jump, a merge, the timeline read again): it closes, and opens next with nothing to find. With the
+  // keyboard in it, the caret goes back to the bar, never to the page.
   const shown = threadShown(state)?.id ?? null;
   const asking = Boolean(state.ask?.asking);
-  useLayoutEffect(() => { setOpen(false); }, [shown]);
-  useLayoutEffect(() => { if (asking) setOpen(false); }, [asking]);
+  const closeOnItsOwn = () => {
+    if (document.getElementById(THREAD_LIST_ID)?.contains(document.activeElement)) document.getElementById('ask-field')?.focus();
+    setOpen(false);
+  };
+  useLayoutEffect(closeOnItsOwn, [shown]);
+  useLayoutEffect(() => { if (asking) closeOnItsOwn(); }, [asking]);
   useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
@@ -803,9 +808,10 @@ function ThreadHead({ state }: { state: State }) {
     return () => document.removeEventListener('mousedown', away);
   }, [open]);
   // Escape here closes the list and goes no further: the window's Escape would close Ask. Only an Escape pressed in the
-  // name or the list is the list's; one pressed anywhere else on the page is never taken from it.
+  // name or the list is the list's, and only while nothing is up over the page: Capture or a sheet that came up over it
+  // keeps its own Escape and the keyboard. One pressed anywhere else on the page is never taken from it.
   const onKeyDown = (event: KeyboardEvent) => {
-    if (!open || event.key !== 'Escape') return;
+    if (!open || event.key !== 'Escape' || sheetUp(state)) return;
     event.preventDefault();
     event.stopPropagation();
     setOpen(false);
@@ -917,14 +923,19 @@ export function AskView({ state }: { state: State }) {
     view.scrollTop = target;
     return { ...position, preferBottom: Math.abs(view.scrollHeight - view.clientHeight - target) < 1 };
   };
-  const keepReading = () => {
+  // The reading where it was, in the view as it is now: a held sentence back at its place in the view, or the end.
+  const restoreReading = () => {
     const view = scroller.current, saved = reading.current;
-    if (!view || !saved || (view.clientWidth === saved.width && view.clientHeight === saved.height)) return;
+    if (!view || !saved) return;
     let position = saved.position;
     if (position.kind === 'anchor' && view.contains(position.element)) position = hold(position);
     if (position.kind === 'bottom') view.scrollTop = view.scrollHeight;
     placedAt.current = view.scrollTop;
     savePosition(position);
+  };
+  const keepReading = () => {
+    const view = scroller.current, saved = reading.current;
+    if (view && saved && (view.clientWidth !== saved.width || view.clientHeight !== saved.height)) restoreReading();
   };
   const chooseReading = (event: MouseEvent) => {
     // Capture the source's turn/focus before chooseSource changes the pane width. Pointer and keyboard activation both
@@ -945,9 +956,12 @@ export function AskView({ state }: { state: State }) {
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     savePosition({ kind: 'bottom' });
   };
-  // A new question, answer, choice or failure scrolls to the bottom, and nothing else does: turns that join or leave the
-  // thread (a merge, its Undo, the timeline read again) change how many it has and leave the reading where it is.
-  useLayoutEffect(toBottom, [thread.seq, thread.asked.at(-1), thread.asking === null, thread.failed, thread.clarify]);
+  // A thread shown (its `asked` starts anew), a new question, answer, choice or failure scrolls to the bottom, and nothing
+  // else does: turns that join or leave the thread (a merge, its Undo, the timeline read again) change how many it has
+  // and leave the reading where it is, as does a move dropping a question still being prepared (`seq`).
+  useLayoutEffect(toBottom, [thread.asked, thread.asking === null, thread.failed, thread.clarify]);
+  // Those turns, and the merged line, change what is above the reading: it stays where it was, as when the view changes size.
+  useLayoutEffect(restoreReading, [turns.map(turn => turn.id).join(' '), mergedLine(state)]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
@@ -1008,7 +1022,7 @@ export function AskView({ state }: { state: State }) {
           <div class="error" data-testid="ask-error">{message(failed.failure)}</div>
           {failed.failure.retryable && (
             <div class="actions">
-              <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>Try again</button>
+              <button type="button" class="link-button" data-testid="ask-retry" disabled={askBusy(state)} onClick={retryAsk}>Try again</button>
             </div>
           )}
         </div>

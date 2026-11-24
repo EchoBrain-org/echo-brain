@@ -76,6 +76,15 @@ function turn(question: string, ago: number, answer: Answer, extra: Partial<Time
     scope: answer.scope, answer, citations_complete: true, typed: question, follows: null, ...extra };
 }
 
+/**
+ * What an answer says beside its parts as the Authority answers a request (T2): the question, named whenever the request
+ * carried `previous` or `threads`; and a new subject for a question that carried threads and no previous turn.
+ */
+const placed = (params: Record<string, unknown>) => ({
+  ...(params.previous !== undefined || params.threads !== undefined ? { question: String(params.question) } : {}),
+  ...(params.threads !== undefined && params.previous === undefined ? { thread: { kind: 'new' as const } } : {}),
+});
+
 /** What a check finds of a turn when every source reads the same. */
 const allRead = (one: TimelineTurn) => Object.fromEntries(one.answer.sources.map((_, at) => [at, 'same' as const]));
 
@@ -102,7 +111,7 @@ beforeEach(() => {
   });
   rpc.mockReset();
   rpc.mockImplementation(rpcFor(held, {
-    'ask.run': params => ok(answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]])),
+    'ask.run': params => ok({ ...answerOf(String(params.question), [ticket('THERM-482', '20482')], [['THERM-482 is open.', [0]]]), ...placed(params) }),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
     'projects.activity': () => (activity ? activity() : ok({ items: [{ project_id: apollo.project_id, latest_at: null }] })),
     'list.page': () => ok({ items: feed, next_cursor: null, meetings_held: false }),
@@ -1619,7 +1628,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     await flush();
     await store.openProject(apollo);
     expect(store.getState().ask).toBeNull();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toEqual({ page: 'home' });
     expect(store.getState().barScope).toEqual({ kind: 'global' });
@@ -1629,14 +1638,14 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(lines(thread(store))).toEqual(['What did we agree?']);
     // Open already, it stays as it is.
     const open = store.getState().ask;
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     expect(store.getState().ask).toBe(open);
   });
 
   it('goes back to a project\'s Ask for a question asked there', async () => {
     seed(turn('What is left in Apollo?', DAY, status(), { scope: inApollo }));
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
     expect(store.getState().barScope).toEqual(inApollo);
@@ -1645,9 +1654,12 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
 
   it('goes back to the thread at Home when its project is no longer one of yours', async () => {
     seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
+    // Not among the person's projects: read by its id, it is not theirs.
+    const base = rpc.getMockImplementation()!;
+    rpc.mockImplementation((method: string, params: Record<string, unknown>) => (method === 'projects.read' ? Promise.resolve(fail('not_found')) : base(method, params)));
     const store = await startStore();
     await store.openProject(apollo);
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toEqual({ page: 'home' });
     expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What was left?']);
@@ -1657,7 +1669,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     seed(turn('What did we agree?', DAY, status()));
     const store = await startStore();
     const route = store.getState().route;
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toBe(route);
     expect(store.getState().ask).toMatchObject({ latest: latestTurn(store)!.id, asked: [] });
@@ -1670,7 +1682,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     store.widenScope();
     const route = store.getState().route;
     const reads = calls('list.page').length;
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toBe(route);
     expect(calls('list.page')).toHaveLength(reads);
@@ -1681,7 +1693,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
   it('keeps Ask open when a question asked in it is cancelled, though the sidebar\'s Ask opened it', async () => {
     seed(turn('What did we agree?', DAY, status()));
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     held.hold('ask.run');
     void store.ask('And then?');
@@ -1701,7 +1713,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
 
   it('opens nothing with nothing asked yet, for the bar to take the cursor', async () => {
     const store = await startStore();
-    expect(store.returnToAsk()).toBe(false);
+    expect(await store.returnToAsk()).toBe(false);
     expect(store.getState().ask).toBeNull();
   });
 
@@ -1713,7 +1725,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     seed(turn('What is left?', DAY, status(), { scope: { kind: 'project', project_id: later.project_id } }));
     const store = await startStore();
     expect(store.getState().projects.items.map(item => item.project_id)).not.toContain(later.project_id);
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(calls('projects.read')).toEqual([expect.objectContaining({ project_id: later.project_id })]);
     expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: later.project_id } });
@@ -1728,15 +1740,15 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
     const store = await startStore();
     await store.openProject(many[0]!);
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(true);
     await flush();
     expect(store.getState().route).toEqual({ page: 'home' });
     expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What was left?']);
-    // Any other failure opens nothing, and says why.
+    // Any other failure opens nothing, and says why: the sidebar's Ask then puts the cursor in the bar.
     store.closeAsk();
     await store.openProject(many[0]!);
     reply = fail('unavailable', { retryable: true });
-    expect(store.returnToAsk()).toBe(true);
+    expect(await store.returnToAsk()).toBe(false);
     await flush();
     expect(store.getState().ask).toBeNull();
     expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
