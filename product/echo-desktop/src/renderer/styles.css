@@ -296,6 +296,8 @@ button.account-row:hover { background: var(--raise); }
 .thread-merged .link-button { flex-shrink: 0; }
 /* The thread list: a menu under the name, as wide as a question needs. */
 .thread-list { top: 44px; left: -8px; right: auto; width: min(440px, 100%); max-height: min(420px, calc(100vh - 220px)); gap: 4px; padding: 8px; overflow-wrap: normal; }
+/* A click on the list's own edge keeps the keyboard in it, with no ring of its own. */
+.thread-list:focus { outline: none; }
 .thread-groups { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .thread-list .menu-label { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 500; color: var(--faint); }
 .thread-item { position: relative; display: flex; align-items: center; }

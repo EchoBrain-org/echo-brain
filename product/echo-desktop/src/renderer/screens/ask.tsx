@@ -738,7 +738,7 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
     }
   };
   return (
-    <div class="menu thread-list" data-testid="thread-list" role="group" aria-label="Threads" aria-live="off" ref={list} onKeyDown={onKeyDown}>
+    <div class="menu thread-list" data-testid="thread-list" role="group" aria-label="Threads" aria-live="off" tabIndex={-1} ref={list} onKeyDown={onKeyDown}>
       <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find a thread" aria-label="Find a thread" data-testid="thread-find"
         value={find} onInput={event => setFind((event.target as HTMLInputElement).value)} />
       <div class="thread-groups">
@@ -772,26 +772,36 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
 
 /**
  * Ask's first line (ADR-0056): the open thread's name, the first question typed in it, on one line; "New thread" with
- * none open. It opens the thread list under it, which Escape or a click elsewhere closes; whether the list is open is
- * this line's own, and goes with Ask. Under it, after a merge, one faint line says so, with Undo.
+ * none open. It opens the thread list under it; whether the list is open is this line's own, and goes with Ask. The
+ * list closes on Escape pressed inside this line or the list, on a click outside them, and when the keyboard's focus
+ * leaves them (Tab past the last row). Under it, after a merge, one faint line says so, with Undo.
  */
 function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  // Listening from the frame the list shows in: an Escape pressed at once must close the list, not Ask.
   useLayoutEffect(() => {
     if (!open) return;
     const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
-    // Escape closes the list only: the window's Escape would close Ask.
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); name.current?.focus(); } };
     document.addEventListener('mousedown', away);
-    document.addEventListener('keydown', key, true);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', key, true); };
+    return () => document.removeEventListener('mousedown', away);
   }, [open]);
+  // Escape here closes the list and goes no further: the window's Escape would close Ask. Only an Escape pressed in the
+  // name or the list is the list's; one pressed anywhere else on the page is never taken from it.
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!open || event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(false);
+    name.current?.focus();
+  };
+  // Focus gone to something outside the name and the list: the list is no longer where the person is.
+  const onFocusOut = (event: FocusEvent) => {
+    if (open && event.relatedTarget instanceof Node && !head.current?.contains(event.relatedTarget)) setOpen(false);
+  };
   const merged = mergedLine(state);
   return (
-    <div class="thread-head" ref={head}>
+    <div class="thread-head" ref={head} onKeyDown={onKeyDown} onFocusOut={onFocusOut}>
       <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="true" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span class="name">{threadShown(state)?.name ?? 'New thread'}</span><Caret />
       </button>

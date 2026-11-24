@@ -113,6 +113,27 @@ test('Ask shows one thread under its name; the name opens the list of them all, 
   await expect(list).toBeVisible();
   await page.getByTestId('ask-field').click();
   await expect(list).toHaveCount(0);
+  // A click on the list's own edge keeps the keyboard in it: Escape still closes the list, and not Ask.
+  await name.click();
+  await list.click({ position: { x: 3, y: 3 } });
+  await expect(list).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  // The keyboard leaving closes it too: back from the field to the name it stays, and past the name it is gone.
+  await name.click();
+  await expect(list.getByTestId('thread-find')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(name).toBeFocused();
+  await expect(list).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await expect(list).toHaveCount(0);
+  await expect(page.getByTestId('ask-view')).toBeVisible();
+  // With the list closed, Escape is the window's again: Ask closes.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('ask-view')).toHaveCount(0);
+  await page.getByTestId('sidebar-ask').click();
+  await expect(name).toHaveText('Which tests fail?');
   // The open thread's row does nothing.
   await name.click();
   await rows.nth(0).click();
