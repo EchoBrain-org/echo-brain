@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
-import { slackApprovalDestinationSha256V4 } from '../../src/private-approval/slack-approval-card-v4.js';
+import { buildClosedApprovalCardV4, slackApprovalDestinationSha256V4 } from '../../src/private-approval/slack-approval-card-v4.js';
 
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
@@ -50,6 +50,23 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
 }
 function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
+/** A real target-bound poster whose link stays current, as the composition root builds one. `tokenRead` runs while it waits for its bot token. */
+function boundPoster(bound: typeof target, reviewerActive: () => boolean, tokenRead?: () => void) {
+  return createTargetBoundSlackApprovalPosterV1({ target: bound, reviewerActive,
+    activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
+    targetCurrent: () => true, botToken: { async botToken() { tokenRead?.(); return 'xoxb-test'; } } as never,
+    needsReinstall: () => false, markNeedsReinstall: () => undefined });
+}
+/** A fake Slack that accepts every request, and the methods it was asked for. */
+function acceptingSlack() {
+  const methods: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    methods.push(new URL(String(url)).pathname.split('/').at(-1)!);
+    const body = JSON.parse(String(init?.body ?? '{}')) as { channel?: string; ts?: string };
+    return new Response(JSON.stringify({ ok: true, channel: body.channel, ts: body.ts }));
+  });
+  return methods;
+}
 /**
  * The presenter over real target-bound posters, a new one for every step as the composition root builds them, and a
  * fake Slack that answers U0A's first `times` opens with 429 and this Retry-After, then everything as asked. apr_a is
@@ -70,10 +87,7 @@ function rateLimitedSlack(retryAfter: string, times = 1) {
   const f = fixture({
     now: () => new Date(),
     target: reviewer => ({ ...target, slack_subject_id: reviewer.principal_id === 'prn_2' ? 'U0B' : 'U0A' }),
-    poster: bound => createTargetBoundSlackApprovalPosterV1({ target: bound,
-      activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
-      targetCurrent: () => true, botToken: { async botToken() { return 'xoxb-test'; } } as never,
-      needsReinstall: () => false, markNeedsReinstall: () => undefined }),
+    poster: boundPoster,
   });
   f.stage('apr_a'); f.stage('apr_b', { reviewer: { organization_id: 'org_1', principal_id: 'prn_2', membership_id: 'mem_2' } });
   return { f, opens: () => requests.filter(request => request === 'conversations.open:U0A').length };
@@ -105,7 +119,7 @@ describe('Slack approval presenter V1', () => {
     const providerCalls = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true })));
     const poster = createTargetBoundSlackApprovalPosterV1({ target,
       activeConnection: () => active as never,
-      targetCurrent: candidate => active.connection.connection_id === candidate.connection_id,
+      targetCurrent: candidate => active.connection.connection_id === candidate.connection_id, reviewerActive: () => true,
       botToken: { async botToken(selected: { connection: { connection_id: string } }) { expect(selected.connection.connection_id).toBe('con_1'); active = connection('con_2'); return 'token'; } } as never,
       needsReinstall: () => false, markNeedsReinstall: () => undefined,
     });
@@ -113,6 +127,22 @@ describe('Slack approval presenter V1', () => {
       await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
       expect(providerCalls).not.toHaveBeenCalled();
     } finally { providerCalls.mockRestore(); }
+  });
+
+  it('refuses a token selected while its reviewer was removed, though the target stayed current, before Slack receives a request', async () => {
+    const sent = acceptingSlack();
+    let removed = false, tokenReads = 0;
+    const publish = async (tokenRead?: () => void) => {
+      const answer = await boundPoster(target, () => !removed, () => { tokenReads += 1; tokenRead?.(); })
+        .publish({ approval_id: 'apr_live', dm_channel_id: 'D0A', provider_message_ts: '1.000001', card: buildClosedApprovalCardV4({ title: 'Roadmap', outcome: 'superseded' }) });
+      return { answer, requests: sent.splice(0) };
+    };
+    // An active reviewer's card goes out as before.
+    expect(await publish()).toEqual({ answer: { kind: 'done' }, requests: ['chat.update'] });
+    // Removed while the token read is pending: the answer a target that changed during token selection gets.
+    expect(await publish(() => { removed = true; })).toEqual({ answer: { kind: 'uncertain' }, requests: [] });
+    // Already removed: the poster does not ask for a token at all.
+    expect(await publish()).toEqual({ answer: { kind: 'uncertain' }, requests: [] }); expect(tokenReads).toBe(2);
   });
 
   it('waits out Slack Retry-After before that target\'s next step while another target delivers', async () => {
@@ -226,6 +256,19 @@ describe('Slack approval presenter V1', () => {
     f.proposal = { ...proposal(id), reviewer_active: false };
     f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['open', 'post', 'publish']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: '1.000001', card_sha256: null });
+  });
+
+  // The poster reads its bot token after the presenter's own check, and that read can wait on Nango.
+  it.each(['posted', 'in flight'] as const)('sends nothing for a marker %s when its reviewer is removed while the poster waits for its token, though their link is still stored', async (marker) => {
+    const sent = acceptingSlack();
+    const f = fixture({ poster: (bound, reviewerActive) => boundPoster(bound, reviewerActive, () => { f.proposal = { ...proposal('apr_live'), reviewer_active: false }; }) });
+    const state = marker === 'posted' ? "'posted',NULL,NULL,'1.000001'" : "'posting','in_flight','2026-10-07T00:00:00.000Z',NULL";
+    f.db.prepare(`INSERT INTO authority_approval_presentations_v1 VALUES (?,'slack',?,'D0A',${state},NULL,'open',0,NULL,'2026-10-07T00:00:00.000Z','2026-10-07T00:00:00.000Z')`).run(f.stage(), JSON.stringify(target));
+    await f.presenter.reconcile(signal());
+    // The call fails as it does when a target stops being current during it, and the row waits for its retry.
+    expect(sent).toEqual([]); expect(row(f)).toMatchObject({ delivery: marker === 'posted' ? 'posted' : 'posting', attempts: 1 });
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(sent).toEqual([]); expect(row(f)).toMatchObject({ delivery: 'failed', attempts: 5, retry_at: null, card_sha256: null });
   });
 
   it.each(['superseded', 'approved'] as const)('does not redraw a removed reviewer\'s open card when its proposal is later %s', async (status) => {
