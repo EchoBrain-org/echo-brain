@@ -43,8 +43,9 @@ and ECHO works out which earlier conversation a question continues.
    most recent. Newest first inside a group. A row is the thread's name and
    when it was last asked in. Find matches any question typed in a thread.
    - Clicking a row **jumps** to that thread.
-   - Every row but the open one has **Merge**, which merges that thread into
-     the open one. With no thread open there is no Merge.
+   - Every other row in the open thread's home has **Merge**, which merges
+     that thread into the open one. A thread in another home has none, and
+     with no thread open there is no Merge.
 4. **Jumping** moves Ask to the thread's place, as the sidebar's Ask does
    today (Home for no project, the project's page otherwise), opens the
    thread, and checks its turns' sources.
@@ -106,6 +107,11 @@ and ECHO works out which earlier conversation a question continues.
 - **R8. Nothing saved is lost.** A turn without a thread id belongs to the
   thread of the turn it followed while both were asked in the same place;
   otherwise it starts its own.
+- **R9. Every turn of a thread was asked in its home.** A thread is asked in
+  only in its home's scope, and a merge, by hand or ECHO's own, joins only
+  threads of one home. So what a thread carries on a request never comes from
+  outside that request's scope, which is what R3 needs of `previous` and
+  `earlier` as well as of `threads`.
 
 ## Contracts
 
@@ -313,13 +319,15 @@ question placed among threads. This change does not alter them:
 
 - History on the Authority, or following a person to a second computer.
 - Splitting a thread, moving one turn, renaming a thread, or deleting one.
+- Merging threads of different homes, or moving a thread to another home.
 - A short model-written thread name.
 
 ## Calls the founder has not made
 
 - A thread's name is its first question, cut to one line.
 - Inside a project, "Which one?" never offers a thread from outside it (R3).
-- Merging by hand may cross homes; ECHO's own merging never does.
+- Merging never crosses homes, by hand or by ECHO (R9). A thread about a
+  project that was asked from Home stays a Home thread.
 - Being in a thread is what makes a bare "did that change?" continue it. No
   clock decides: a thread asked in an hour ago and one asked in last week
   behave the same once the person has asked in or picked it.

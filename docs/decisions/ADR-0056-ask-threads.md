@@ -107,10 +107,13 @@ Adopt option 1, the founder's choice.
   request's scope (ADR-0015, ADR-0007): the desktop jumps on its own only
   inside one home, and a thread in another home is always the person's
   click, asked as a new, visible question in that home (ADR-0021).
-- **Merging.** A person merges any thread into the open one from the list.
-  The resolver may also name other threads that are plainly the same subject
-  as the one the question belongs to; the desktop merges those within one
-  home and says so with Undo. A merge only relabels saved turns.
+- **Merging.** A person merges another thread of the same home into the open
+  one from the list. The resolver may also name other threads that are
+  plainly the same subject as the one the question belongs to; the desktop
+  merges those, within one home too, and says so with Undo. A merge only
+  relabels saved turns. No merge crosses homes, so every turn of a thread was
+  asked in the thread's home and a project's request never carries a turn
+  asked outside the project.
 - **No new limits (ADR-0055).** No count of threads, questions or earlier
   turns. The request's transport bound is the only limit; when it is reached
   the desktop leaves out the oldest threads, then the oldest earlier turns.
