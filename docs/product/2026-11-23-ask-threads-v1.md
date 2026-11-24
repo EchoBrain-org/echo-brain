@@ -69,12 +69,17 @@ and ECHO works out which earlier conversation a question continues.
    - Anything else that belongs elsewhere: **"Which one?"** with a button per
      thread (a thread in another home also names its project) and "New
      question". A thread jumps there and asks again in it. "New question"
-     asks the words with nothing carried and starts a new thread.
+     asks the words with nothing carried and starts a new thread. A thread
+     whose project the person can no longer open asks nothing: its button
+     goes, and the page says "This is no longer available to you."
 7. **Merging.** The merged thread's turns join the open thread in time order.
    One faint line says "Merged with (name) · Undo". ECHO also merges on its
    own when the answer names another thread as plainly the same subject, in
-   the same home only, with the same line. Undo is offered until the next
-   question, jump or close.
+   the same home only, with the same line; when the answer moved Ask to
+   another thread, that merge happens once the question asked again there is
+   answered. Undo is offered until the next question, jump or close. While a
+   merge or an Undo is being saved nothing else can be asked, jumped to or
+   merged; if a save fails, the page shows what the file holds and says so.
 8. **Unchanged:** the bar, the scope chip, progress, answers, sources, Copy,
    Ask again (it stays in its thread), "Which one?" between things inside one
    answer, drafted follow-ups, the sidebar's Ask (it opens the thread asked
