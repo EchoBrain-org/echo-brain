@@ -298,6 +298,40 @@ test('the threads on the subject of the one a question jumps to join it when the
   await expect.poll(filed).toMatchObject({ 'Is the ledger closed?': 'Is the ledger closed?', [question]: 'Who owns billing?' });
 });
 
+test('a question a model wrote is sent again only while every turn of its thread before it is still readable, one a merge brought in included', async () => {
+  // In this mode the source check answers, and never finds the follow-up that an answer about what was drafted cites.
+  run = await launch('ask-threads-checked');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'What was drafted last week?');
+  await back(page);
+  await askAtHome(page, 'When does the pilot start?');
+  // A follow-up in the pilot's thread: its answer names the full question a resolver wrote.
+  await ask(page, 'and who decided?');
+  const rewrite = `${RESOLVED} and who decided? (after "When does the pilot start?")`;
+  // Everything in the thread is readable: the next follow-up names that question in full, as it always did.
+  await ask(page, 'and since when?');
+  expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: rewrite, earlier: [{ question: 'When does the pilot start?' }] } });
+  // The other thread joins by hand. Its one turn cites what this person can no longer read, and is now a turn asked
+  // before every question in this thread: any of them a model wrote could have drawn on it.
+  await page.getByTestId('thread-name').click();
+  const drafted = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'What was drafted last week?' });
+  await drafted.hover();
+  await drafted.getByTestId('thread-merge').click();
+  await expect(page.getByTestId('thread-merged')).toBeVisible();
+  const before = asks().length;
+  await ask(page, 'and by whom?');
+  await ask(page, 'and why?');
+  const [first, second] = asks().slice(before) as { previous: { question: string; earlier: { question: string; statements: unknown[] }[] } }[];
+  // Each names the turn it continues by the words typed for it, and the merged turn rides with no sentence.
+  expect(first!.previous.question).toBe('and since when?');
+  expect(second!.previous.question).toBe('and by whom?');
+  expect(first!.previous.earlier.map(each => [each.question, each.statements.length])).toEqual([
+    ['What was drafted last week?', 0], ['When does the pilot start?', 1], ['and who decided?', 1]]);
+  expect(JSON.stringify([first, second])).not.toContain(RESOLVED);
+  expect(JSON.stringify([first, second])).not.toContain('Confirm the trace');
+});
+
 test('a question that could belong to several threads asks which one: a thread in a project names it, and picking it opens the project\'s page and asks there; "New question" starts a thread', async () => {
   run = await launch('ask-threads');
   const { page } = run;

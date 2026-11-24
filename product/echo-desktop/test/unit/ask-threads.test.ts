@@ -1471,6 +1471,104 @@ describe('merging threads, and Undo', () => {
   });
 });
 
+describe('a question a model wrote goes only while every turn that could have informed it is readable', () => {
+  /** What only the other thread's source says: a name no one typed. */
+  const NAME = 'Mina Park';
+  /** The other thread: one turn, whose answer names Mina Park from ORION-7, a ticket the pilot's thread never cited. */
+  const orion = () => {
+    const question = 'Who leads the other team?';
+    const statements = [said(`${NAME} leads it.`, [0])];
+    return turn(question, 6 * DAY, { answer: { scope: GLOBAL, sources: [ticket('ORION-7', '30007')], outcome: 'answered', parts: [{ question, status: 'answered', statements, blocks: paragraphs(statements) }] } });
+  };
+  /** Access to ORION-7 is gone; everything else reads the same. */
+  const orionGone = () => { checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '30007' ? 'unreadable' : 'same' })) }); };
+  /** The pilot's thread with the other merged into it, and a follow-up answered there whose full question the resolver wrote with the name. */
+  const merged = async () => {
+    const other = orion();
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    seed(other, ...pilot);
+    const store = await startStore();
+    await store.openThread(pilot[0]!.id);
+    store.mergeThread(other.id);
+    await flush();
+    const rewrite = `Who signs off the pilot that ${NAME} leads?`;
+    script = params => (params.question === 'and who signs it off?' ? ok({ ...answerOf(String(params.question)), question: rewrite }) : null);
+    await store.ask('and who signs it off?');
+    await flush();
+    // It followed the pilot's own turn: the merged turn is not one it followed, only one asked before it in its thread.
+    const followUp = kept().at(-1)!;
+    expect(followUp).toMatchObject({ typed: 'and who signs it off?', question: rewrite, follows: pilot[0]!.id, thread: pilot[0]!.id });
+    expect((asked()[0]!.previous as AskPrevious).earlier!.map(each => each.question)).toEqual(['Who leads the other team?']);
+    return { store, other, pilot, followUp, rewrite };
+  };
+
+  it('sends the earlier question a model wrote only while the merged turn it may have drawn on is still readable; once it is not, the typed words go and nothing of that turn', async () => {
+    const { store, followUp, rewrite } = await merged();
+    // Access to the other thread's source goes. The rewrite carries what that source said, so the next follow-up names
+    // the turn it continues by the words typed for it, and the turn that lost its source rides with no sentence.
+    orionGone();
+    await store.ask('and where?');
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+    const previous = asked()[1]!.previous as AskPrevious;
+    expect(previous).toMatchObject({ purpose: 'follow_up', question: 'and who signs it off?' });
+    expect(previous.statements).toHaveLength(2);
+    expect(previous.earlier!.map(each => [each.question, each.statements.length])).toEqual([['Who leads the other team?', 0], ['When does the pilot start?', 2]]);
+    // Readable again, a follow-up of that same turn names its question in full, as before.
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    store.toggleTurn(followUp.id);
+    await store.ask('and by when?');
+    expect(asked()[2]!.previous).toMatchObject({ purpose: 'follow_up', question: rewrite });
+    expect((asked()[2]!.previous as AskPrevious).earlier!.map(each => each.statements.length)).toEqual([1, 2]);
+  });
+
+  it('holds for Ask again, and for a choice of "Which one?", which is asked only while the turn it was offered for passes the same check', async () => {
+    const { store, followUp } = await merged();
+    orionGone();
+    // Ask again of the turn whose question was rewritten: its typed words are asked, and name it.
+    store.askAgain(followUp.id);
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: 'and who signs it off?', previous: { purpose: 'ask_again', question: 'and who signs it off?' } });
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+    // A follow-up that could mean several things: the choices are a model's, written with the thread before it.
+    const choices = [{ label: NAME, question: `What does ${NAME} still have to approve?` }, { label: 'The sponsor', question: 'What does the sponsor still have to approve?' }];
+    script = params => (params.question === 'what is left for them?'
+      ? ok({ scope: GLOBAL, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'what is left for them?', choices }) : null);
+    await store.ask('what is left for them?');
+    await flush();
+    expect(store.getState().ask?.clarify).toMatchObject({ kind: 'choices', typed: 'what is left for them?' });
+    store.chooseClarified(choices[0]!);
+    await flush();
+    // The person's own follow-up is asked again instead of the choice.
+    expect(asked().at(-1)).toMatchObject({ question: 'what is left for them?' });
+    expect(JSON.stringify(asked().at(-1))).not.toContain(NAME);
+    // Readable again, a choice is asked as its full question.
+    checks = items => ok({ items: items.map(() => ({ state: 'same' })) });
+    store.chooseClarified(choices[1]!);
+    await flush();
+    expect(asked().at(-1)).toMatchObject({ question: 'What does the sponsor still have to approve?' });
+  });
+
+  it('counts the turns before a turn it followed in another thread: an answer that started a thread was still written with the thread it was asked in', async () => {
+    const other = orion();
+    const pilot = turn('When does the pilot start?', 3 * DAY);
+    // The other thread's turn was merged into the pilot's: it is before the pilot's own turn, and not a turn that one followed.
+    seed({ ...other, thread: pilot.id }, pilot);
+    const rewrite = `What does ${NAME} want for lunch?`;
+    script = params => (params.question === 'and for lunch?' ? ok({ ...answerOf(String(params.question)), question: rewrite, thread: { kind: 'new' } }) : null);
+    const store = await startStore();
+    await store.openThread(pilot.id);
+    await flush();
+    await store.ask('and for lunch?');
+    await flush();
+    const lunch = kept().at(-1)!;
+    expect(lunch).toMatchObject({ question: rewrite, follows: pilot.id, thread: lunch.id });
+    orionGone();
+    await store.ask('and tomorrow?');
+    expect(asked()[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'and for lunch?' });
+    expect(JSON.stringify(asked()[1])).not.toContain(NAME);
+  });
+});
+
 describe('every turn of a thread was asked in its home (R9)', () => {
   /** The turns kept in a thread that lives somewhere other than where they were asked, in memory and in the file. */
   const strays = (store: Store) => [store.getState().timeline.turns, kept()].map(turns =>

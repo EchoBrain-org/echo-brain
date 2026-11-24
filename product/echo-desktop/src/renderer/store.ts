@@ -3830,7 +3830,7 @@ function checkTurns(turns: readonly TimelineTurn[], newest: string | null = null
 interface Derived {
   /** The earlier question that may go: the turn's own, or the person's typed words; undefined when neither may. */
   readonly question: string | undefined;
-  /** Whether the turn and every turn back along what it followed checked readable. */
+  /** Whether every turn that could have informed the turn's question checked readable (questionOf). */
   readonly readable: boolean;
   /** What this check found of the turn's own sources, for the sentences `previous` carries; null if it found nothing. */
   readonly checks: TurnChecks | null;
@@ -3838,27 +3838,35 @@ interface Derived {
   readonly found: Readonly<Record<string, TurnChecks>> | null;
 }
 
+/** The turns of a turn's thread asked before it, oldest first: those a merge brought in included. */
+function askedBefore(turn: TimelineTurn): readonly TimelineTurn[] {
+  const turns = threadOf(threadIdOf(turn))?.turns ?? [];
+  return turns.slice(0, Math.max(turns.findIndex(each => each.id === turn.id), 0));
+}
+
 /**
  * The one rule for a question the model may have written (ADR-0047, C5), for every follow-up, Ask again, Ask everywhere
  * and choice of "Which one?" built from an earlier turn, first and on Try again alike. A turn's question may have been
- * written from its own sources and from those of each turn back along `follows`. It goes only when a check made by this
- * very call (never the five-minute one) finds the turn and every turn along that chain with at least one source, each
- * readable; a chain with a turn missing, or saved before `follows` was kept, fails. A first question in the person's own
- * words needs no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost
- * between this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
- * `older`: the turns of its thread a follow-up also carries (ADR-0056), checked in the same one check, so every sentence
- * that goes was found readable just now.
+ * written from the sources of every turn that rode on the request that asked it: its own, those of each turn back along
+ * `follows`, and those of every turn asked before one of these in its thread (ADR-0056), since a thread's older turns
+ * ride behind the turn a follow-up continues, a turn a merge brought in among them. It goes only when a check made by
+ * this very call (never the five-minute one) finds every one of those turns with at least one source, each readable; a
+ * chain with a turn missing, or saved before `follows` was kept, fails. A first question in the person's own words needs
+ * no check. Otherwise only the person's typed words go, and none for a turn that never kept them. Access lost between
+ * this check and the send is the Authority's to catch: it checks the turn's citations again when the request comes.
+ * The one check covers the thread's older turns a follow-up carries too, so every sentence that goes was found readable
+ * just now.
  */
-async function questionOf(turn: TimelineTurn, older: readonly TimelineTurn[] = []): Promise<Derived> {
+async function questionOf(turn: TimelineTurn): Promise<Derived> {
   const chain: TimelineTurn[] = [];
   for (let link: TimelineTurn | undefined = turn; link && link.follows !== undefined && !chain.includes(link);) {
     chain.push(link);
     link = link.follows === null ? undefined : turnOf(link.follows);
   }
-  const checked = chain.length > 0 ? chain : [turn];
-  const found = await checkTurns([...checked, ...older.filter(each => !checked.includes(each))]);
+  const informed = [...new Set((chain.length > 0 ? chain : [turn]).flatMap(link => [link, ...askedBefore(link)]))];
+  const found = await checkTurns(informed);
   // Whole only when the chain ends at a turn that followed none.
-  const readable = found !== null && chain.at(-1)?.follows === null && chain.every(link => turnReadable(link, found[link.id]));
+  const readable = found !== null && chain.at(-1)?.follows === null && informed.every(each => turnReadable(each, found[each.id]));
   const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
   const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
   return { question, readable, checks: found?.[turn.id] ?? null, found };
@@ -4010,11 +4018,10 @@ async function askAs(how: AskHow, scope: AskScope): Promise<void> {
       ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
-  // The thread the person's own question continues, as Ask shows it, and its turns before the one continued.
+  // The thread the person's own question continues, as Ask shows it: its turns before the one continued ride behind it.
   const thread = how.kind === 'typed' && from ? visibleTurns(homeTurns(threadOf(within), scope)) : [];
-  const older = from ? thread.slice(0, Math.max(thread.findIndex(turn => turn.id === from.id), 0)) : [];
   if (how.kind === 'typed' && from) {
-    derived = await questionOf(from, older);
+    derived = await questionOf(from);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
       if (activeAskCancelId === cancelId) activeAskCancelId = null;
       notAsking(mine);
