@@ -86,7 +86,8 @@ export interface AskAsking extends AskQuestion {
  * `choices`: a follow-up that could mean several things, the choices, the turn it continued and its typed words.
  * `threads` (ADR-0056): a question (the person's typed words) that belongs to other threads, named by id, with those the
  * answer said are on the subject of the one named (`merge`, only beside one). A thread named that is gone by the time
- * the page shows them has no button (clarifyThreads).
+ * the page shows them has no button (clarifyThreads), and one picked whose home cannot be asked in is taken off the list
+ * (chooseThread).
  */
 export type AskClarify = AskQuestion & (
   | { readonly kind: 'choices'; readonly choices: readonly AskChoice[]; readonly follows: string | null; readonly typed: string | null }
@@ -96,7 +97,8 @@ export type AskClarify = AskQuestion & (
 /**
  * The merge the line under the thread's name tells of (ADR-0056), with what Undo needs: the thread merged into, each
  * turn moved with the thread it was in, and the merged threads' names. In memory only, and only while Undo would take
- * back exactly that merge (mergedLine).
+ * back exactly that merge (mergedLine): it goes with the next question, jump or close, when a save of the merge did
+ * not go through (moveTurns), and whenever the timeline is replaced (timelineReplaced).
  */
 export interface AskMerged {
   readonly into: string;
