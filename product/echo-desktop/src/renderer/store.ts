@@ -3685,13 +3685,22 @@ function forgetTimeline(): void {
 
 /**
  * The timeline is replaced by another: read again from its file, or forgotten. The merged line told of turns as they
- * were, and its Undo would move turns the new timeline may hold elsewhere; a question that failed was built from turns
- * the new timeline may hold elsewhere too, so Try again would ask it in another thread than the one it shows in. Both go.
+ * were, and its Undo would move turns the new timeline may hold elsewhere, so it goes. A question that failed stays
+ * while Try again would still ask it as it shows: it continued no turn, or the turn it was built from is still kept in
+ * the thread it was asked in (stillAsks); otherwise it would be asked in another thread than the one it shows in, and goes.
  */
 function timelineReplaced(timeline: State['timeline']): void {
   setTimeline(timeline);
   const view = state.ask;
-  if (view && (view.merged || view.failed)) set({ ask: { ...view, merged: null, failed: null } });
+  const failed = view?.failed && stillAsks(view.failed) ? view.failed : null;
+  if (view && (view.merged || failed !== view.failed)) set({ ask: { ...view, merged: null, failed } });
+}
+
+/** Whether a question that failed would be asked again as it shows: built from no turn, or from one still kept in the thread it was asked in. */
+function stillAsks(failed: NonNullable<AskState['failed']>): boolean {
+  const built = 'turn' in failed.how ? failed.how.turn : failed.how.follows;
+  const turn = built === null ? undefined : turnOf(built);
+  return built === null || (turn !== undefined && (failed.thread === null || threadIdOf(turn) === failed.thread));
 }
 
 /** No check is good any more, none on its way counts, and none is waited on to go stale: the next Ask checks afresh. */

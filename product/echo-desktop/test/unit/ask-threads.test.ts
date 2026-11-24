@@ -1771,18 +1771,46 @@ describe('merging threads, and Undo', () => {
     expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
   });
 
-  it('lets go of a question that failed whenever the timeline is read again: Try again would build it from turns as they were', async () => {
+  it('keeps a question that failed through a read of the timeline while the turn it continued is still in its thread, and lets it go with that turn', async () => {
     seeded();
-    const store = await opened();
+    // The read signing in makes is slow to come back: a question is answered first, and a follow-up of it fails.
+    const reading = held.hold('timeline.read');
+    const store = await startStore();
+    await store.ask('What is new this week?');
+    await flush();
+    const first = store.getState().timeline.turns.at(-1)!;
     const failing = held.hold('ask.run');
-    void store.ask('and the budget?');
+    void store.ask('and since when?');
     await flush();
     failing(fail('unavailable', { retryable: true }));
     await flush();
-    expect(store.getState().ask?.failed).toMatchObject({ question: 'and the budget?' });
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'and since when?', thread: first.id });
+    reading(ok({ turns: kept().filter(each => each.id !== first.id) }));
+    await flush();
+    // The turn it continued was kept meanwhile, and stays, in its thread: Try again asks it as it shows.
+    expect(store.getState().timeline.turns).toHaveLength(6);
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'and since when?', thread: first.id });
+    // Signed out, the turns are forgotten: the turn it continued is gone, and so is the question.
     await signedOutAndIn(store);
-    expect(store.getState().ask).not.toBeNull();
     expect(store.getState().ask?.failed).toBeNull();
+  });
+
+  it('keeps a first question that failed through a read of the timeline that came back after it: it continued nothing', async () => {
+    seeded();
+    // The read signing in makes is slow to come back.
+    const reading = held.hold('timeline.read');
+    const store = await startStore();
+    const failing = held.hold('ask.run');
+    void store.ask('What is new this week?');
+    await flush();
+    failing(fail('unavailable', { retryable: true }));
+    await flush();
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'What is new this week?', thread: null });
+    reading(ok({ turns: kept() }));
+    await flush();
+    expect(store.getState().timeline.turns).toHaveLength(5);
+    expect(store.getState().ask?.failed).toMatchObject({ question: 'What is new this week?' });
+    expect(byTestId(await page(store), 'ask-retry')).toHaveLength(1);
   });
 
   it('merges on its own the threads an answer says are on the open thread\'s subject, in the same home only, with the same line and Undo', async () => {
