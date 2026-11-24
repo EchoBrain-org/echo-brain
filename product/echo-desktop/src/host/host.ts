@@ -274,9 +274,8 @@ let timelineWork: Promise<unknown> = Promise.resolve();
 /**
  * A call on this computer's own files, for the account the renderer is
  * showing and never another: the Ask timeline (ADR-0047). The client is asked
- * only who is signed in. Each waits for the one before it. A failure says the
- * file is as it was, but for a write that may have happened all the same
- * (TimelineWriteUnsure), whose outcome is unknown.
+ * only who is signed in. Each waits for the one before it. A failure means
+ * nothing changed, but for a write that may have (TimelineWriteUnsure).
  */
 function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
   const done = timelineWork.then(async (): Promise<Result<T>> => {
@@ -613,8 +612,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // What the page sent beside the question (C3, ADR-0056), as the client would take it: context, so what it would
-      // refuse is left out rather than failing the Ask (askContext).
+      // Context beside the question (C3, ADR-0056): what the client would refuse is left out (askContext).
       const { previous, threads, refused } = askContext(earlier, others, text, scope);
       if (__ECHO_TEST_HOOK__) for (const left of refused) console.error(`[client] ask ${left} refused; asking without`);
       // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.

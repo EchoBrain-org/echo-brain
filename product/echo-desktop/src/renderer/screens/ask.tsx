@@ -677,11 +677,7 @@ function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn;
   );
 }
 
-/**
- * "Which one?", with a button for each. A follow-up that could mean several things: one asks its full question. A
- * question that belongs to other threads (ADR-0056): a thread, by its name, with its project when it lives outside the
- * place asked, jumps there and asks the same words in it; "New question", last, asks them as a thread of their own.
- */
+/** "Which one?": between things in an answer, or between threads (ADR-0056) with "New question" last. */
 function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   const asking = askBusy(state);
   return (
@@ -711,16 +707,9 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
 const THREAD_LIST_ID = 'ask-thread-list';
 
 /**
- * The thread list (ADR-0056), under the thread's name: "Find a thread", then every thread by home, the open thread's
- * first. A row jumps to its thread, the open thread's own row too, which is marked: picking it is picking that thread,
- * so the person is in it from there (which Ask merely showing it is not), at its home. With a thread open every other
- * row of its home has Merge, which merges that thread into the open one; no merge crosses homes (R9), so a thread of
- * another home has none. The arrow keys move through the rows from the field, and Return there picks the first row.
- * While Ask is busy (askBusy) nothing here moves it.
- *
- * It is a dialog the name opens, not a menu or a listbox: it holds a field to type in, focus really moves from row to
- * row, and a row has a second button beside it. So each home is a list, a row a button in a list item, and the open
- * thread's row is the current one.
+ * The thread list (ADR-0056): picking a row, the open thread's own included, puts the person in that thread; Merge shows
+ * only on rows of the open thread's home (R9). A dialog, not a menu or listbox: it holds a field, focus really moves
+ * between rows, and a row has a second button, so each home is a list and the open thread's row is the current one.
  */
 export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
   const [find, setFind] = useState('');
@@ -737,7 +726,6 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
     const at = all.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      // Up from the first row goes back to the field.
       const next = event.key === 'ArrowDown' ? all[Math.min(at + 1, all.length - 1)] : at <= 0 ? field.current : all[at - 1];
       next?.focus();
     } else if (event.key === 'Enter' && event.target === field.current) {
@@ -780,18 +768,14 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
 }
 
 /**
- * Ask's first line (ADR-0056): the open thread's name, the first question typed in it, on one line; "New thread" with
- * none open. It opens the thread list under it; whether the list is open is this line's own, and goes with Ask. The
- * list closes on Escape pressed inside this line or the list, on a click outside them, when the keyboard's focus
- * leaves them (Tab past the last row), when a question starts, and when Ask shows another thread. What "Find a thread"
- * held goes with it. Under the name, after a merge, one faint line says so, with Undo.
+ * Ask's first line (ADR-0056): the open thread's name, or "New thread", opening the thread list under it, which is this
+ * line's own state; after a merge, one faint line says so, with Undo.
  */
 function ThreadHead({ state }: { state: State }) {
   const [open, setOpen] = useState(false);
   const head = useRef<HTMLDivElement>(null);
   const name = useRef<HTMLButtonElement>(null);
-  // The list is of what Ask showed when it opened: a question started or another thread shown closes it. With the
-  // keyboard in it, the caret goes back to the bar, never to the page.
+  // The list is of what Ask showed when it opened, so it closes when that changes; the caret then goes to the bar.
   const shown = threadShown(state)?.id ?? null;
   const asking = Boolean(state.ask?.asking);
   const closeOnItsOwn = () => {
@@ -806,9 +790,8 @@ function ThreadHead({ state }: { state: State }) {
     document.addEventListener('mousedown', away);
     return () => document.removeEventListener('mousedown', away);
   }, [open]);
-  // Escape here closes the list and goes no further: the window's Escape would close Ask. Only an Escape pressed in the
-  // name or the list is the list's, and only while nothing is up over the page: Capture or a sheet that came up over it
-  // keeps its own Escape and the keyboard. One pressed anywhere else on the page is never taken from it.
+  // Escape here closes only the list (the window's would close Ask), and only when pressed in the name or the list with
+  // nothing up over the page, which keeps its own Escape.
   const onKeyDown = (event: KeyboardEvent) => {
     if (!open || event.key !== 'Escape' || sheetUp(state)) return;
     event.preventDefault();
@@ -868,7 +851,6 @@ const FOLLOW_PX = 40;
  */
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
-  // The open thread, each question once (ADR-0049).
   const turns = askThread(state);
   const scroller = useRef<HTMLElement>(null);
   // Where the timeline last put the view: the scroll event that records a person's scroll can arrive after a new row.
@@ -955,9 +937,8 @@ export function AskView({ state }: { state: State }) {
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     savePosition({ kind: 'bottom' });
   };
-  // A thread shown (its `asked` starts anew), a new question, answer, choice or failure scrolls to the bottom, and nothing
-  // else does: turns that join or leave the thread (a merge, its Undo, the timeline read again) change how many it has
-  // and leave the reading where it is, as does a move dropping a question still being prepared (`seq`).
+  // Only a thread shown, a new question, answer, choice or failure scrolls to the bottom: turns joining or leaving the
+  // thread (a merge, its Undo, a read) and a move dropping a question being prepared leave the reading where it is.
   useLayoutEffect(toBottom, [thread.asked, thread.asking === null, thread.failed, thread.clarify]);
   // Those turns, and the merged line, change what is above the reading: it stays where it was, as when the view changes size.
   useLayoutEffect(restoreReading, [turns.map(turn => turn.id).join(' '), mergedLine(state)]);

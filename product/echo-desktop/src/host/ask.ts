@@ -15,9 +15,8 @@ import { askStepView } from './views.js';
  * global or project, asks `/v7` with its progress; the host pins it to the
  * account the page shows, as every call: a client signed in as another by
  * then asks nothing and prints no step, so the page's account check of each
- * step is the client's own. A follow-up or Ask again carries the earlier turn
- * (`previous`, ADR-0047), already checked by askPrevious, and an Ask the
- * asker's other threads (`threads`, ADR-0056), already checked by askThreads.
+ * step is the client's own. `previous` (ADR-0047) and `threads` (ADR-0056)
+ * come already checked (askContext).
  */
 export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[]): string[] {
   return ['ask', `--question=${text}`, '--progress',
@@ -48,11 +47,8 @@ export function askPrevious(value: unknown, question: string, scope: AskScope): 
 }
 
 /**
- * The asker's other threads an Ask of `question` (already askText's) carries
- * beside `previous` (already askPrevious's, or none), checked as the request
- * will carry them (ADR-0056): by the API's own validator, the list with the
- * turn, so an Ask again carries none and the two fit the body together. Null
- * when that refuses them: they are context, so the Ask then goes without them.
+ * The threads as the request will carry them, checked with `previous` so an Ask
+ * again carries none and both fit the body (ADR-0056); null when refused.
  */
 export function askThreads(value: unknown, question: string, previous: AskPrevious | undefined): AskThread[] | null {
   const request = { schema_version: 3, question, ...(previous === undefined ? {} : { previous }), threads: value };
@@ -60,14 +56,10 @@ export function askThreads(value: unknown, question: string, previous: AskPrevio
 }
 
 /**
- * What an Ask of `question` (already askText's) in `scope` carries of what the
- * page sent with it: the earlier turn (askPrevious) and the asker's other
- * threads (askThreads). Both are context, not the question: one the client
- * would refuse is left out, and the Ask goes on. The page lists the threads
- * for a question that continues that turn, with the turn's own thread left
- * out. Without the turn that list would place the question among every thread
- * but the one it was typed in, so a refused turn takes the list with it, and
- * the answer then places the question nowhere. `refused`: what was left out.
+ * What an Ask carries of what the page sent: context, so what the client would
+ * refuse is left out and the Ask goes on. A refused turn takes the threads with
+ * it: listed without its own thread, they would place the question anywhere but
+ * where it was typed. `refused`: what was left out.
  */
 export function askContext(earlier: unknown, others: unknown, question: string, scope: AskScope):
   { readonly previous?: AskPrevious; readonly threads?: AskThread[]; readonly refused: readonly ('previous' | 'threads')[] } {

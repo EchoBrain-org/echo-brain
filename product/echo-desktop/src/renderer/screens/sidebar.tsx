@@ -8,9 +8,8 @@ import {
 } from '../store.js';
 
 /**
- * The sidebar's Ask: back to Ask where it was left. When that opens nothing (nothing asked yet, the jump refused, or its
- * project not read), the cursor goes to the bar, but only while nothing is up over the page and the keyboard is still
- * where the click left it: an answer that comes back late never takes it from Capture, or from wherever it went meanwhile.
+ * The sidebar's Ask: back to Ask where it was left, or, when that opens nothing, the cursor to the bar, but only while
+ * nothing is up and the keyboard is where the click left it, so a late answer never takes it from Capture or elsewhere.
  */
 function backToAsk(): void {
   const left = document.activeElement;

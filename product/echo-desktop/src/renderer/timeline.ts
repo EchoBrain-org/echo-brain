@@ -1,10 +1,8 @@
 // The Ask timeline (ADR-0047), as rules the store and the page share: which
 // turns show in full, which sentences a check of their sources leaves out,
 // the earlier turn a follow-up or Ask again carries, what the empty bar
-// suggests from it, and the threads its turns make (ADR-0056): which thread a
-// turn belongs to, a thread's home and name, and what an Ask carries of them.
-// Pure, for the store and its tests; the store keeps the state and makes the
-// calls.
+// suggests from it, and its threads (ADR-0056). Pure, for the store and its
+// tests; the store keeps the state and makes the calls.
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, AskThread, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
@@ -214,7 +212,6 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
   return open ?? turns.at(-1) ?? null;
 }
 
-/** What a value takes as JSON, in bytes. */
 const jsonBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
@@ -262,18 +259,14 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
   return previous;
 }
 
-/**
- * The sentences of a turn an Ask may carry, in the order the answer says them: those every source of which `known`
- * (what a check found) has readable. None with nothing known (null), and none of a turn an older desktop saved (no
- * `citations_complete`).
- */
+/** A turn's sentences an Ask may carry: those whose every source `known` found readable; none from an older desktop's turn. */
 function readableStatements(turn: TimelineTurn, known: TurnChecks | null): AnswerStatement[] {
   return known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== ''
       && statement.citation_indexes.every(at => sourceReadable(turn, known, at)));
 }
 
-/** A turn as an Ask carries it, the previous turn or an older one of its thread alike: `question`, when it was asked, and `chosen`, its sentences that go, with the citations they cite. */
+/** A turn as an Ask carries it, previous or older alike, with only the citations its `chosen` sentences cite. */
 function carried(turn: TimelineTurn, question: string, chosen: readonly AnswerStatement[]): AskEarlierTurn {
   const sources = turn.answer.sources;
   // Each citation once, by what it names (an answer may cite the same item at two places), and each sentence citing it once.
@@ -306,7 +299,7 @@ export function sameScope(a: AskScope, b: AskScope): boolean {
   return a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.project_id === b.project_id));
 }
 
-/** The turns asked in a place, as its bar suggests them: Home's, all context, are every turn; a project's only those asked in it. */
+/** The turns asked in a place, as its bar suggests them: all for Home, a project's own for a project. */
 export function askedIn(turns: readonly TimelineTurn[], scope: AskScope): readonly TimelineTurn[] {
   return scope.kind === 'project' ? turns.filter(turn => sameScope(turn.scope, scope)) : turns;
 }
@@ -346,30 +339,25 @@ export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope
 
 // ---- threads (ADR-0056) -----------------------------------------------------------
 
-/** An older turn of the thread a follow-up continues, as `previous.earlier` carries it. */
 export type AskEarlierTurn = NonNullable<AskPrevious['earlier']>[number];
 
 /**
- * What the person typed for a turn, when the turn knows it (R2): its `typed` words, or its `text` when it is known to
- * have followed nothing. Never a question a model wrote: a follow-up's full question, a choice of "Which one?", or the
- * question an Ask again or Ask everywhere asked. A turn saved before `typed` and `follows` were kept says neither, and
- * its `text` may be such a question (a choice was saved as one), so it has none.
+ * What the person typed for a turn (R2): its `typed` words, or its `text` when known to have followed nothing; never a
+ * question a model wrote. A turn saved before `typed` and `follows` has none, as its `text` may be a choice's question.
  */
 export function ownWords(turn: TimelineTurn): string | undefined {
   if (turn.typed !== undefined) return turn.typed;
   return turn.follows === null && turn.again_of === undefined ? turn.text : undefined;
 }
 
-/** A turn's own words as an Ask sends them (askText), or undefined with none to send. */
 function sentWords(turn: TimelineTurn): string | undefined {
   const words = askText(ownWords(turn) ?? '');
   return words === '' ? undefined : words;
 }
 
 /**
- * The thread each turn belongs to, by turn id (R8). A turn names its thread by the id of the thread's first turn. One
- * saved before threads names none: it belongs to the thread of the turn it followed, or asked again, while that turn is
- * still kept and was asked in the same place, and otherwise starts its own.
+ * The thread each turn belongs to (R8): the one it names, or for one saved before threads the thread of the turn it
+ * followed or asked again, while that is kept and asked in the same place; otherwise its own.
  */
 export function threadIds(turns: readonly TimelineTurn[]): ReadonlyMap<string, string> {
   const byId = new Map(turns.map(turn => [turn.id, turn]));
@@ -394,18 +382,11 @@ export interface Thread {
   readonly id: string;
   /** Its turns, oldest first, as the timeline keeps them. */
   readonly turns: readonly TimelineTurn[];
-  /**
-   * Where it lives, one project or none: the scope of its first turn, or of its oldest once that one is gone. Every turn
-   * of a thread was asked there (R9): a thread is asked in only in its home's scope, and no merge crosses homes.
-   */
+  /** Where it lives: its first turn's scope, or its oldest's once that is gone; every turn is asked there (R9). */
   readonly home: AskScope;
-  /**
-   * What the page calls it: the question typed for its first turn (R2), which a merge does not change, or else the first
-   * typed in it. A thread none of whose turns kept the person's words (all saved before they were) is called by its
-   * first turn's heading, as its page shows that turn; nothing of it is sent.
-   */
+  /** The question typed for its first turn, or the first typed in it (R2); with none, its first turn's heading, never sent. */
   readonly name: string;
-  /** The questions typed in it, oldest first, each question it shows once: all an Ask ever sends of it (R2). */
+  /** Its typed questions, oldest first, each once: all an Ask ever sends of it (R2). */
   readonly questions: readonly string[];
   /** When it was last asked in. */
   readonly asked_at: string;
@@ -432,61 +413,48 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
 }
 
 /**
- * The turns of a thread a question asked in `scope` may build on (R9), the one check of it: the thread's turns where the
- * thread lives, and none anywhere else. So a question continues a turn, carries the thread's older turns, and has its
- * answer join the thread only in the thread's home, and nothing asked outside a request's scope rides on it (R3). A turn
- * kept in a thread that was not asked in the thread's home is never one of them: none is saved so, and one can only be
- * left from before merges were held to one home.
+ * The turns of a thread a question asked in `scope` may build on (R9): its turns where it lives, none anywhere else, so
+ * nothing asked outside a request's scope rides on it (R3); a turn an older file keeps there from elsewhere is left out.
  */
 export function homeTurns(thread: Pick<Thread, 'home' | 'turns'> | undefined, scope: AskScope): readonly TimelineTurn[] {
   return thread !== undefined && sameScope(thread.home, scope) ? thread.turns.filter(turn => sameScope(turn.scope, scope)) : [];
 }
 
 /**
- * Whether `thread` may merge into `into` (R9): another thread, living where it does, every turn of it asked there, so
- * one an older file holds mixed never carries a turn of another scope across. The one rule for every merge, by hand or
- * ECHO's own, and for the row that offers it.
+ * Whether `thread` may merge into `into` (R9): another thread of the same home, every turn asked there, so a mixed older
+ * thread never carries a turn across. The one rule for every merge, by hand or ECHO's, and for the row that offers it.
  */
 export function mergeable(thread: Thread, into: Thread | undefined): boolean {
   return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home) && thread.turns.every(turn => sameScope(turn.scope, into.home));
 }
 
-/** Threads, the one asked in most recently first. */
 function newestFirst(threads: readonly Thread[]): Thread[] {
   return [...threads].sort((left, right) => Date.parse(right.asked_at) - Date.parse(left.asked_at));
 }
 
 /**
- * The other threads an Ask in `scope` carries (R3), most recently asked first: every thread but the one it continues
- * (`continued`, null for none) when it asks all context, and only that project's when it asks a project, so nothing from
- * outside a project enters a project's request. A thread with no question typed in it has nothing to send.
+ * The other threads an Ask in `scope` carries, most recent first: all but the one it continues, and in a project only that
+ * project's (R3). One with no typed question has nothing to send.
  */
 export function otherThreads(threads: readonly Thread[], scope: AskScope, continued: string | null): Thread[] {
   return newestFirst(threads.filter(thread => thread.id !== continued && thread.questions.length > 0 && (scope.kind === 'global' || sameScope(thread.home, scope))));
 }
 
 /**
- * The older turns of a thread a follow-up carries (R6), oldest first: those `turns` (the thread's turns where it lives,
- * as kept) has before `before`, the turn it continues, each question once as Ask shows them (visibleTurns), with the
- * person's own words. Folded with `before` among them, so a turn it asks again, or whose question it repeats, folds away
- * behind it, then without it. Found among all the turns kept, never among those shown, `before` is not lost when a later
- * turn repeats its question (one a merge brought in) and folds it away.
+ * The older turns a follow-up carries (R6), oldest first, each question once as Ask shows them: folded with `before`
+ * among them, then without it, and found among all turns kept, so a later repeat (a merge's) never hides `before`.
  */
 export function earlierTurns(turns: readonly TimelineTurn[], before: TimelineTurn): TimelineTurn[] {
   const at = turns.findIndex(turn => turn.id === before.id);
   return visibleTurns(turns.slice(0, at + 1)).filter(turn => turn.id !== before.id && sentWords(turn) !== undefined);
 }
 
-/**
- * Those older turns as `previous.earlier` carries them (R6): each by the person's own words, with its sentences `found`
- * (the check this follow-up made, by turn) has readable, as the previous turn's go: only its question with nothing
- * found of it.
- */
+/** Those older turns as `previous.earlier` carries them (R6): own words, and only the sentences `found` readable. */
 export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, found: Readonly<Record<string, TurnChecks>> | null): AskEarlierTurn[] {
   return earlierTurns(turns, before).map(turn => carried(turn, sentWords(turn)!, readableStatements(turn, found?.[turn.id] ?? null)));
 }
 
-/** What an Ask carries beside its question: the previous turn with its thread's older turns, and the threads it may be placed in, with which threads those are. */
+/** What an Ask carries beside its question, with which threads were sent. */
 export interface AskCarries {
   readonly previous?: AskPrevious;
   /** Present, though it may be empty, on a question to be placed. */
@@ -496,11 +464,9 @@ export interface AskCarries {
 }
 
 /**
- * What an Ask of `question` in `scope` carries, within the request body's bound and with no count of its own (R7):
- * `previous` (previousOf's, which fits alone) with `earlier`, its thread's older turns, and `others`, the threads it may
- * be placed in. When they do not all fit, threads go first, from the least recently asked, then older turns from the
- * oldest. `others` null: the question is not to be placed, and carries no list. A question to be placed carries one even
- * when it is empty, so the answer can say it starts a thread although the person has no other.
+ * What an Ask carries within the body's bound, with no count of its own (R7): when all does not fit, threads go first,
+ * least recently asked first, then older turns from the oldest. `others` null: not to be placed, no list; to be placed,
+ * a list goes even when empty, so the answer can say the question starts a thread.
  */
 export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Thread[] | null): AskCarries {
   const threads = (others ?? []).map(({ questions, asked_at }): AskThread => ({ questions, asked_at }));
@@ -527,11 +493,7 @@ export interface MovedTurn {
   readonly from: string;
 }
 
-/**
- * Whether a merge into `into` can still be undone, given the thread each kept turn is in now (threadIds): every turn it
- * moved is still kept and still in that thread. One that has gone, or moved again, means the merge is no longer what
- * Undo would take back.
- */
+/** Whether a merge into `into` can still be undone: every turn it moved is still kept, and still there. */
 export function undoable(moved: readonly MovedTurn[], into: string, ids: ReadonlyMap<string, string>): boolean {
   return moved.length > 0 && moved.every(({ turn }) => ids.get(turn) === into);
 }
@@ -542,11 +504,7 @@ export interface ThreadGroup {
   readonly threads: readonly Thread[];
 }
 
-/**
- * The thread list (ADR-0056): every thread a question typed in which holds `find`, in any case (all with nothing to
- * find), grouped by home: the open thread's first, then no project, then projects by the one asked in most recently;
- * inside a group, the one asked in most recently first.
- */
+/** The thread list (ADR-0056): threads whose name or a typed question holds `find`, by home, the open thread's first. */
 export function threadGroups(threads: readonly Thread[], open: Thread | undefined, find: string): ThreadGroup[] {
   const wanted = find.trim().toLowerCase();
   const found = newestFirst(threads).filter(thread => wanted === '' || [thread.name, ...thread.questions].some(question => question.toLowerCase().includes(wanted)));

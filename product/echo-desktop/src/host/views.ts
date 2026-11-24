@@ -281,10 +281,8 @@ export function recordRead(value: unknown): RecordRead | null {
  * citations among the answer's), or, asking which one (`clarify`), the
  * choices and no part. An answer that drafted follow-ups (ADR-0053) names them by id only: the page reads each card
  * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
- * derive actionable explanations from gap_details. An answer to an Ask that carried the asker's other threads
- * (ADR-0056) may say where the question belongs and which of them are on its subject, by their place among the
- * `threads` sent (how many; undefined when the Ask carried no list), and is held to what the Ask carried as the client
- * holds it (personAnswerThreadsProblemV1, T2; `continued`: whether it carried a previous turn).
+ * derive actionable explanations from gap_details. Thread fields are held to what the Ask carried, as the client holds
+ * them (personAnswerThreadsProblemV1; `threads`: how many were sent, `continued`: whether a previous turn was).
  */
 export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;

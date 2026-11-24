@@ -73,9 +73,8 @@ const stored = (value: unknown): value is StoredTurn => record(value) && typeof 
 /**
  * Every turn the account's file holds, oldest first, as it holds them, less
  * those an older desktop saved that no page draws now; each id once, its
- * first. A missing file holds none. One that cannot be read, or is not a
- * timeline file, holds none too, to be replaced by the next put; read
- * `strict`ly, as a move reads it, that is a failure instead.
+ * first. A missing file holds none; one unreadable or not a timeline file
+ * holds none too (the next put replaces it), but fails when read `strict`ly.
  */
 function storedTurns(personDirectory: string, account: Expect, strict = false): StoredTurn[] {
   const unread = (why: string): StoredTurn[] => { if (strict) throw new Error(why); return []; };
@@ -119,11 +118,8 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
 
 /**
  * Keeps `turn` in the account's file: in place of the turn with its id, or at
- * the end. A turn the file already has in a thread keeps that thread: only a
- * move relabels it (ADR-0056), so a save of a whole turn (what a source check
- * found) never takes back a move that landed before it. A turn new to the
- * file, or one it holds with no thread (saved before threads), takes the
- * thread the put names.
+ * the end, keeping the thread the file has it in: only a move relabels a turn
+ * (ADR-0056), so a save never takes back a move that landed before it.
  */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
   rewriteTimeline(personDirectory, account, (turns) => {
@@ -137,20 +133,15 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
 }
 
 /**
- * A move between threads (ADR-0056), compare-and-set and all or nothing, in
- * one write. Only when the file holds every named turn, each in the thread its
- * group says the page believes (`from`, null for none), does each take its
- * group's `to`, nothing else of it changing but that a turn saved before
- * threads, named for the first time, is marked as carrying no more than its
- * chain (`carried`); otherwise nothing moves. Either way it answers whether
- * it moved them, and the thread the file has each named turn it holds in now
- * (one it does not hold is left out). The file is read strictly: one that
- * cannot be read, or is not a timeline file, is a failure, never a file with
- * nothing to move.
+ * A move between threads (ADR-0056): compare-and-set, all or nothing, in one
+ * write, only while the file holds every named turn in its group's `from`; a
+ * turn saved before threads, named for the first time, is marked `carried: []`.
+ * Answers whether it moved, and where the file has each named turn it holds.
+ * Read strictly: an unreadable file is a failure, not one with nothing to move.
  */
 export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): { moved: boolean; turns: TimelineLabel[] } {
   const group = new Map(moves.flatMap(move => move.turns.map(turn => [turn, move] as const)));
-  // A thread the file holds that is not a turn's id names none, as a put takes it: never compared or answered as one.
+  // A thread that is not a turn's id names none, as a put takes it.
   const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' && ID.test(turn.thread) ? turn.thread : null);
   const legacy = (turn: StoredTurn) => (turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {});
   let moved = true;
@@ -162,20 +153,13 @@ export function moveTimeline(personDirectory: string, account: Expect, moves: re
   return { moved, turns: turns.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: label(turn) })) };
 }
 
-/**
- * A write that gave the new file its name, after which the folder could not be
- * synced: the file reads as written, so the write may well have happened.
- */
+/** Named but not synced: the file reads as written, so the write may well have happened. */
 export class TimelineWriteUnsure extends Error {}
 
 /**
- * The account's file, changed by `change` from every turn it holds (a turn
- * this page cannot show included; null: nothing to change), then pruned and
- * written whole, as the person session's store writes its own: every byte and
- * then the new name on disk before it returns, so a crash leaves the old file
- * or the new one, never part of one. Read `strict`ly (storedTurns) for a
- * move. Answers the turns the file holds after: those written, or those read
- * when nothing changed.
+ * The account's file, changed by `change` (null: nothing to change) and written
+ * whole: every byte, then the new name, on disk before it returns, so a crash
+ * leaves the old file or the new one. Answers the turns it holds after.
  */
 function rewriteTimeline(personDirectory: string, account: Expect, change: (turns: StoredTurn[]) => StoredTurn[] | null, strict = false): StoredTurn[] {
   const directory = folder(personDirectory, 'write');
@@ -369,10 +353,7 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/**
- * A move as the page sends one (ADR-0056): groups of turns, each with the thread the page believes the file has them in
- * (null: none) and the thread they go to, all by a turn's id, and each turn once in the whole move; null for anything else.
- */
+/** A move as the page sends one (ADR-0056), each turn once in the whole move; null for anything else. */
 export function timelineMoves(value: unknown): TimelineMove[] | null {
   if (!Array.isArray(value)) return null;
   const id = (each: unknown): each is string => string(each) && ID.test(each);
@@ -391,7 +372,7 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
   if (value.typed !== undefined && !string(value.typed)) return null;
   if (value.follows !== undefined && value.follows !== null && !(string(value.follows) && ID.test(value.follows))) return null;
-  // Its thread (ADR-0056): the id of a turn, the thread's first. What its question may have been written from: turns, each once.
+  // Its thread is a turn's id, and `carried` holds turns each once (ADR-0056).
   if (value.thread !== undefined && !(string(value.thread) && ID.test(value.thread))) return null;
   if (value.carried !== undefined && !(Array.isArray(value.carried) && value.carried.every(id => string(id) && ID.test(id))
       && new Set(value.carried).size === value.carried.length)) return null;
