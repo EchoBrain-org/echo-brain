@@ -116,8 +116,10 @@ and ECHO works out which earlier conversation a question continues.
   turns that went), and the question a model wrote for it, or a choice offered
   beside it, is sent or asked only when every turn it followed, and every turn
   each of those carried, is still kept and checks readable now, wherever it is
-  filed. A turn saved before `carried` carried only the turns it followed.
-  Otherwise the typed words go, as today.
+  filed. A turn saved before threads (no thread, no `carried`) carried only
+  the turns it followed; one with a thread but no `carried` came from a build
+  before the record, so its question never goes. Otherwise the typed words
+  go, as today.
 - **R7. No counts.** Nothing limits how many threads, questions or earlier
   turns ride on a request but its transport bound. When the body would pass
   it, the desktop leaves out the oldest threads, then the oldest earlier

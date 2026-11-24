@@ -52,7 +52,7 @@ function turn(question: string, ago: number, extra: Partial<TimelineTurn> = {}):
   const id = `00000000-0000-4000-8000-${String(ids).padStart(12, '0')}`;
   const scope = extra.scope ?? GLOBAL;
   return { id, asked_at: new Date(NOW.getTime() - ago).toISOString(), text: question, question, scope, answer: answerOf(question, scope), citations_complete: true,
-    typed: question, follows: null, thread: id, ...extra };
+    typed: question, follows: null, thread: id, carried: [], ...extra };
 }
 
 /** A thread living in `home`: its questions with how long ago each was asked, each following the one before. */
@@ -2197,19 +2197,55 @@ describe('a question a model wrote goes only while every turn that could have in
     expect(asked()[1]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
   });
 
-  it('takes the turns a turn saved before `carried` followed as all it carried, whatever else its thread holds', async () => {
+  it('takes the turns a turn saved before threads followed as all it carried, whatever else its thread holds, and keeps it so when it is saved again', async () => {
     const other = orion();
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
     const rewrite = 'When does the pilot start after the slip?';
-    // Saved before turns recorded what their request carried: it followed the pilot's first turn, and no more rode then.
-    const legacy = turn(rewrite, 2 * DAY, { text: 'and now?', typed: 'and now?', follows: pilot[0]!.id, thread: pilot[0]!.id, answer: answerOf('and now?') });
+    // Saved before threads (no thread, no record of what it carried): it followed the pilot's first turn, and no more
+    // rode then.
+    const { thread: _thread, carried: _carried, ...legacy } = turn(rewrite, 2 * DAY, { text: 'and now?', typed: 'and now?', follows: pilot[0]!.id, answer: answerOf('and now?') });
     // The other turn sits in the same thread, before it, and is no longer readable: never a turn the legacy one carried.
     seed({ ...other, thread: pilot[0]!.id }, ...pilot, legacy);
     orionGone();
+    // Its second source was found unreadable once, and now reads again: saved again, it is named with its thread for the first time.
+    timelineFiles.set(fileOf(ACCOUNT), kept().map(each => (each.id === legacy.id ? { ...each, unreadable: [1] } : each)));
     const store = await startStore();
     store.askAgain(legacy.id);
     await flush();
     expect(asked()[0]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
+    // Named now, it is marked as carrying no more than its chain, in the file and on the page: its question still goes.
+    expect(kept().find(each => each.id === legacy.id)).toMatchObject({ thread: pilot[0]!.id, carried: [] });
+    expect(kept().find(each => each.id === legacy.id)).not.toHaveProperty('unreadable');
+    store.askAgain(legacy.id);
+    await flush();
+    expect(asked()[1]).toMatchObject({ question: rewrite });
+  });
+
+  it('sends no question a model wrote along a turn that names its thread but recorded nothing of what it carried: a build before that record saved it', async () => {
+    const other = orion();
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
+    const rewrite = `Who signs off the pilot that ${NAME} leads?`;
+    // Saved by a build of threads that kept no record: it may well have carried the other turn, now in its thread.
+    const { carried: _carried, ...unknown } = turn(rewrite, 2 * DAY, { text: 'and who signs it off?', typed: 'and who signs it off?', follows: pilot[0]!.id,
+      thread: pilot[0]!.id, answer: answerOf('and who signs it off?') });
+    seed({ ...other, thread: pilot[0]!.id }, ...pilot, unknown);
+    const store = await startStore();
+    // Every source reads: the typed words go all the same, for Ask again, for a follow-up of it, and for a choice offered there.
+    store.askAgain(unknown.id);
+    await flush();
+    expect(asked()[0]).toMatchObject({ question: 'and who signs it off?', previous: { purpose: 'ask_again', question: 'and who signs it off?' } });
+    const choices = [{ label: NAME, question: `What does ${NAME} still have to approve?` }, { label: 'The sponsor', question: 'What does the sponsor still have to approve?' }];
+    script = params => (params.question === 'and what is left?' ? ok({ scope: GLOBAL, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 },
+      question: 'and what is left?', choices }) : null);
+    store.toggleTurn(unknown.id);
+    await store.ask('and what is left?');
+    await flush();
+    expect(asked()[1]).toMatchObject({ previous: { purpose: 'follow_up', question: 'and who signs it off?' } });
+    store.chooseClarified(choices[0]!);
+    await flush();
+    expect(asked()[2]).toMatchObject({ question: 'and what is left?', previous: { question: 'and who signs it off?' } });
+    // No question a model wrote along it went, its own rewrite and the choice that names the other team's lead alike.
+    expect(asked().flatMap(each => [each.question, (each.previous as AskPrevious | undefined)?.question]).join()).not.toContain(NAME);
   });
 
   it('checks a long thread in one check of every turn the question could have drawn on, the earliest included', async () => {

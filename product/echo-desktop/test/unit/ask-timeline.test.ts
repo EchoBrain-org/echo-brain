@@ -120,8 +120,11 @@ beforeEach(() => {
 });
 
 const calls = (method: string) => rpc.mock.calls.filter(([name]) => name === method).map(([, params]) => params as Record<string, unknown>);
-/** The account's timeline file. The turns given are one thread (ADR-0056), the first's, but for one that names its own. */
-const seed = (...turns: TimelineTurn[]) => { timelineFiles.set(fileOf(ACCOUNT), turns.map(each => ({ thread: turns[0]!.id, ...each }))); };
+/**
+ * The account's timeline file, as a desktop with threads saves it. The turns given are one thread (ADR-0056), the
+ * first's, but for one that names its own; each records what its request carried, none unless it says.
+ */
+const seed = (...turns: TimelineTurn[]) => { timelineFiles.set(fileOf(ACCOUNT), turns.map(each => ({ thread: turns[0]!.id, carried: [], ...each }))); };
 const kept = () => timelineFiles.get(fileOf(ACCOUNT)) ?? [];
 /** Turns as a thread of their own: the first's. */
 const asThread = (...turns: TimelineTurn[]): TimelineTurn[] => turns.map(each => ({ ...each, thread: turns[0]!.id }));

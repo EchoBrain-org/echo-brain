@@ -442,8 +442,9 @@ export interface TimelineTurn {
    * What its full question may have been written from (ADR-0056, R10), recorded when it lands: the turns, by id, that the
    * request asking it carried (the previous turn and the thread's older turns that went), and for a choice of "Which
    * one?" those the request offering it carried too. A question built from this turn goes only while each of these, for
-   * it and for each turn back along `follows`, is still kept and checks readable (questionOf). A turn saved before this
-   * field carried no more than the turns along `follows`.
+   * it and for each turn back along `follows`, is still kept and checks readable (questionOf). A turn saved before threads,
+   * with no `thread` either, carried no more than the turns along `follows`, and is marked `[]` once it is named; one
+   * that names its thread without this record came from a build before it, and nothing a model wrote along it goes.
    */
   readonly carried?: readonly string[];
 }

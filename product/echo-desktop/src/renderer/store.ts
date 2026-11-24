@@ -3739,8 +3739,10 @@ export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, 
 function keepTurns(given: readonly TimelineTurn[]): void {
   const account = expect();
   if (!account || given.length === 0) return;
-  // A turn saved before threads is named with the thread it belongs to when it is next saved, never rewritten for that alone.
-  const named = given.map((turn): TimelineTurn => (turn.thread === undefined ? { ...turn, thread: threadIdOf(turn) } : turn));
+  // A turn saved before threads is named with the thread it belongs to when it is next saved, never rewritten for that
+  // alone; one with no record of what it carried either carried no more than its chain, and is marked so (`carried`).
+  const named = given.map((turn): TimelineTurn => (turn.thread !== undefined ? turn
+    : { ...turn, thread: threadIdOf(turn), ...(turn.carried === undefined ? { carried: [] } : {}) }));
   const byId = new Map(named.map(turn => [turn.id, turn]));
   const turns = state.timeline.turns;
   const known = new Set(turns.map(turn => turn.id));
@@ -3912,11 +3914,14 @@ async function questionOf(turn: TimelineTurn, riding: readonly TimelineTurn[] = 
   }
   const carried = new Set([...offered, ...chain.flatMap(link => link.carried ?? [])]);
   const informed = [...new Set([...(chain.length > 0 ? chain : [turn]), ...[...carried].flatMap(id => byId.get(id) ?? [])])];
+  // A turn that names its thread but recorded nothing of what its request carried was saved by a build of threads before
+  // that record: what it was written from is not known, so nothing a model wrote along it goes.
+  const unknown = chain.some(link => link.thread !== undefined && link.carried === undefined);
   const went = Date.now();
   const checked = await checkTurns([...new Set([...informed, ...riding])]);
   const found = Date.now() - went < CHECK_FRESH_MS ? checked : null;
   // Whole only when the chain ends at a turn that followed none, and every turn carried along it is still kept.
-  const readable = found !== null && chain.at(-1)?.follows === null && [...carried].every(id => byId.has(id))
+  const readable = found !== null && !unknown && chain.at(-1)?.follows === null && [...carried].every(id => byId.has(id))
     && informed.every(each => turnReadable(each, found[each.id]));
   const own = turn.follows === null && turn.typed !== undefined && askText(turn.typed) === askText(turn.question);
   const question = readable || own ? askText(turn.question) : turn.typed === undefined ? undefined : askText(turn.typed);
@@ -4510,9 +4515,13 @@ function unconfirmed(failure: Failure): boolean {
   return failure.code === 'timeout' || failure.code === 'host_restarted' || failure.mutation_outcome === 'unknown';
 }
 
-/** A turn in the thread the file has it in (null: none, its thread worked out from what it followed), and otherwise as it was. */
+/**
+ * A turn in the thread the file has it in (null: none, its thread worked out from what it followed), and otherwise as it
+ * was; one saved before threads, named for the first time, is marked as carrying no more than its chain, as the host
+ * marks it (moveTimeline).
+ */
 function labelled(turn: TimelineTurn, thread: string | null): TimelineTurn {
-  if (thread !== null) return turn.thread === thread ? turn : { ...turn, thread };
+  if (thread !== null) return turn.thread === thread ? turn : { ...turn, thread, ...(turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {}) };
   const { thread: _none, ...rest } = turn;
   return rest;
 }

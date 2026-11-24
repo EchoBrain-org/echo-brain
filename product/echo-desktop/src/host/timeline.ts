@@ -140,20 +140,23 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
  * A move between threads (ADR-0056), compare-and-set, in one write. Only when
  * every named turn the file holds is in the thread its group says the page
  * believes (`from`, null for none) does each take its group's `to`, nothing
- * else of it changing; otherwise nothing moves. A turn the file does not hold
- * is skipped. Either way it answers whether it moved them, and the thread the
- * file has each named turn it holds in now. The file is read strictly: one
- * that cannot be read, or is not a timeline file, is a failure, never a file
- * with nothing to move.
+ * else of it changing but that a turn saved before threads, named for the
+ * first time, is marked as carrying no more than its chain (`carried`);
+ * otherwise nothing moves. A turn the file does not hold is skipped. Either
+ * way it answers whether it moved them, and the thread the file has each
+ * named turn it holds in now. The file is read strictly: one that cannot be
+ * read, or is not a timeline file, is a failure, never a file with nothing to
+ * move.
  */
 export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): { moved: boolean; turns: TimelineLabel[] } {
   const group = new Map(moves.flatMap(move => move.turns.map(turn => [turn, move] as const)));
   const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' ? turn.thread : null);
+  const legacy = (turn: StoredTurn) => (turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {});
   let moved = true;
   const turns = rewriteTimeline(personDirectory, account, (held) => {
     const named = held.filter(turn => group.has(turn.id));
     moved = named.every(turn => label(turn) === group.get(turn.id)!.from);
-    return moved && named.length > 0 ? held.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to } : turn)) : null;
+    return moved && named.length > 0 ? held.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to, ...legacy(turn) } : turn)) : null;
   }, true);
   return { moved, turns: turns.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: label(turn) })) };
 }

@@ -122,8 +122,10 @@ describe('the timeline file (C5)', () => {
     expect(refused).toEqual({ moved: false, turns: [{ turn: first.id, thread: first.id }, { turn: second.id, thread: first.id }] });
     expect(renameSync).not.toHaveBeenCalled();
     expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
-    // In none, a turn saved before threads moves from null, and the answer says where it is now.
+    // In none, a turn saved before threads moves from null, and the answer says where it is now. Named for the first
+    // time, it is marked as carrying no more than the turns it followed, as it did (`carried`).
     expect(moveTimeline(person, ARI, [{ from: null, to: first.id, turns: [older.id] }])).toEqual({ moved: true, turns: [{ turn: older.id, thread: first.id }] });
+    expect(readTimeline(person, ARI)[2]).toEqual({ ...older, thread: first.id, carried: [] });
     expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
   });
 
