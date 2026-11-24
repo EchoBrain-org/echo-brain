@@ -122,7 +122,10 @@ export interface AskTook {
  * the timeline.
  */
 export interface AskState {
-  /** The question on its way; a reply for any other is dropped. Every thread opened and question asked takes a new one. */
+  /**
+   * The question on its way; a reply for any other is dropped. Every thread opened and question asked takes a new one, and
+   * so does every move between threads (moveTurns), so a question still being prepared is not asked in a changed thread.
+   */
   seq: number;
   /**
    * The open thread and whether the person is in it, or null for none: a question asked from a page, until its answer
