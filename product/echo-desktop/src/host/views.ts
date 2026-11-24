@@ -13,7 +13,7 @@ import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2,
-  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
+  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1, personAnswerThreadsProblemV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
   type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
   type PersonCitedRecordSectionV1,
@@ -283,12 +283,8 @@ export function recordRead(value: unknown): RecordRead | null {
  * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
  * derive actionable explanations from gap_details. An answer to an Ask that carried the asker's other threads
  * (ADR-0056) may say where the question belongs and which of them are on its subject, by their place among the
- * `threads` sent (how many; undefined when the Ask carried no list, which is not the same as an empty one): a place
- * past them names nothing the page offered, and an Ask that carried no list is told nothing of threads, so either
- * answer is not one. An Ask that carried the list is owed more (T2), as the client holds too: the question it answers,
- * always; and, when it carried no previous turn (`continued` false), where the question belongs, since leaving that
- * out means "the previous turn's thread" and there is none. An ordinary answer that does not say the subject is new,
- * and a merge into no thread, are then not answers either.
+ * `threads` sent (how many; undefined when the Ask carried no list), and is held to what the Ask carried as the client
+ * holds it (personAnswerThreadsProblemV1, T2; `continued`: whether it carried a previous turn).
  */
 export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
@@ -303,9 +299,7 @@ export function answerView(raw: unknown, scope: AskScope, threads?: number, cont
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   const { thread, merge } = result;
-  const placed = thread !== undefined || merge !== undefined;
-  if ((placed && threads === undefined) || [...(thread?.kind === 'other' ? thread.threads : []), ...(merge ?? [])].some(place => place >= (threads ?? 0))) throw new ViewError();
-  if (threads !== undefined && (result.question === undefined || (!continued && thread === undefined))) throw new ViewError();
+  if (personAnswerThreadsProblemV1(result, threads, continued) !== null) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),

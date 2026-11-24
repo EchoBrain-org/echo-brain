@@ -613,9 +613,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
       if (text === '') return code('invalid_request');
-      // The earlier turn a follow-up or Ask again carries (C3) and the asker's other threads (ADR-0056), checked as the
-      // client checks them. They are context, not the question: what it would refuse is left out rather than failing the
-      // Ask, and a refused turn takes the threads listed beside it (askContext).
+      // What the page sent beside the question (C3, ADR-0056), as the client would take it: context, so what it would
+      // refuse is left out rather than failing the Ask (askContext).
       const { previous, threads, refused } = askContext(earlier, others, text, scope);
       if (__ECHO_TEST_HOOK__) for (const left of refused) console.error(`[client] ask ${left} refused; asking without`);
       // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
