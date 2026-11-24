@@ -23,8 +23,11 @@ and ECHO works out which earlier conversation a question continues.
   home's scope.
 - **Open thread:** the one thread Ask shows.
 - **Own words:** what the person typed for a turn: its `typed` text, or its
-  `text` when the turn followed nothing. A model's rewrite is never own
-  words.
+  `text` when the turn is recorded as following nothing (`follows` is null).
+  A model's rewrite is never own words. A turn saved before turns recorded
+  what they followed has none, because its `text` may be a model's rewrite:
+  such a thread still shows in the list, but ECHO cannot place a question in
+  it until one new question is typed there.
 
 ## What a person sees
 
