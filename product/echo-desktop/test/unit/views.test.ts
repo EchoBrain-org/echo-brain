@@ -765,6 +765,42 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     expect(answerView(clarify, scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'Who owns it?', choices });
   });
 
+  it('reads where an answer says the question belongs among the threads the Ask sent, and refuses one that does not fit what it sent (ADR-0056, T2)', () => {
+    const question = 'Who owns ECHO-7?';
+    const elsewhere = (threads: number[], extra: Record<string, unknown> = {}) => line({ outcome: 'clarify', citations: [], parts: [], question: 'did that change?',
+      thread: { kind: 'other', threads }, ...extra });
+    // One that belongs to other threads answers nothing: "Which one?", without choices.
+    expect(answerView(elsewhere([2], { merge: [0] }), scope, 3)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 },
+      question: 'did that change?', thread: { kind: 'other', threads: [2] }, merge: [0] });
+    // [what it says, how many threads the Ask sent (undefined: no list), whether it sent a previous turn, what the page is given]
+    for (const [answer, threads, continued, read] of [
+      // A new subject is an ordinary answer; one that continues the open thread says nothing of threads. Either names its question.
+      [line({ question, thread: { kind: 'new' } }), 3, false, { question, thread: { kind: 'new' } }],
+      [line({ question, merge: [0, 2] }), 3, true, { outcome: 'answered', question, merge: [0, 2] }],
+      [line({ question }), 3, true, { question }],
+      // An empty list sent is still a list: the answer may say the subject is new.
+      [line({ question, thread: { kind: 'new' } }), 0, false, { question, thread: { kind: 'new' } }],
+      // An Ask that carried no list is owed neither its question nor a place, with a previous turn or without.
+      [line({}), undefined, false, {}], [line({}), undefined, true, {}],
+      // A place past the threads sent names nothing the page offered, and an empty list names no thread.
+      [elsewhere([3]), 3, false, null], [elsewhere([0, 3]), 3, false, null], [elsewhere([1], { merge: [3] }), 3, false, null], [line({ question, merge: [3] }), 3, true, null],
+      [elsewhere([0]), 0, false, null], [line({ question, merge: [0] }), 0, true, null],
+      // An Ask that carried no list is told nothing of threads.
+      [line({ question, thread: { kind: 'new' } }), undefined, false, null], [line({ question, merge: [0] }), undefined, true, null], [elsewhere([0]), undefined, false, null],
+      // No question named, to a list of any size, with a previous turn or without; and with no previous turn there is no
+      // thread to continue, so an ordinary answer must say the subject is new, and a merge has no thread to join.
+      [line({}), 0, true, null], [line({}), 3, true, null], [line({}), 0, false, null], [line({}), 3, false, null],
+      [line({ question }), 3, false, null], [line({ question }), 0, false, null], [line({ question, merge: [0] }), 3, false, null],
+    ] as const) {
+      if (read === null) expect(() => answerView(answer, scope, threads, continued), JSON.stringify([answer, threads, continued])).toThrow(ViewError);
+      else {
+        const view = answerView(answer, scope, threads, continued);
+        expect(view).toMatchObject(read);
+        for (const key of ['question', 'thread', 'merge'] as const) if (!(key in read)) expect(view).not.toHaveProperty(key);
+      }
+    }
+  });
+
   it('reads a source check (C1): a state per item asked, in order; anything else is not its output', () => {
     const check = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-ask-check-v1', items });
     expect(askCheckView(check([{ state: 'same' }, { state: 'unreadable' }, { state: 'unknown' }]), 3))

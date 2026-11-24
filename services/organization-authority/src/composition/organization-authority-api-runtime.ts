@@ -294,6 +294,12 @@ export async function startOrganizationAuthorityApiRuntime(
         }
         return membership.membership_type;
       },
+      membership_active: (input) => {
+        const membership = repository.read((transaction) =>
+          transaction.membership(input.membership_id),
+        );
+        return membership?.principal_id === input.principal_id && membership.status === "active";
+      },
     });
     const readAudit = new SqlitePersonRecordReadAuditV1(database);
     const captureProjects = createRecordProjectAuthorizationV1(projectRepository);
@@ -438,6 +444,9 @@ export async function startOrganizationAuthorityApiRuntime(
           next(prefix) {
             return `${prefix}_${randomUUID()}`;
           },
+        }, {
+          // A removed employee's link lives in the external identity provider's own database.
+          endMembershipLinks: (membership) => externalIdentity?.endMembershipLinks(membership),
         }),
       ),
       person_tools: createPersonToolsHttpApplicationV4({

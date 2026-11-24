@@ -1,7 +1,7 @@
 import {
   PERSON_UPDATE_REQUEST_MAX_BYTES_V1, validatePersonChangesV1, validatePersonDocumentIdV1, validatePersonItemRefV1, validatePersonMeetingRequestV2,
   validatePersonMeetingResultV2, validatePersonRunsRequestV1, validatePersonRunsResultV1, validatePersonUpdateRequestId, validatePersonUploadContextId, validateProjectIdV1,
-  validatePersonReviewRequestV1, validatePersonReviewResultV1,
+  validatePersonReviewRequestV1,
 } from '@echo-brain/organization-api';
 // The person host: an Electron utility process that runs the TypeScript person
 // client in-process. It is the only process that reads the session or holds a
@@ -16,14 +16,14 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askContext, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
-import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
+import { deleteOtherTimelines, deleteTimeline, moveTimeline, putTimeline, readTimeline, TimelineWriteUnsure, timelineMoves, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
-  projectActivityView, receiptView, recordRead, recordView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
+  projectActivityView, receiptView, recordRead, recordView, reviewsView, revokedView, savedOriginalView, statusView, toolAttemptStatusView, toolAttemptView, toolsView, TOOL_ATTEMPT_ID, TOOL_ID, unwrap, ViewError, writeStatusView,
 } from './views.js';
 
 interface ParentPort {
@@ -94,7 +94,7 @@ const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
-const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put', 'timeline.move']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
@@ -274,7 +274,8 @@ let timelineWork: Promise<unknown> = Promise.resolve();
 /**
  * A call on this computer's own files, for the account the renderer is
  * showing and never another: the Ask timeline (ADR-0047). The client is asked
- * only who is signed in. Each waits for the one before it.
+ * only who is signed in. Each waits for the one before it. A failure means
+ * nothing changed, but for a write that may have (TimelineWriteUnsure).
  */
 function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Promise<Result<T>> {
   const done = timelineWork.then(async (): Promise<Result<T>> => {
@@ -285,7 +286,7 @@ function onDevice<T>(expect: Expect, work: (personDirectory: string) => T): Prom
       return ok(work(paths.directory));
     } catch (error) {
       if (__ECHO_TEST_HOOK__) console.error('[timeline] failed:', error);
-      return code('failed');
+      return error instanceof TimelineWriteUnsure ? fail({ code: 'failed', retryable: true, mutation_outcome: 'unknown' }) : code('failed');
     }
   });
   timelineWork = done.catch(() => undefined);
@@ -606,23 +607,21 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
         stdout => abandonView(lastJson(stdout), request_id));
     }
     case 'ask.run': {
-      const { expect, question, scope, cancel_id, previous: earlier } = params as Params<'ask.run'>;
+      const { expect, question, scope, cancel_id, previous: earlier, threads: others } = params as Params<'ask.run'>;
       // A retired or malformed scope is refused, never widened to all accessible context.
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
-      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3). One it would refuse is
-      // context, not the question: the Ask goes without it rather than failing.
-      const checked = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
       if (text === '') return code('invalid_request');
-      if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
-      const previous = checked ?? undefined;
+      // Context beside the question (C3, ADR-0056): what the client would refuse is left out (askContext).
+      const { previous, threads, refused } = askContext(earlier, others, text, scope);
+      if (__ECHO_TEST_HOOK__) for (const left of refused) console.error(`[client] ask ${left} refused; asking without`);
       // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
       const steps = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
       const progress = (line: string) => { alive(); steps?.(line); };
-      return forAccount(method, expect, askArgv(text, scope, previous), stdout => answerView(lastJson(stdout), scope), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, previous, threads), stdout => answerView(lastJson(stdout), scope, threads?.length, previous !== undefined), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
       const { expect } = params as Params<'timeline.read'>;
@@ -638,6 +637,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (turn === null) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
       return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
+    }
+    case 'timeline.move': {
+      const { expect, moves: given } = params as Params<'timeline.move'>;
+      const moves = timelineMoves(given);
+      if (moves === null) return code('invalid_request');
+      return onDevice(expect, directory => moveTimeline(directory, expect, moves));
     }
     case 'ask.check': {
       // The person client prints the check as its last line.
@@ -691,7 +696,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       let request;
       try { request = validatePersonReviewRequestV1(raw); } catch { return code('invalid_request', true); }
       return forAccount(method, expect, ['reviews', option('request', JSON.stringify(request))],
-        stdout => validatePersonReviewResultV1(request.operation, unwrap(lastJson(stdout))), undefined, undefined, isWriteCall(method, params));
+        stdout => reviewsView(request.operation, lastJson(stdout)), undefined, undefined, isWriteCall(method, params));
     }
     // Impact checks of your own approvals, and the open items they found. A
     // check-in (`next`) asks the Authority to start the oldest queued check, and

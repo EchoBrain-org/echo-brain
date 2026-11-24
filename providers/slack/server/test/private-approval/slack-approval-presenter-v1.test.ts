@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { coreRuntimeIdentityV1, observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from '@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSlackApprovalPresenterV1, createTargetBoundSlackApprovalPosterV1, type ApprovalProposalViewV1 } from '../../src/private-approval/slack-approval-presenter-v1.js';
-import { slackApprovalDestinationSha256V4 } from '../../src/private-approval/slack-approval-card-v4.js';
+import { buildClosedApprovalCardV4, slackApprovalDestinationSha256V4 } from '../../src/private-approval/slack-approval-card-v4.js';
 
 const databases: Database.Database[] = [];
 const signal = () => new AbortController().signal;
@@ -27,7 +27,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
   const views = new Map<string, ReturnType<typeof proposal>>();
   let projects: { project_id: string; name: string }[] = [];
   let linked = true, current = true, clock = new Date('2026-10-07T00:00:00.000Z');
-  let afterOpen: (() => void) | undefined;
+  let afterOpen: (() => void) | undefined, afterPost: (() => void) | undefined;
   const unlinkedPrincipals = new Set<string>();
   const reconcileInputs: { post_started_at: string }[] = [];
   const next = (name: string): Outcome => outcomes[name]?.shift() ?? (name === 'open' ? 'opened' : name === 'publish' ? 'done' : 'posted');
@@ -37,7 +37,7 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
     target: reviewer => linked && !unlinkedPrincipals.has(reviewer.principal_id) ? target : null, targetCurrent: () => current, projects: () => projects, now: () => clock,
     poster: () => ({
       async openDirectMessage() { const x = take('open'); afterOpen?.(); return x === 'opened' ? { kind: 'opened' as const, channel_id: 'D1', user_id: 'U1' } : { kind: 'retry_allowed' as const }; },
-      async postMarker() { const x = take('post'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
+      async postMarker() { const x = take('post'); afterPost?.(); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async reconcileMarker(input) { reconcileInputs.push(input); const x = take('reconcile'); return x === 'posted' ? { kind: 'posted' as const, provider_message_ts: '1.000001' } : { kind: x as 'retry_allowed' | 'uncertain' }; },
       async publish(input) { cards.push(input.card); const x = take('publish'); return x === 'done' ? { kind: 'done' as const } : { kind: 'uncertain' as const }; },
     }), ...overrides });
@@ -46,10 +46,27 @@ function fixture(overrides: Partial<Parameters<typeof createSlackApprovalPresent
     db.prepare('INSERT INTO authority_live_approval_outbox_v2 VALUES (?,?,?)').run(id, 'staged', clock.toISOString());
     return id;
   };
-  return { db, calls, cards, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
+  return { db, calls, cards, outcomes, reconcileInputs, presenter, stage, advance: (ms: number) => { clock = new Date(clock.getTime() + ms); }, unlink: (principalId: string) => { unlinkedPrincipals.add(principalId); }, set proposal(value: ApprovalProposalViewV1) { views.set(value.approval_id, value); }, set afterOpen(value: (() => void) | undefined) { afterOpen = value; }, set afterPost(value: (() => void) | undefined) { afterPost = value; }, set projects(value: { project_id: string; name: string }[]) { projects = value; }, set linked(value: boolean) { linked = value; }, set current(value: boolean) { current = value; } };
 }
 function markInFlight(f: ReturnType<typeof fixture>) { f.db.prepare("UPDATE authority_approval_presentations_v1 SET marker_state='in_flight',marker_started_at='2026-10-07T00:00:00.000Z' WHERE approval_id='apr_live'").run(); }
 function row(f: ReturnType<typeof fixture>, id = 'apr_live') { return f.db.prepare('SELECT * FROM authority_approval_presentations_v1 WHERE approval_id=?').get(id) as { delivery: string; attempts: number; retry_at: string | null; dm_channel_id: string | null; shows: string; message_ts: string | null }; }
+/** A real target-bound poster whose link stays current, as the composition root builds one. `tokenRead` runs while it waits for its bot token. */
+function boundPoster(bound: typeof target, reviewerActive: () => boolean, tokenRead?: () => void) {
+  return createTargetBoundSlackApprovalPosterV1({ target: bound, reviewerActive,
+    activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
+    targetCurrent: () => true, botToken: { async botToken() { tokenRead?.(); return 'xoxb-test'; } } as never,
+    needsReinstall: () => false, markNeedsReinstall: () => undefined });
+}
+/** A fake Slack that accepts every request, and the methods it was asked for. */
+function acceptingSlack() {
+  const methods: string[] = [];
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    methods.push(new URL(String(url)).pathname.split('/').at(-1)!);
+    const body = JSON.parse(String(init?.body ?? '{}')) as { channel?: string; ts?: string };
+    return new Response(JSON.stringify({ ok: true, channel: body.channel, ts: body.ts }));
+  });
+  return methods;
+}
 /**
  * The presenter over real target-bound posters, a new one for every step as the composition root builds them, and a
  * fake Slack that answers U0A's first `times` opens with 429 and this Retry-After, then everything as asked. apr_a is
@@ -70,10 +87,7 @@ function rateLimitedSlack(retryAfter: string, times = 1) {
   const f = fixture({
     now: () => new Date(),
     target: reviewer => ({ ...target, slack_subject_id: reviewer.principal_id === 'prn_2' ? 'U0B' : 'U0A' }),
-    poster: bound => createTargetBoundSlackApprovalPosterV1({ target: bound,
-      activeConnection: () => ({ connection: { connection_id: 'con_1', provider_tenant_id: 'T1', provider_app_id: 'A1' }, state_sha256: `sha256:${'c'.repeat(64)}` }) as never,
-      targetCurrent: () => true, botToken: { async botToken() { return 'xoxb-test'; } } as never,
-      needsReinstall: () => false, markNeedsReinstall: () => undefined }),
+    poster: boundPoster,
   });
   f.stage('apr_a'); f.stage('apr_b', { reviewer: { organization_id: 'org_1', principal_id: 'prn_2', membership_id: 'mem_2' } });
   return { f, opens: () => requests.filter(request => request === 'conversations.open:U0A').length };
@@ -105,7 +119,7 @@ describe('Slack approval presenter V1', () => {
     const providerCalls = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ ok: true })));
     const poster = createTargetBoundSlackApprovalPosterV1({ target,
       activeConnection: () => active as never,
-      targetCurrent: candidate => active.connection.connection_id === candidate.connection_id,
+      targetCurrent: candidate => active.connection.connection_id === candidate.connection_id, reviewerActive: () => true,
       botToken: { async botToken(selected: { connection: { connection_id: string } }) { expect(selected.connection.connection_id).toBe('con_1'); active = connection('con_2'); return 'token'; } } as never,
       needsReinstall: () => false, markNeedsReinstall: () => undefined,
     });
@@ -113,6 +127,22 @@ describe('Slack approval presenter V1', () => {
       await expect(poster.openDirectMessage('U1')).resolves.toEqual({ kind: 'retry_allowed' });
       expect(providerCalls).not.toHaveBeenCalled();
     } finally { providerCalls.mockRestore(); }
+  });
+
+  it('refuses a token selected while its reviewer was removed, though the target stayed current, before Slack receives a request', async () => {
+    const sent = acceptingSlack();
+    let removed = false, tokenReads = 0;
+    const publish = async (tokenRead?: () => void) => {
+      const answer = await boundPoster(target, () => !removed, () => { tokenReads += 1; tokenRead?.(); })
+        .publish({ approval_id: 'apr_live', dm_channel_id: 'D0A', provider_message_ts: '1.000001', card: buildClosedApprovalCardV4({ title: 'Roadmap', outcome: 'superseded' }) });
+      return { answer, requests: sent.splice(0) };
+    };
+    // An active reviewer's card goes out as before.
+    expect(await publish()).toEqual({ answer: { kind: 'done' }, requests: ['chat.update'] });
+    // Removed while the token read is pending: the answer a target that changed during token selection gets.
+    expect(await publish(() => { removed = true; })).toEqual({ answer: { kind: 'uncertain' }, requests: [] });
+    // Already removed: the poster does not ask for a token at all.
+    expect(await publish()).toEqual({ answer: { kind: 'uncertain' }, requests: [] }); expect(tokenReads).toBe(2);
   });
 
   it('waits out Slack Retry-After before that target\'s next step while another target delivers', async () => {
@@ -183,6 +213,83 @@ describe('Slack approval presenter V1', () => {
     await f.presenter.reconcile(signal()); expect(f.calls).toEqual([]);
     f.linked = true; await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
     expect(f.calls).toEqual(['open', 'post', 'publish']);
+  });
+
+  it('never opens a DM for a reviewer whose membership is no longer active, though their Slack link still resolves', async () => {
+    const f = fixture(); f.stage('apr_live', { reviewer_active: false });
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual([]); expect(row(f)).toBeUndefined();
+  });
+
+  it('makes no further Slack call for a card in flight once its reviewer was removed and their link ended', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    markInFlight(f);
+    f.proposal = { ...proposal(id), reviewer_active: false }; f.current = false;
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: null });
+  });
+
+  // A removal can stop between its two writes: the reviewer's membership has ended while their link is still stored active.
+  it('makes no Slack call for a marker in flight once its reviewer was removed, though their link is still stored', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    markInFlight(f);
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    // The row ends as one whose target is no longer current does.
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'failed', attempts: 5, retry_at: null, message_ts: null, card_sha256: null });
+  });
+
+  it('does not publish the card when its reviewer is removed while the marker is being posted', async () => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal());
+    f.afterPost = () => { f.proposal = { ...proposal(id), reviewer_active: false }; };
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: '1.000001', card_sha256: null });
+  });
+
+  it('does not publish the card of a posted marker once its reviewer was removed', async () => {
+    const f = fixture(); const id = f.stage(); f.outcomes.publish = ['uncertain'];
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: 'posted', message_ts: '1.000001', card_sha256: null });
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'publish']); expect(row(f)).toMatchObject({ delivery: 'failed', message_ts: '1.000001', card_sha256: null });
+  });
+
+  // The poster reads its bot token after the presenter's own check, and that read can wait on Nango.
+  it.each(['posted', 'in flight'] as const)('sends nothing for a marker %s when its reviewer is removed while the poster waits for its token, though their link is still stored', async (marker) => {
+    const sent = acceptingSlack();
+    const f = fixture({ poster: (bound, reviewerActive) => boundPoster(bound, reviewerActive, () => { f.proposal = { ...proposal('apr_live'), reviewer_active: false }; }) });
+    const state = marker === 'posted' ? "'posted',NULL,NULL,'1.000001'" : "'posting','in_flight','2026-10-07T00:00:00.000Z',NULL";
+    f.db.prepare(`INSERT INTO authority_approval_presentations_v1 VALUES (?,'slack',?,'D0A',${state},NULL,'open',0,NULL,'2026-10-07T00:00:00.000Z','2026-10-07T00:00:00.000Z')`).run(f.stage(), JSON.stringify(target));
+    await f.presenter.reconcile(signal());
+    // The call fails as it does when a target stops being current during it, and the row waits for its retry.
+    expect(sent).toEqual([]); expect(row(f)).toMatchObject({ delivery: marker === 'posted' ? 'posted' : 'posting', attempts: 1 });
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(sent).toEqual([]); expect(row(f)).toMatchObject({ delivery: 'failed', attempts: 5, retry_at: null, card_sha256: null });
+  });
+
+  it.each(['superseded', 'approved'] as const)('does not redraw a removed reviewer\'s open card when its proposal is later %s', async (status) => {
+    const f = fixture(); const id = f.stage();
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: 'posted', shows: 'open' });
+    f.proposal = { ...proposal(id), reviewer_active: false, status, decided_on: status === 'approved' ? 'desktop' : null };
+    if (status === 'superseded') f.db.prepare("UPDATE authority_live_approval_outbox_v2 SET state='superseded' WHERE approval_id=?").run(id);
+    else f.db.prepare('INSERT INTO authority_approval_decisions_v1 VALUES (?,?)').run(id, 'approve');
+    await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open', 'post', 'publish']); expect(row(f)).toMatchObject({ delivery: 'failed', shows: 'open', message_ts: '1.000001' });
+  });
+
+  it.each(['before its DM is opened', 'before its first marker'] as const)('still ends a removed reviewer\'s row %s as unrepresentable, with no Slack call', async (when) => {
+    const f = fixture(); const id = f.stage();
+    if (when === 'before its DM is opened') f.outcomes.open = ['retry_allowed'];
+    await f.presenter.reconcile(signal());
+    expect(row(f)).toMatchObject({ delivery: when === 'before its DM is opened' ? 'opening' : 'posting' });
+    f.proposal = { ...proposal(id), reviewer_active: false };
+    f.advance(2_001); await f.presenter.reconcile(signal()); await f.presenter.reconcile(signal());
+    expect(f.calls).toEqual(['open']); expect(row(f)).toMatchObject({ delivery: 'unrepresentable', message_ts: null });
   });
 
   it.each(['while opening the DM', 'during channel reservation'] as const)('does not post a first marker when desktop decides %s', async (when) => {

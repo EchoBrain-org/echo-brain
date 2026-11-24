@@ -13,9 +13,10 @@ import {
   validateEmployeeRosterV1, validateOrganizationDirectoryV1, validateOrganizationPersonToolsV4, validatePersonAskCheckV1, validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3,
   validatePersonDocumentAssociationReceiptV1, validatePersonListResponseV1, validatePersonOpenResponseV1, validatePersonProjectActivityV1, validatePersonSourceEvidenceV1,
   validateProjectCreateReceiptV1, validateProjectListV2, PERSON_ANSWER_BLOCK_KINDS_V2,
-  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1,
+  validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectSettingsReceiptV1, validateProjectSummaryV2, validatePersonCitedRecordV1, validatePersonReviewResultV1,
+  personAnswerThreadsProblemV1,
   type PersonAnswerCitationV8, type PersonDocumentMediaTypeV1, type PersonListRowV1, type PersonListVisibilityV1, type PersonOpenDocumentV1, type PersonOpenImportedMeetingV1,
-  type PersonOpenItemV1, type PersonOpenNoteV1, type PersonRunsResultsV1, type ProjectSummaryV2,
+  type PersonOpenItemV1, type PersonOpenNoteV1, type PersonReviewResultsV1, type PersonRunsResultsV1, type ProjectSummaryV2,
   type PersonCitedRecordSectionV1,
 } from '@echo-brain/organization-api';
 import { externalSourcePermalink } from '../shared/protocol.js';
@@ -46,6 +47,15 @@ export function unwrap(raw: unknown): unknown {
 /** What the client printed, through the API validator it was checked with before printing; anything else is not its output. */
 function validated<T>(validate: (value: unknown) => T, raw: unknown): T {
   try { return validate(raw); } catch { throw new ViewError(); }
+}
+
+/**
+ * A review request's answer as the client printed it. The Authority answers the list of reviews a page at a time, each
+ * within one response's bound, and the client reads every page and prints them joined: so the list is checked as a joined
+ * one, row by row, and a list longer than one response is read whole. What a command may print (MAX_OUTPUT_BYTES) holds it.
+ */
+export function reviewsView<K extends keyof PersonReviewResultsV1>(operation: K, raw: unknown): PersonReviewResultsV1[K] {
+  return validatePersonReviewResultV1(operation, unwrap(raw), true);
 }
 
 /** The account signed in, if any; signed out by a refresh, why. */
@@ -281,9 +291,10 @@ export function recordRead(value: unknown): RecordRead | null {
  * citations among the answer's), or, asking which one (`clarify`), the
  * choices and no part. An answer that drafted follow-ups (ADR-0053) names them by id only: the page reads each card
  * itself, so what it shows of one is never older than the read. Its diagnostic notice stays out; the desktop and Copy
- * derive actionable explanations from gap_details.
+ * derive actionable explanations from gap_details. Thread fields are held to what the Ask carried, as the client holds
+ * them (personAnswerThreadsProblemV1; `threads`: how many were sent, `continued`: whether a previous turn was).
  */
-export function answerView(raw: unknown, scope: AskScope): Answer {
+export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
   try {
     line = validatePersonAskProgressResultLineV3(raw);
@@ -295,12 +306,15 @@ export function answerView(raw: unknown, scope: AskScope): Answer {
   const { result, receipt } = line;
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
+  const { thread, merge } = result;
+  if (personAnswerThreadsProblemV1(result, threads, continued) !== null) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.since === undefined ? {} : { since: result.since.statements }),
     ...(result.choices === undefined ? {} : { choices: result.choices }),
-    ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }) };
+    ...(result.follow_ups === undefined ? {} : { follow_ups: result.follow_ups }),
+    ...(thread === undefined ? {} : { thread }), ...(merge === undefined ? {} : { merge }) };
 }
 
 const BLOCK_KINDS: ReadonlySet<unknown> = new Set(PERSON_ANSWER_BLOCK_KINDS_V2);

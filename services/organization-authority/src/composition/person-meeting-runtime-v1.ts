@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { PERSON_MEETINGS_PATH_V2, validatePersonMeetingRequestV2, validatePersonMeetingResultV2,
-  PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
+  PERSON_REVIEW_RESPONSE_MAX_BYTES_V1, PERSON_REVIEWS_PATH_V1, validatePersonReviewRequestV1, validatePersonReviewResultV1, type PersonReviewOperationV1,
   type OrganizationPersonToolV4, type PersonMeetingResultsV2, type PersonMeetingReviewV2, type PersonReviewResultsV1, type PersonSubmittedMeetingV2 } from '@echo-brain/organization-api';
 import type { ProviderHttpApplicationV1 } from '@echo-brain/organization-authority-kernel/application/ports/provider-http-application-v1';
 import { AuthorityOperationError } from '@echo-brain/organization-authority-kernel/domain/errors';
@@ -25,7 +25,8 @@ import { SqlitePersonMeetingIntakeV1, type MeetingIntakePersonV1, type MeetingIn
 import { SqliteSourceAdmissionStoreV1 } from '../adapters/persistence/sqlite/source-admission-v1.js';
 import { SqlitePersonListDirectoryV1 } from '../adapters/persistence/sqlite/person-list-directory-v1.js';
 import { publishedApprovalOfRecordV1 } from '../adapters/persistence/sqlite/published-approval-records-v1.js';
-import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { approvalProposalSummaryV1, approvalReviewV1, createApprovalCoreV1, type ApprovalCoreOptionsV1, type ApprovalCoreV1, type ApprovalProposalPlaceV1, type ApprovalProposalViewV1, type ApprovalStatusV1 } from './approval-core-v1.js';
+import { decodePersonReviewsCursorV1, encodePersonReviewsCursorV1 } from './person-list-cursor-v1.js';
 import { personToolAuthenticationV1 } from './person-tool-authentication-v1.js';
 import type { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import type { OrganizationAuthorityProcessingCycleV1 } from './organization-authority-service-lifecycle.js';
@@ -108,6 +109,43 @@ const TOO_LONG: ReadonlyMap<string, { readonly held: string; readonly again: str
   ['input_too_long', { held: 'is held: it is longer than the extraction model\'s context window, so one extraction call cannot read it',
     again: 'Another attempt would be refused the same way; an operator can still authorize one.' }],
 ]);
+/** A value's size as a response carries it and its bound measures it: its JSON in UTF-8. */
+const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+/**
+ * What the rows of one `reviews` page may take: the bound the response is held to (the tool transport's, ADR-0055), less
+ * what the page sends around them and no more. That is its `reviews` key and, when a row is left, the `next_cursor` it
+ * gives, measured as it is sent. The last page gives no cursor and keeps no room for one, so a list that fits one response
+ * is answered in one: a client from before the list paged reads that, and refuses a page with a cursor. The route fills a
+ * page up to this, so the bound cannot refuse a list for being long.
+ */
+const reviewRowsRoom = (next_cursor?: string): number => PERSON_REVIEW_RESPONSE_MAX_BYTES_V1 - jsonBytes({ reviews: [], next_cursor });
+/** `text` whole when its JSON is at most `bytes` long; else its longest start that is, with the ellipsis that says it was cut, and never half a surrogate pair. */
+function cutToJsonBytes(text: string, bytes: number): string {
+  if (jsonBytes(text) <= bytes) return text;
+  let kept = 0;
+  for (let low = 0, high = text.length; low <= high;) {
+    const middle = (low + high) >> 1;
+    if (jsonBytes(`${text.slice(0, middle)}…`) <= bytes) { kept = middle; low = middle + 1; } else high = middle - 1;
+  }
+  if (/[\uD800-\uDBFF]/.test(text.charAt(kept - 1)) && /[\uDC00-\uDFFF]/.test(text.charAt(kept))) kept -= 1;
+  return `${text.slice(0, kept)}…`;
+}
+/**
+ * A review row too large for the page it is alone on, made to fit the `room` that page has for its rows (reviewRowsRoom):
+ * its title and its first line are cut. The two share what the row's other fields leave. Each may take half, and one
+ * shorter than its half leaves the rest to the other, so neither is cut while there is room for it. Every other field
+ * stays, and the row stays on the list: a pending proposal that is not listed cannot be decided. Only the list's row is
+ * cut; `review_open` still answers from the whole text. The other fields are ids and counts: they would fill a page only
+ * with tens of thousands of projects on one proposal, and the response's own check would say so.
+ */
+function fitReviewRow(row: PersonMeetingReviewV2, room: number): PersonMeetingReviewV2 {
+  // A text's JSON bytes inside its quotes. The quotes are counted with the row's other fields.
+  const inside = (text: string | null): number => text === null ? 0 : jsonBytes(text) - 2;
+  const shared = room - jsonBytes({ ...row, title: '', first_line: row.first_line === null ? null : '' });
+  // The first line is cut to its half, or to all that a shorter title leaves. The title then has whatever the line did not take.
+  const first_line = row.first_line === null ? null : cutToJsonBytes(row.first_line, 2 + Math.max(Math.floor(shared / 2), shared - inside(row.title)));
+  return { ...row, title: cutToJsonBytes(row.title, 2 + shared - inside(first_line)), first_line };
+}
 /** Meeting lanes over shared custody/candidates/append, and one approval core for every proposal. */
 export function createPersonMeetingRuntimeV1(options: {
   readonly database: Database.Database; readonly sessions: Pick<PersonIdentitySessionApplication, 'authenticateAccess'>;
@@ -360,6 +398,34 @@ export function createPersonMeetingRuntimeV1(options: {
       records: view.records.map(record => ({ approval_id: record.approval_id, project_ids: record.project_ids, ...(record.private === true ? { private: true as const } : {}) })) };
   }
   /**
+   * One page of a reviewer's list, from the start or from just after a cursor's place: rows in the list's order for as long
+   * as they fit the response, so a list of any length is answered and none fails for its size (ADR-0055). `next_cursor` is
+   * there only when a row is left: it names the last row given, and the next page is read after that row. A page keeps room
+   * for the cursor it gives and for nothing else, so the last page, which gives none, may fill the whole response.
+   */
+  function reviewPage(core: ApprovalCoreV1, reviewer: MeetingIntakePersonV1, after: ApprovalProposalPlaceV1 | undefined): PersonReviewResultsV1['reviews'] {
+    const reviews: PersonMeetingReviewV2[] = [], places: ApprovalProposalPlaceV1[] = [];
+    // The JSON bytes of the rows taken, commas included, and whether the list has a row this page does not give.
+    let bytes = 0, more = false;
+    // Rows are taken for as long as they fit a last page; a page's first row is always taken. The list builds each view only
+    // as it is asked for, so this reads the page's rows and the one that did not fit, and never the rest of the list to
+    // learn whether the page is the last.
+    for (const { place, view } of core.proposalsAfter(reviewer, after)) {
+      const row = reviewView(view), size = jsonBytes(row) + (reviews.length === 0 ? 0 : 1);
+      if (reviews.length > 0 && bytes + size > reviewRowsRoom()) { more = true; break; }
+      bytes += size; reviews.push(row); places.push(place);
+    }
+    for (;;) {
+      // With a row left, the page gives the cursor of its last row, and needs room for that too.
+      const next_cursor = more ? encodePersonReviewsCursorV1(reviewer, places.at(-1)!) : undefined, room = reviewRowsRoom(next_cursor);
+      // Rows that leave their cursor no room give up the last of them: it starts the next page, whole, and is read again there.
+      if (bytes > room && reviews.length > 1) { bytes -= jsonBytes(reviews.pop()) + 1; places.pop(); continue; }
+      // A row alone on its page has no other page to go to: it is cut to the room this one has.
+      if (bytes > room) reviews[0] = fitReviewRow(reviews[0]!, room);
+      return next_cursor === undefined ? { reviews } : { reviews, next_cursor };
+    }
+  }
+  /**
    * The card's items: every decision and action in brief order with where it goes. Pending, each starts at the suggestion
    * the reviewer can read now ([] = Only me) and an action's owner is the meeting's proposal, editable; decided, each shows
    * its route (null = not kept; `private` when kept for the reviewer alone inside its projects) and its confirmed owner. A
@@ -380,7 +446,15 @@ export function createPersonMeetingRuntimeV1(options: {
   async function reviewResult(input: PersonReviewOperationV1, token: string, person: MeetingIntakePersonV1, current: () => void): Promise<unknown> {
     // Reviews belong to the person who brought the meeting in, whatever projects it suggests.
     const reviewer = allowed(() => intake.currentPerson(person)) ? person : null;
-    if (input.operation === 'reviews') return { reviews: reviewer === null ? [] : (await approvals()).proposals(reviewer).map(reviewView) };
+    if (input.operation === 'reviews') {
+      if (reviewer === null) return { reviews: [] };
+      let after: ApprovalProposalPlaceV1 | undefined;
+      // A cursor names a place in this reviewer's own list and nothing else. One that does not read as that is refused
+      // with its reason, never guessed at.
+      try { after = input.cursor === undefined ? undefined : decodePersonReviewsCursorV1(input.cursor, reviewer); }
+      catch { throw new AuthorityOperationError('invalid_request', 'Review cursor is not one this list gave'); }
+      return reviewPage(await approvals(), reviewer, after);
+    }
     if (!reviewer) throw new AuthorityOperationError('not_found', 'Meeting review unavailable');
     const approvalCore = await approvals();
     // review_open also takes one of the proposal's published records' own approval ids (a run's event_ref, which a
@@ -526,7 +600,35 @@ export function createPersonMeetingRuntimeV1(options: {
     observed.delete(setting.source_key);
     return setting;
   }
-  return { applications: [...providers.map(p => p.connection_http), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
+  /**
+   * A provider's connection routes, with one addition: a person's own Disconnect first stops their watch on that tool.
+   * A source is one person's one tool account, so the account they connect next is another source, with no watch and
+   * nothing seen. A watch left on the former account's source could never read again and would fail every pass.
+   * The watch stops before the provider disconnects, so the account pin never ends with the watch still on, and a watch
+   * saved after a later reconnect is not this Disconnect's to stop. If the watch cannot be stopped the request fails
+   * with the connection as it was. Queued imports stay pending, and what was kept stays (ADR-0030).
+   */
+  function connectionRoutes(provider: PersonMeetingProviderV1): ProviderHttpApplicationV1 {
+    const connection = provider.connection_http;
+    return { ...connection, async accept(request) {
+      // The shared connection application names its four verbs `<tool>-<verb>`.
+      if (request.route_id !== `${provider.id}-disconnect`) return connection.accept(request);
+      // A valid session is enough to stop the watch, so every request the provider can accept has stopped it first;
+      // without one nothing is stopped and the provider answers as it always did. The accepted cost: a signed-in person's
+      // Disconnect that the provider then refuses for its shape may already have stopped their watch, which is fine,
+      // because only the person's own client sends this request and they asked to disconnect.
+      let person: MeetingIntakePersonV1;
+      try { person = meetingIntakePersonV1(authenticate(request.headers.authorization?.slice(7) ?? '')); }
+      catch { return connection.accept(request); }
+      const watched = intake.list(person).find(s => s.watch !== 'off' && s.source_adapter_id === provider.cursor.policy.source_adapter_id);
+      if (watched) {
+        ownerOf(watched.source_adapter_id).intake.watch(watched, { watch: 'off', folder_id: null }, null, () => {});
+        observed.delete(watched.source_key);
+      }
+      return connection.accept(request);
+    } };
+  }
+  return { applications: [...providers.map(connectionRoutes), ...(options.provider_applications ?? []), application], processing, queue, pollAndStageSource,
     tools: async (token: string) => providers.filter(p => p.listed !== false).map(p => p.tool(token)), approvals,
     /**
      * The change check's `reviews` area (desktop refresh and notifications v1, ADR-0036): each meeting `reviews` lists for a

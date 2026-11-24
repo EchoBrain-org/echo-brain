@@ -1,6 +1,6 @@
 import type { PersonAnswerScopeV3 } from './person-answer-v3.js';
 import type { PersonAnswerCitationV4, PersonAnswerEvidenceCitationV4, PersonAnswerPartV4, PersonAnswerStatementV4, PersonEvidenceKindV1 } from './person-answer-v4.js';
-import type { PersonAnswerChoiceV1, PersonAnswerSinceV1 } from './person-answer-previous-v1.js';
+import type { PersonAnswerChoiceV1, PersonAnswerSinceV1, PersonAnswerThreadPlacementV1 } from './person-answer-previous-v1.js';
 import type { PersonFollowUpCitationV1, PersonFollowUpRefV1 } from './person-follow-up-evidence-v1.js';
 import type { PersonItemRefV1 } from './person-list-v1.js';
 import type { PersonPageCitationV1 } from './person-page-citation-v1.js';
@@ -79,7 +79,7 @@ export interface PersonAnswerResponseV8 {
   readonly direct?: PersonAnswerStatementV4;
   readonly parts: readonly PersonAnswerPartV4[];
   readonly notice?: string;
-  /** Only on an answer to a request that carried `previous` (ADR-0047): the full question this answer answers. */
+  /** Only on an answer to a request that carried `previous` (ADR-0047) or `threads` (ADR-0056): the full question this answer answers. */
   readonly question?: string;
   /** Only on an Ask again answer that compared with the earlier one (ADR-0047): what is different since. */
   readonly since?: PersonAnswerSinceV1;
@@ -90,6 +90,10 @@ export interface PersonAnswerResponseV8 {
    * with the answer, unsent, in the asker's own list; a client reads it with the runs `item` operation. Never with `clarify`.
    */
   readonly follow_ups?: readonly string[];
+  /** Only for a request that carried `threads` (ADR-0056): where the question belongs when not in the open thread. */
+  readonly thread?: PersonAnswerThreadPlacementV1;
+  /** Only for a request that carried `threads` (ADR-0056): indexes of threads plainly on the subject of the one it belongs to. */
+  readonly merge?: readonly number[];
 }
 
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { changesLogLine, hostGoneFailure, isWriteCall, noticeOf, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
+import { changesLogLine, hostGoneFailure, isWriteCall, mayChange, noticeOf, remoteDebuggingRequested, rpcLogName, versionLine } from '../../src/shared/protocol.js';
 
 describe('remote debugging refusal', () => {
   const none = () => false;
@@ -37,6 +37,16 @@ describe('a call no host answered', () => {
 
   it('gives a read no outcome, and drops a request id that is not a string', () => {
     expect(hostGoneFailure('host_restarted', false, 7, false)).toEqual({ code: 'host_restarted', retryable: true });
+  });
+
+  it('counts a save or a move of this computer\'s own Ask timeline as a change, so one no host took was never made', () => {
+    for (const method of ['timeline.put', 'timeline.move']) {
+      expect(mayChange(method, {})).toBe(true);
+      expect(hostGoneFailure('host_restarted', mayChange(method, {}), undefined, false)).toEqual({ code: 'host_restarted', retryable: true, mutation_outcome: 'not_submitted' });
+    }
+    expect(mayChange('timeline.read', {})).toBe(false);
+    expect(mayChange('runs', { request: { operation: 'send' } })).toBe(true);
+    expect(mayChange('runs', { request: { operation: 'items' } })).toBe(false);
   });
 
   it('counts a read of runs or meetings as a read, and any other operation of them as a write', () => {

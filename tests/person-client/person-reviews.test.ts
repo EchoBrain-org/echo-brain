@@ -1,6 +1,6 @@
 import { rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
+import { PERSON_REVIEW_OPEN_RESPONSE_MAX_BYTES_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1 } from '@echo-brain/organization-api';
 import { runPersonClientCli } from '../../src/product/person-client/composition.js';
 import { signedInHome } from './signed-in-home.js';
 
@@ -74,5 +74,27 @@ describe('person reviews CLI', () => {
     expect(printed.ok).toBe(true);
     expect(printed.result.items).toHaveLength(500);
     expect(printed.result.items.every(item => item.due_on === '2026-10-20')).toBe(true);
+  });
+  // The Authority pages the list at its transport bound (ADR-0055). The client reads every page, so a person still gets
+  // the whole list, however long: here the pages together are past what one response may carry.
+  it('follows next_cursor to the last page of the list and prints it as one list, each proposal once', async () => {
+    const title = 'T'.repeat(300_000);
+    const row = (digit: string, status = 'pending') => ({ approval_id: `apr_${digit.repeat(64)}`, title, project_ids: [], status, decided_on: status === 'pending' ? null : 'slack',
+      first_line: 'Launch the pilot next week.', action_count: 0, meeting_at: null, all_day: false, records: [] });
+    // b was pending on the first page and rejected before the second was read, so it is on both.
+    const pages = [{ reviews: [row('a'), row('b')], next_cursor: 'cursor-1' }, { reviews: [row('c'), row('b', 'rejected')], next_cursor: 'cursor-2' }, { reviews: [row('d', 'rejected')] }];
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async () => new Response(JSON.stringify(pages[fetch.mock.calls.length - 1]), { headers: { 'content-type': 'application/json' } }));
+    const { run, output } = cli(fetch);
+    expect(await run(['reviews', '--request', JSON.stringify({ schema_version: 1, operation: 'reviews' })])).toBe(0);
+    expect(output.stderr).toBe('');
+    expect(fetch.mock.calls.map(([url, init]) => [new URL(String(url)).pathname, JSON.parse(String(init!.body))])).toEqual([
+      ['/v1/person/reviews', { schema_version: 1, operation: 'reviews' }], ['/v1/person/reviews', { schema_version: 1, operation: 'reviews', cursor: 'cursor-1' }],
+      ['/v1/person/reviews', { schema_version: 1, operation: 'reviews', cursor: 'cursor-2' }]]);
+    const printed = JSON.parse(output.stdout) as { ok: boolean; result: { reviews: { approval_id: string; status: string }[] } };
+    expect(printed.ok).toBe(true);
+    // b is printed once, as it was last read; the list carries no cursor, since nothing is left to read.
+    expect(printed.result.reviews.map(review => [review.approval_id.slice(4, 5), review.status])).toEqual([['a', 'pending'], ['c', 'pending'], ['b', 'rejected'], ['d', 'rejected']]);
+    expect(Object.keys(printed.result)).toEqual(['reviews']);
+    expect(new TextEncoder().encode(JSON.stringify(printed.result)).length).toBeGreaterThan(PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1);
   });
 });

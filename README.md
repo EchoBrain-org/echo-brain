@@ -146,7 +146,7 @@ Choose the smallest check that covers the change while iterating:
 | Editing docs and evidence references | `npm run check:docs` | Documentation structure and Git proof references |
 | Editing the core evaluation harness | `npm run test:capacity` | Corpus, oracle, ranking and core component tests in `tools/evals/authority-core` |
 | Editing the research-loop evaluator | `npm run test:research-loop-eval` | `node --test` suites in `tools/evals/research-loop` |
-| Editing the follow-up resolution evaluator | `npm run test:ask-follow-up-eval` | `node --test` suites in `tools/evals/ask-follow-up` |
+| Editing the follow-up or thread resolution evaluator | `npm run test:ask-follow-up-eval` | `node --test` suites in `tools/evals/ask-follow-up` |
 | Editing the Ask writer gate | `npm run test:ask-blocks-eval` | `node --test` suites in `tools/evals/ask-blocks` |
 | Editing the desktop app | `cd product/echo-desktop && npm run typecheck && npm test` | Desktop typecheck, unit and Electron end-to-end tests (see `product/echo-desktop/README.md`) |
 | Measuring one runtime round | `npm run capacity:checkpoint` | Deterministic, provider-independent functional checkpoint; about one minute, not an org-capacity result |

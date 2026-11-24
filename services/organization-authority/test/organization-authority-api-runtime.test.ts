@@ -183,6 +183,7 @@ describe("Organization Authority API runtime", () => {
                 },
               },
               tools: async () => [],
+              endMembershipLinks: () => undefined,
               close: () => {
                 closed += 1;
               },

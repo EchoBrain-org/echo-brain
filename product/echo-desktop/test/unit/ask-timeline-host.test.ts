@@ -26,10 +26,11 @@ vi.mock('node:fs', async original => {
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious } from '../../src/host/ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
-  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelinePath, timelineTurn,
+  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, moveTimeline, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelineMoves,
+  timelinePath, timelineTurn, TimelineWriteUnsure,
 } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -89,6 +90,105 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([marked, second]);
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
+
+  it('moves turns between threads in one compare-and-set write, setting only their thread, and none of them unless the file holds each where the page believes (ADR-0056)', () => {
+    const [first, second, third, older, odd] = [turn(5, {}), turn(4, { unreadable: [0] }), turn(3), turn(2), turn(1)];
+    for (const each of [first, second, third]) putTimeline(person, ARI, { ...each, thread: first.id });
+    // Saved before threads: in none, as far as the file goes. And a thread that is not a turn's id, written by something
+    // other than a put (which takes only a turn's id there): taken as none.
+    putTimeline(person, ARI, older);
+    putTimeline(person, ARI, { ...odd, thread: 'thread-1' });
+    const before = readFileSync(timelinePath(person, ARI), 'utf8');
+    vi.mocked(renameSync).mockClear();
+    // Refused whole, nothing written: a turn it does not hold, or one it holds in another thread than the page believes.
+    // The answer says where the file has each named turn it holds.
+    const absent = randomUUID();
+    for (const [moves, turns] of [
+      [[{ from: first.id, to: second.id, turns: [second.id, third.id, absent] }], [{ turn: second.id, thread: first.id }, { turn: third.id, thread: first.id }]],
+      [[{ from: first.id, to: first.id, turns: [absent] }], []],
+      [[{ from: first.id, to: older.id, turns: [first.id] }, { from: second.id, to: older.id, turns: [second.id] }], [{ turn: first.id, thread: first.id }, { turn: second.id, thread: first.id }]],
+      [[{ from: 'thread-1', to: second.id, turns: [odd.id] }], [{ turn: odd.id, thread: null }]],
+    ] as const) expect(moveTimeline(person, ARI, moves)).toEqual({ moved: false, turns });
+    expect(renameSync).not.toHaveBeenCalled();
+    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
+    // Every one it names, where the page believes: they move together, in one write.
+    expect(moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id, third.id] }]))
+      .toEqual({ moved: true, turns: [{ turn: second.id, thread: second.id }, { turn: third.id, thread: second.id }] });
+    expect(renameSync).toHaveBeenCalledTimes(1);
+    // In none, a turn moves from null. Named for the first time, a turn saved before threads is marked as carrying no
+    // more than the turns it followed, as it did (`carried`); one whose thread was no turn's id is named as it is.
+    expect(moveTimeline(person, ARI, [{ from: null, to: first.id, turns: [older.id] }, { from: null, to: second.id, turns: [odd.id] }]))
+      .toEqual({ moved: true, turns: [{ turn: older.id, thread: first.id }, { turn: odd.id, thread: second.id }] });
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }, { ...second, thread: second.id }, { ...third, thread: second.id }, { ...older, thread: first.id, carried: [] },
+      { ...odd, thread: second.id }]);
+    expect(moveTimeline(person, ARI, [{ from: null, to: older.id, turns: [older.id] }])).toEqual({ moved: false, turns: [{ turn: older.id, thread: first.id }] });
+  });
+
+  it('reads the file strictly for a move: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds none of the turns named', () => {
+    const first = turn(1);
+    const move = [{ from: first.id, to: first.id, turns: [first.id] }];
+    expect(moveTimeline(person, ARI, move)).toEqual({ moved: false, turns: [] });
+    expect(existsSync(timelinePath(person, ARI))).toBe(false);
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    const path = timelinePath(person, ARI);
+    for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {
+      writeFileSync(path, text, { mode: 0o600 });
+      expect(() => moveTimeline(person, ARI, move)).toThrow();
+      expect(readFileSync(path, 'utf8')).toBe(text);
+    }
+    // A file no one may read: a move fails, where a read or a put takes it as empty.
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    chmodSync(path, 0o000);
+    try {
+      expect(() => moveTimeline(person, ARI, move)).toThrow();
+      expect(readTimeline(person, ARI)).toEqual([]);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
+  });
+
+  it('keeps, on a put, the thread the file has a turn in, so a save of the whole turn never takes back a move; one saved before threads takes the thread the put names', () => {
+    const named = turn(2);
+    const older = turn(1);
+    putTimeline(person, ARI, { ...named, thread: named.id });
+    putTimeline(person, ARI, older);
+    moveTimeline(person, ARI, [{ from: named.id, to: older.id, turns: [named.id] }]);
+    // What a check found, saved from the turn as the page had it before the move: the move stays.
+    putTimeline(person, ARI, { ...named, thread: named.id, unreadable: [0] });
+    expect(readTimeline(person, ARI)[0]).toEqual({ ...named, thread: older.id, unreadable: [0] });
+    // A turn the file holds with no thread is named by its next save.
+    putTimeline(person, ARI, { ...older, thread: older.id });
+    expect(readTimeline(person, ARI)[1]).toEqual({ ...older, thread: older.id });
+  });
+
+  it('takes only a move as the page sends one: groups of turns, each from a thread or none to a thread, all by a turn\'s id, each turn once', () => {
+    const [one, two, three] = [randomUUID(), randomUUID(), randomUUID()];
+    const good = [{ from: one, to: two, turns: [one, two] }, { from: null, to: two, turns: [three] }];
+    expect(timelineMoves(good)).toEqual(good);
+    expect(timelineMoves([])).toEqual([]);
+    for (const bad of [null, {}, 'moves', [7], [{ from: one, to: two }], [{ from: one, to: two, turns: [] }], [{ from: 'thread-1', to: two, turns: [one] }],
+      [{ from: one, to: 'thread-1', turns: [one] }], [{ from: one, to: two, turns: ['turn-1'] }], [{ from: one, to: two, turns: [one], text: 'what is open?' }],
+      [{ from: one, to: two, turns: [one, one] }], [{ from: one, to: two, turns: [one] }, { from: two, to: one, turns: [one] }]]) expect(timelineMoves(bad)).toBeNull();
+  });
+
+  it('says a write may have happened when the folder cannot be synced after the file took its new name, and only then', () => {
+    const [first, second] = [turn(2), turn(1)];
+    for (const each of [first, second]) putTimeline(person, ARI, { ...each, thread: each.id });
+    const real = vi.mocked(fsyncSync).getMockImplementation()!;
+    vi.mocked(fsyncSync).mockImplementationOnce(real).mockImplementationOnce(() => { throw new Error('EIO'); });
+    expect(() => moveTimeline(person, ARI, [{ from: second.id, to: first.id, turns: [second.id] }])).toThrow(TimelineWriteUnsure);
+    // The file took it all the same.
+    expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
+    // A write that fails before the new file has its name leaves the file as it was, and says so plainly.
+    vi.mocked(renameSync).mockImplementationOnce(() => { throw new Error('EIO'); });
+    let thrown: unknown;
+    try { moveTimeline(person, ARI, [{ from: first.id, to: second.id, turns: [second.id] }]); } catch (error) { thrown = error; }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(TimelineWriteUnsure);
+    expect(readTimeline(person, ARI)[1]!.thread).toBe(first.id);
+  });
+
 
   it('writes every byte however little a write takes, and has the file and its new name on disk before a put returns', () => {
     const [first, second] = [turn(2), turn(1)];
@@ -241,11 +341,17 @@ describe('the timeline file (C5)', () => {
   });
 
   it('takes only a turn as a put writes it: a page that sends anything else is refused', () => {
-    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true, typed: 'whats open', follows: randomUUID() });
+    const good = turn(0, { since: [], again_of: randomUUID(), unreadable: [0], citations_complete: true, typed: 'whats open', follows: randomUUID(), thread: randomUUID() });
     expect(timelineTurn(good)).toEqual(good);
-    // A turn an older desktop saved has no mark, and is read as it was.
-    const { citations_complete: _mark, ...older } = good;
+    // A turn an older desktop saved has no mark and names no thread (ADR-0056), and is read as it was.
+    const { citations_complete: _mark, thread: _thread, ...older } = good;
     expect(timelineTurn(older)).toEqual(older);
+    // A thread is named by a turn's id, its first: anything else is not one a put writes.
+    for (const thread of ['thread-1', '', 7, null, { id: good.id }]) expect(timelineTurn({ ...good, thread })).toBeNull();
+    // What its question was written from: turns, by their ids, each once; none at all is a record too.
+    const [one, two] = [randomUUID(), randomUUID()];
+    for (const carried of [[], [one], [one, two]]) expect(timelineTurn({ ...good, carried })).toEqual({ ...good, carried });
+    for (const carried of [[one, one], ['turn-1'], [7], one, null, {}]) expect(timelineTurn({ ...good, carried })).toBeNull();
     const { blocks: _blocks, ...bare } = good.answer.parts[0]!;
     for (const bad of [
       // Never what a put writes: a part's statements without blocks (ADR-0051), a scope the page has not got, and blocks with nothing to arrange.
@@ -377,6 +483,45 @@ describe('what the page sends with an Ask and a check', () => {
     // No count or length of its own: many sentences, a long one, and many citations all go.
     expect(asked({ ...previous, statements: many(previous.statements[0], 300) })).not.toBeNull();
     expect(asked({ ...previous, statements: [{ text: '🙂'.repeat(5_000), citation_indexes: [0] }] })).not.toBeNull();
+  });
+
+  it('carries the asker\'s other threads only as the request takes them, as the client takes them: a list it would refuse is not sent (ADR-0056, T6)', () => {
+    const thread = { questions: ['When does Apollo launch?', 'did that change?'], asked_at: '2026-10-24T09:00:00.000Z' };
+    const earlier = { question: 'When does Apollo launch?', asked_at: '2026-10-20T09:00:00.000Z', statements: [], citations: [] };
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous)).not.toContainEqual(expect.stringMatching(/^--threads=/u));
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, [thread]).slice(-2)).toEqual([`--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify([thread])}`]);
+    expect(askArgv('Who owns it?', { kind: 'project', project_id: 'prj_11111111-1111-4111-8111-111111111111' }, undefined, [thread]).at(-1)).toBe(`--threads=${JSON.stringify([thread])}`);
+    // An empty list goes too: the asker has no other thread, and the answer may still say the question starts one.
+    expect(askArgv('Who owns it?', { kind: 'global' }, previous, []).at(-1)).toBe('--threads=[]');
+    // No count of its own: many threads, of many questions, all go; so does an empty list, with or without a previous turn.
+    const many = Array.from({ length: 300 }, () => ({ ...thread, questions: Array.from({ length: 20 }, (_, at) => `Question ${at}?`) }));
+    for (const [threads, sentWith] of [[[thread], undefined], [[thread], { ...previous, earlier: [earlier] }], [many, previous], [[], previous], [[], undefined]] as const) {
+      expect(askThreads(threads, 'Who owns it?', sentWith)).toEqual(threads);
+    }
+    // Refused: what the request would refuse, a list beside an Ask again, and a list that does not fit the body with the turn.
+    for (const bad of [
+      [{ ...thread, questions: [] }], [{ ...thread, questions: [' padded '] }], [{ ...thread, asked_at: 'today' }], [{ ...thread, name: 'Apollo' }], [{ questions: thread.questions }],
+      'threads', null, {},
+    ]) expect(askThreads(bad, 'Who owns it?', previous)).toBeNull();
+    expect(askThreads([thread], previous.question, { ...previous, purpose: 'ask_again' })).toBeNull();
+    expect(askThreads([{ ...thread, questions: ['é'.repeat(600_000)] }], 'Who owns it?', previous)).toBeNull();
+  });
+
+  it('leaves the other threads out with an earlier turn it refuses: listed without that turn\'s own thread, they would place the question anywhere but where it was typed', () => {
+    const global = { kind: 'global' } as const;
+    const thread = { questions: ['When does Apollo launch?'], asked_at: '2026-10-24T09:00:00.000Z' };
+    expect(askContext(previous, [thread], 'Who owns it?', global)).toEqual({ previous, threads: [thread], refused: [] });
+    // The turn refused: the list is good on its own, and still does not go.
+    expect(askThreads([thread], 'Who owns it?', undefined)).toEqual([thread]);
+    expect(askContext({ ...previous, purpose: 'guess' }, [thread], 'Who owns it?', global)).toEqual({ refused: ['previous', 'threads'] });
+    expect(askContext({ ...previous, purpose: 'guess' }, [], 'Who owns it?', global)).toEqual({ refused: ['previous', 'threads'] });
+    expect(askContext({ ...previous, purpose: 'guess' }, undefined, 'Who owns it?', global)).toEqual({ refused: ['previous'] });
+    // The list refused: the turn still goes, as before.
+    expect(askContext(previous, [{ ...thread, questions: [] }], 'Who owns it?', global)).toEqual({ previous, refused: ['threads'] });
+    // Neither sent, or the list alone, the empty one included.
+    expect(askContext(undefined, undefined, 'Who owns it?', global)).toEqual({ refused: [] });
+    expect(askContext(undefined, [], 'Who owns it?', global)).toEqual({ threads: [], refused: [] });
+    expect(askContext(undefined, [thread], 'Who owns it?', global)).toEqual({ threads: [thread], refused: [] });
   });
 
   it('checks any number of items, each a citation that can go, within the 1 MiB request body', () => {

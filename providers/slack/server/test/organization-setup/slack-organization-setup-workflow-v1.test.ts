@@ -851,7 +851,8 @@ describe("Slack runtime bundle with organization setup", () => {
       connection_health: health,
       organization_setup: { authority_url: AUTHORITY_URL, nango: { client: f.nango, callback_url: NANGO_CALLBACK }, manifest_provider: f.manifest },
     }).open({ state_directory: directory, authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID, state_lineage_id: STATE_LINEAGE_ID,
-      authentication, membership_type: ({ membership_id }) => (membership_id === SESSIONS.owner!.membership_id ? "owner" : "employee") });
+      authentication, membership_type: ({ membership_id }) => (membership_id === SESSIONS.owner!.membership_id ? "owner" : "employee"),
+      membership_active: () => true });
     closers.push(() => opened.close());
     /** Records results and thrown errors for the afterEach secret scan. */
     const record = async <T>(run: () => Promise<T>): Promise<T> => {

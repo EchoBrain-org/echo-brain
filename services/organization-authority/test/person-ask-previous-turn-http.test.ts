@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   PERSON_ANSWER_PATH_V7, createPersonAskProgressDecoderV3, type PersonAnswerPreviousV1,
 } from '@echo-brain/organization-api';
@@ -9,8 +8,8 @@ import { readablePreviousV1 } from '../src/composition/person-ask-previous-check
 import { PersonRecordSearchSnapshotChangedV1 } from '../src/composition/person-record-search-route.js';
 import { SqlitePersonImportedMeetingsV1 } from '../src/adapters/persistence/sqlite/person-imported-meetings-v1.js';
 import { SqlitePersonOriginalContextRetrievalV1 } from '../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js';
-import { askClient, auditBodies, closeAskServers, decodeAll, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer } from './fixtures/ask-over-http.js';
-import { CLOUD, sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
+import { askClient, auditBodies, closeAskServers, decodeAll, fromOpened, leave, liveAskOptions, myOpenTasksPlanner, serveAsk, streamedAnswer, ticket, v7 } from './fixtures/ask-over-http.js';
+import { sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-items.js';
 
 /**
  * The asker's previous turn over HTTP (ADR-0047): `POST /v7/person/ask` takes
@@ -20,10 +19,6 @@ import { CLOUD, sentFixture, type OpenItemsFixtureV1 } from './fixtures/open-ite
 
 afterEach(closeAskServers);
 
-const ticket = {
-  citation: { kind: 'ticket' as const, tool_id: 'jira', external_scope_id: CLOUD, ticket_id: '10012', permalink: 'https://echo-fixture.atlassian.net/browse/ECHO-12', text_sha256: canonicalSha256('ECHO-12 text') },
-  kind: 'ticket' as const, label: 'ECHO-12: Launch checklist', visibility: 'only_me' as const,
-};
 const PREVIOUS: PersonAnswerPreviousV1 = {
   purpose: 'follow_up', question: 'What is blocking the launch?', asked_at: '2026-10-24T17:05:00.000Z',
   statements: [{ text: 'ECHO-12 blocks the launch: the checklist is not done.', citation_indexes: [0] }], citations: [ticket],
@@ -42,24 +37,7 @@ function withResolver(replies: unknown[], inner: StructuredGenerationPort) {
   } };
   return { model, resolver };
 }
-/** Research that finishes on what it was given opened; the writer states one sentence from it. */
-function fromOpened(text = 'ECHO-12 ships on Oct 30.'): StructuredGenerationPort & { readonly steps: Record<string, unknown>[]; readonly writer: StructuredGenerationInput[] } {
-  const steps: Record<string, unknown>[] = [];
-  const writer: StructuredGenerationInput[] = [];
-  return { steps, writer, async generate(input: StructuredGenerationInput) {
-    const prompt = JSON.parse(input.user_prompt) as { readonly question?: string; readonly opened?: readonly { readonly id: string }[]; readonly evidence?: readonly { readonly id: string }[] };
-    if ((input.schema.properties as Readonly<Record<string, unknown>>).blocks !== undefined) {
-      writer.push(input);
-      return { blocks: [{ block: 'answer', sentences: [{ text, evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
-    }
-    steps.push(prompt);
-    const [opened] = prompt.opened ?? [];
-    return { parts: [{ question: prompt.question!, notes: '', needs: [{ need: 'the ticket', status: opened === undefined ? 'open' : 'found', evidence: opened === undefined ? [] : [opened.id] }] }],
-      actions: [opened === undefined ? { tool: 'search', args: { query: 'ECHO-12' } } : { tool: 'finish', args: {} }] };
-  } };
-}
-const v7 = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) => serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
-const ask = askClient({ path: PERSON_ANSWER_PATH_V7, question: QUESTION });
+const ask =askClient({ path: PERSON_ANSWER_PATH_V7, question: QUESTION });
 const body = (previous: unknown = PREVIOUS, question = QUESTION) => ({ schema_version: 3, question, previous });
 
 describe('the previous turn on /v7 (ADR-0047)', () => {
@@ -171,8 +149,6 @@ describe('the previous turn as the Authority lets its model read it (ADR-0047)',
     } };
     return { model, seen: () => seen.join('\n'), reset: () => { seen.length = 0; tasks.reset(); } };
   }
-  const leave = (f: OpenItemsFixtureV1) => f.db.prepare("UPDATE authority_project_memberships_v1 SET status='revoked',revoked_at=? WHERE project_id=? AND membership_id=? AND status='active'")
-    .run(f.clock().toISOString(), f.projectA, f.membership('mina'));
   const v7Checked = (f: OpenItemsFixtureV1, model: StructuredGenerationPort) =>
     serveAsk({ person_answer_v7: createPersonLiveAnswerRouteV1(liveAskOptions(f, model)) });
 

@@ -1,10 +1,13 @@
+import { Buffer } from "node:buffer";
 import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "@echo-brain/organization-authority-kernel/shared/core-runtime-observation-v1";
+import type { PersonAccessAuthorization } from "@echo-brain/organization-authority-kernel/application/ports/person-access-authorization";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import { SlackIdentityProviderErrorV1 } from "../../src/organization-control-plane/adapters/slack/slack-web-identity-provider-v1.js";
 import { readActiveSlackConnectionV1 } from "../../src/organization-control-plane/persistence/sqlite-slack-active-connection-v1.js";
 import { describe, expect, it, vi } from "vitest";
 import { createSqliteSlackPersonIdentityLinkWorkflowV1, createSqliteSlackPersonIdentityLinkRepositoryV1 } from "../../src/person-identity/sqlite-slack-person-identity-link-repository-v1.js";
 import { SlackPersonBrowserIdentityLinkWorkflowV1 } from "../../src/person-identity/slack-person-browser-identity-link-workflow-v1.js";
+import { seedSlackIdentityLink } from "../control-database-fixture.js";
 import { AUTHORITY_ID, authorization, beginRequest, CODE, MEMBERSHIP_ID, NOW, ORGANIZATION_ID, OTHER_CODE, PRINCIPAL_ID, setup, TOKEN, tokenAccess, workflowOptions } from "./fixtures.js";
 
 function completeRequest(
@@ -428,5 +431,221 @@ describe("Person Slack identity-link workflow", () => {
     await expect(
       context.application.complete({ ...input, challenge_code: CODE }, "bearer"),
     ).rejects.toMatchObject({ code: "conflict" });
+  });
+});
+
+/** A second membership with its own sign-in: another member, or the same person invited again. */
+const SECOND_MEMBER: PersonAccessAuthorization = {
+  ...authorization,
+  principal_id: "prn_00000000-0000-4000-8000-000000000002",
+  membership_id: "mem_00000000-0000-4000-8000-000000000002",
+  identity_binding_id: "oib_00000000-0000-4000-8000-000000000002",
+  session_family_id: "psf_00000000-0000-4000-8000-000000000002",
+};
+const SECOND_BEGIN = "psb_00000000-0000-4000-8000-000000000002";
+const THIRD_CODE = Buffer.alloc(32, 2).toString("base64url");
+type Context = Awaited<ReturnType<typeof setup>>;
+
+/** The first member proves Slack user U12345679 by DM code. */
+async function linkFirstMember(context: Context) {
+  const begun = await context.application.begin(beginRequest(), "bearer");
+  return context.application.complete(completeRequest(begun), "bearer");
+}
+
+function links(context: Context): unknown[] {
+  return context.database.prepare(`SELECT external_identity_link_id, membership_id, current_status
+    FROM organization_external_human_link_current ORDER BY membership_id`).all();
+}
+
+describe("a removed membership's Slack identity link", () => {
+  it("ends the link and pending DM proof without a Person session, leaves other members alone, and changes nothing when repeated", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    await linkFirstMember(context);
+    // The member has a second proof under way when the owner removes them.
+    current = { ...authorization, checked_at: "2026-08-22T00:01:00.000Z" };
+    await context.application.begin(beginRequest(SECOND_BEGIN, OTHER_CODE), "bearer");
+    // Another member has a link and a pending proof of their own.
+    seedSlackIdentityLink(context.database, { external_identity_link_id: "clm_00000000-0000-4000-8000-000000000002", provider_tenant_id: "T12345678",
+      provider_subject_id: "U98765432", principal_id: SECOND_MEMBER.principal_id, membership_id: SECOND_MEMBER.membership_id, membership_type: "employee" });
+    current = SECOND_MEMBER;
+    await context.application.begin(beginRequest("psb_00000000-0000-4000-8000-000000000003", THIRD_CODE), "bearer");
+
+    context.application.endMembershipLinks({ principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID, now: "2026-08-22T00:02:00.000Z" });
+
+    expect(context.database.prepare("SELECT membership_id, current_status FROM organization_external_human_link_current ORDER BY membership_id").all()).toEqual([
+      { membership_id: MEMBERSHIP_ID, current_status: "revoked" },
+      { membership_id: SECOND_MEMBER.membership_id, current_status: "active" },
+    ]);
+    expect(context.database.prepare("SELECT membership_id, status FROM organization_person_slack_link_challenges ORDER BY membership_id, created_at").all()).toEqual([
+      { membership_id: MEMBERSHIP_ID, status: "completed" },
+      { membership_id: MEMBERSHIP_ID, status: "expired" },
+      { membership_id: SECOND_MEMBER.membership_id, status: "pending" },
+    ]);
+
+    const stored = () => [
+      context.database.prepare("SELECT * FROM organization_external_human_link_current ORDER BY external_identity_link_id").all(),
+      context.database.prepare("SELECT * FROM organization_person_slack_link_challenges ORDER BY challenge_attempt_id").all(),
+    ];
+    const settled = stored();
+    expect(settled[0]).toContainEqual(expect.objectContaining({ membership_id: MEMBERSHIP_ID, updated_at: "2026-08-22T00:02:00.000Z" }));
+    context.application.endMembershipLinks({ principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID, now: "2026-08-22T00:03:00.000Z" });
+    expect(stored()).toEqual(settled);
+  });
+
+  it("ends the link even when the organization's Slack connection is no longer active", async () => {
+    const context = await setup();
+    const linked = await linkFirstMember(context);
+    context.database.prepare("UPDATE organization_tool_connection_current_state SET current_status = 'revoked'").run();
+
+    context.application.endMembershipLinks({ principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID, now: NOW });
+
+    expect(links(context)).toEqual([{ external_identity_link_id: linked.identity_link_id, membership_id: MEMBERSHIP_ID, current_status: "revoked" }]);
+  });
+
+  it("does not persist a DM begin that crosses the membership's removal", async () => {
+    const context = await setup();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    vi.mocked(context.slack.openIdentityLinkDirectMessage!).mockImplementationOnce(async () => {
+      await held;
+      return { team_id: "T12345678", channel_id: "D12345678", recipient_user_id: "U12345679" };
+    });
+
+    const begin = context.application.begin(beginRequest(), "bearer");
+    await vi.waitFor(() => expect(context.slack.openIdentityLinkDirectMessage).toHaveBeenCalledOnce(), { interval: 1 });
+    context.application.endMembershipLinks({ principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID, now: NOW });
+    release!();
+
+    await expect(begin).rejects.toMatchObject({ code: "conflict" });
+    expect(context.database.prepare("SELECT COUNT(*) AS count FROM organization_person_slack_link_challenges").get()).toEqual({ count: 0 });
+  });
+
+  it("cancels the removed membership's browser attempt in flight before it can link", async () => {
+    const context = await setup();
+    let browser: SlackPersonBrowserIdentityLinkWorkflowV1;
+    const configuration = workflowOptions(context, {
+      authentication: { authenticateAccess: () => authorization },
+      membership_type: () => "employee" as const,
+      slack_token_access: tokenAccess(),
+    });
+    const application = createSqliteSlackPersonIdentityLinkWorkflowV1({
+      ...configuration,
+      invalidate_browser_attempts: (membershipId) => browser.invalidateMembership(membershipId),
+    });
+    let state = "";
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let markCallbackStarted: (() => void) | undefined;
+    const callbackStarted = new Promise<void>((resolve) => { markCallbackStarted = resolve; });
+    browser = new SlackPersonBrowserIdentityLinkWorkflowV1({
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      authentication: configuration.authentication,
+      repository: createSqliteSlackPersonIdentityLinkRepositoryV1(configuration),
+      browser_provider: () => ({
+        authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
+        verifyCallback: async () => {
+          markCallbackStarted!();
+          await held;
+          return { team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") };
+        },
+      }),
+      now: () => NOW,
+    });
+    const begun = await browser.begin({ request_id: "psb_00000000-0000-4000-8000-000000000099" }, "bearer");
+    const callback = browser.callback(new URLSearchParams({ state, code: "provider-code" }));
+    await callbackStarted;
+    application.endMembershipLinks({ principal_id: PRINCIPAL_ID, membership_id: MEMBERSHIP_ID, now: NOW });
+    release!();
+    await callback;
+
+    await expect(browser.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "cancelled" });
+    expect(links(context)).toEqual([]);
+  });
+});
+
+describe("a Slack user whose link names another membership", () => {
+  it("ends a link left on a membership the Authority no longer holds active, and the proving membership makes its own", async () => {
+    let current = authorization;
+    const removed = new Set<string>();
+    const context = await setup(() => current, ({ principal_id, membership_id }) => !removed.has(`${principal_id} ${membership_id}`));
+    const old = await linkFirstMember(context);
+    // The owner removed that member, and the link write that should have followed never happened.
+    removed.add(`${PRINCIPAL_ID} ${MEMBERSHIP_ID}`);
+    // Invited again, the person signs in as a new principal and membership and proves the same Slack user.
+    current = SECOND_MEMBER;
+    const begun = await context.application.begin(beginRequest(SECOND_BEGIN, OTHER_CODE), "bearer");
+    const relinked = await context.application.complete(completeRequest(begun, OTHER_CODE, 2), "bearer");
+
+    expect(relinked).toMatchObject({ principal_id: SECOND_MEMBER.principal_id, membership_id: SECOND_MEMBER.membership_id,
+      provider_subject_id: "U12345679", identity_link_created: true });
+    expect(links(context)).toEqual([
+      { external_identity_link_id: old.identity_link_id, membership_id: MEMBERSHIP_ID, current_status: "revoked" },
+      { external_identity_link_id: relinked.identity_link_id, membership_id: SECOND_MEMBER.membership_id, current_status: "active" },
+    ]);
+    // Nothing is inherited: the new link is another link, proven by the new membership's own challenge.
+    expect(relinked.identity_link_id).not.toBe(old.identity_link_id);
+    const contract = context.database.prepare("SELECT contract_json FROM organization_external_human_link_contracts WHERE external_identity_link_id = ?")
+      .get(relinked.identity_link_id) as { contract_json: string };
+    expect(JSON.parse(contract.contract_json)).toMatchObject({ principal_id: SECOND_MEMBER.principal_id, membership_id: SECOND_MEMBER.membership_id,
+      verification_event_id: begun.challenge_attempt_id });
+    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "linked", account_id: "U12345679" }]);
+  });
+
+  it("ends the stale link for a browser proof as for a DM code", async () => {
+    const context = await setup(() => authorization);
+    const old = await linkFirstMember(context);
+    let state = "";
+    const browser = new SlackPersonBrowserIdentityLinkWorkflowV1({
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      authentication: { authenticateAccess: () => SECOND_MEMBER },
+      repository: createSqliteSlackPersonIdentityLinkRepositoryV1(workflowOptions(context, {
+        authentication: { authenticateAccess: () => SECOND_MEMBER }, membership_type: () => "employee" as const,
+        membership_active: ({ membership_id }) => membership_id !== MEMBERSHIP_ID, slack_token_access: tokenAccess(),
+      })),
+      browser_provider: () => ({
+        authorizationUrl: (input) => { state = input.state; return "https://slack.com/openid/connect/authorize?opaque=yes"; },
+        verifyCallback: async () => ({ team_id: "T12345678", user_id: "U12345679", verification_evidence_sha256: canonicalSha256("browser-proof") }),
+      }),
+      now: () => NOW,
+    });
+    const begun = await browser.begin({ request_id: "psb_00000000-0000-4000-8000-000000000099" }, "bearer");
+    await browser.callback(new URLSearchParams({ state, code: "provider-code" }));
+
+    await expect(browser.status({ attempt_id: begun.attempt_id }, "bearer")).resolves.toMatchObject({ status: "complete", failure_reason: null });
+    expect(links(context)).toEqual([
+      { external_identity_link_id: old.identity_link_id, membership_id: MEMBERSHIP_ID, current_status: "revoked" },
+      { external_identity_link_id: `clm_${begun.attempt_id.slice(4)}`, membership_id: SECOND_MEMBER.membership_id, current_status: "active" },
+    ]);
+  });
+
+  it("still refuses the proof while the Authority holds the other membership active, and leaves its link alone", async () => {
+    let current = authorization;
+    const context = await setup(() => current);
+    const held = await linkFirstMember(context);
+    current = SECOND_MEMBER;
+    const begun = await context.application.begin(beginRequest(SECOND_BEGIN, OTHER_CODE), "bearer");
+
+    await expect(context.application.complete(completeRequest(begun, OTHER_CODE, 2), "bearer")).rejects.toMatchObject({
+      code: "conflict", message: "Slack identity is already linked to another active membership",
+    });
+    expect(links(context)).toEqual([{ external_identity_link_id: held.identity_link_id, membership_id: MEMBERSHIP_ID, current_status: "active" }]);
+    expect((await context.application.tools("bearer")).tools).toMatchObject([{ personal_status: "unlinked" }]);
+  });
+
+  it("ends no link and makes none when the Authority cannot say whether the other membership is active", async () => {
+    let current = authorization;
+    const context = await setup(() => current, () => { throw new Error("synthetic Authority read failure"); });
+    const held = await linkFirstMember(context);
+    current = SECOND_MEMBER;
+    const begun = await context.application.begin(beginRequest(SECOND_BEGIN, OTHER_CODE), "bearer");
+
+    await expect(context.application.complete(completeRequest(begun, OTHER_CODE, 2), "bearer")).rejects.toMatchObject({ code: "unavailable" });
+    expect(links(context)).toEqual([{ external_identity_link_id: held.identity_link_id, membership_id: MEMBERSHIP_ID, current_status: "active" }]);
+    // The proof itself is untouched, so the person can try again.
+    expect(context.database.prepare("SELECT status FROM organization_person_slack_link_challenges WHERE challenge_attempt_id = ?").get(begun.challenge_attempt_id))
+      .toEqual({ status: "pending" });
   });
 });

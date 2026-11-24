@@ -83,6 +83,9 @@ export interface ApprovalProposalViewV1 {
   readonly snapshot_sha256: Sha256Digest;
   readonly snapshot_json: string;
 }
+/** A proposal's place in its reviewer's list, by what the list orders on: undecided staged ones lead (rank 0) and every
+ *  other one follows (rank 1), each part newest first, then by approval id. A page of the list is read after one. */
+export interface ApprovalProposalPlaceV1 { readonly rank: 0 | 1; readonly created_at: string; readonly approval_id: string }
 /** The exact retained revision of a reviewed meeting's source. */
 type ApprovalMeetingSourceV1 = NonNullable<ReturnType<typeof retainedMeetingSourceCoordinateV1>>;
 /** Exact canonical JSON stored in authority_approval_decisions_v1.body_json; Task 8's publisher reads it. */
@@ -137,6 +140,9 @@ export interface ApprovalCoreV1 {
   proposal(approvalId: string): ApprovalProposalViewV1 | undefined;
   /** Caller has authenticated `reviewer`. Undecided staged first, then newest; every one, or the first `limit` a caller names. */
   proposals(reviewer: ApprovalActorV1, limit?: number): readonly ApprovalProposalViewV1[];
+  /** `proposals` one at a time in the same order, each with its place, from the start or from just after `after`: what a
+   *  page of the reviews route reads. A view is built only when it is taken. */
+  proposalsAfter(reviewer: ApprovalActorV1, after?: ApprovalProposalPlaceV1): Iterable<{ readonly place: ApprovalProposalPlaceV1; readonly view: ApprovalProposalViewV1 }>;
   /** `proposals`' ids and statuses alone, in the same order and bound, with no proposal content read (the change check, ADR-0036). */
   proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[];
   /** From ownerProposalsV1 over the candidate's uncleared brief, in brief order, every one; [] for an unknown approval;
@@ -508,20 +514,25 @@ export async function createApprovalCoreV1(database: Database.Database, context:
     const row = proposalRow(approvalId);
     return row === undefined ? undefined : view(row, readableCheck());
   }
+  /** A proposal's rank in its reviewer's list (ApprovalProposalPlaceV1): 0 while it is undecided and staged, else 1. */
+  const RANK = "CASE WHEN d.approval_id IS NULL AND o.state='staged' THEN 0 ELSE 1 END";
   /**
-   * The reviewer's frozen proposals, undecided staged first, then newest: every one, or the first `limit` a caller names.
-   * No count of its own: the reviews response's transport bound (PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1) carries them.
+   * The reviewer's frozen proposals, undecided staged first, then newest: every one, the first `limit` a caller names, or
+   * those after one's place. No count of its own: the reviews route pages them to its response's transport bound.
    */
-  function reviewerProposals<T>(columns: string, reviewer: ApprovalActorV1, limit?: number): T[] {
+  function reviewerProposals<T>(columns: string, reviewer: ApprovalActorV1, limit?: number, after?: ApprovalProposalPlaceV1): T[] {
     // SQLite reads LIMIT -1 as no limit.
     const bounded = limit !== undefined && Number.isSafeInteger(limit) && limit >= 1 ? limit : -1;
+    // Later in the same order than the place: a walk from place to place repeats and skips no row that stays where it was.
+    const from = after === undefined ? { sql: '', args: [] } : { sql: `AND (${RANK}>? OR (${RANK}=? AND (c.created_at<? OR (c.created_at=? AND o.approval_id>?))))`,
+      args: [after.rank, after.rank, after.created_at, after.created_at, after.approval_id] };
     return database.prepare(`SELECT ${columns} FROM authority_live_approval_outbox_v2 o
       JOIN authority_live_source_candidates_v2 c ON c.candidate_id=o.candidate_id
       JOIN authority_live_source_admission_v2 a ON a.semantic_input_sha256=c.admission_semantic_input_sha256
       LEFT JOIN authority_approval_decisions_v1 d ON d.approval_id=o.approval_id
-      WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_json IS NOT NULL
-      ORDER BY CASE WHEN d.approval_id IS NULL AND o.state='staged' THEN 0 ELSE 1 END, c.created_at DESC, o.approval_id
-      LIMIT ?`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id, bounded) as T[];
+      WHERE a.organization_id=? AND a.principal_id=? AND a.membership_id=? AND o.approved_snapshot_json IS NOT NULL ${from.sql}
+      ORDER BY ${RANK}, c.created_at DESC, o.approval_id
+      LIMIT ?`).all(reviewer.organization_id, reviewer.principal_id, reviewer.membership_id, ...from.args, bounded) as T[];
   }
   function proposalStatuses(reviewer: ApprovalActorV1, limit?: number): readonly { readonly approval_id: string; readonly status: ApprovalStatusV1 }[] {
     // As `view` reads a proposal: only a frozen one, with its decision's status.
@@ -537,6 +548,14 @@ export async function createApprovalCoreV1(database: Database.Database, context:
       const value = row === undefined ? undefined : view(row, readable);
       return value === undefined ? [] : [value];
     }));
+  }
+  function* proposalsAfter(reviewer: ApprovalActorV1, after?: ApprovalProposalPlaceV1): Generator<{ readonly place: ApprovalProposalPlaceV1; readonly view: ApprovalProposalViewV1 }, void> {
+    const readable = readableCheck();
+    for (const place of reviewerProposals<ApprovalProposalPlaceV1>(`${RANK} AS rank, c.created_at, o.approval_id`, reviewer, undefined, after)) {
+      const row = proposalRow(place.approval_id);
+      const value = row === undefined ? undefined : view(row, readable);
+      if (value !== undefined) yield { place, view: value };
+    }
   }
   function ownerProposals(approvalId: string): readonly ApprovalOwnerProposalV1[] {
     const row = proposalRow(approvalId);
@@ -563,5 +582,5 @@ export async function createApprovalCoreV1(database: Database.Database, context:
         annotateCoreRuntimeV1({ result: result.kind === 'decided' ? 'done' : result.kind === 'replayed' ? 'coalesced' : result.kind === 'stale' ? 'superseded' : 'competing_action' });
         return result;
       });
-    }, proposal, proposals, proposalStatuses, ownerProposals });
+    }, proposal, proposals, proposalsAfter, proposalStatuses, ownerProposals });
 }

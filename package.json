@@ -64,6 +64,7 @@
     "test:capacity": "npm run build:workspaces && node --test tools/evals/authority-core/test/*.test.mjs",
     "eval:retrieval-quality": "npm run build:workspaces && node tools/evals/authority-core/retrieval-quality.mjs",
     "eval:ask-follow-up": "node tools/evals/ask-follow-up/run.mjs",
+    "eval:ask-threads": "node tools/evals/ask-follow-up/run.mjs --set threads",
     "test:ask-follow-up-eval": "npm run build:workspaces && node --test tools/evals/ask-follow-up/test/*.test.mjs",
     "test:ask-blocks-eval": "npm run build:workspaces && node --test tools/evals/ask-blocks/test/*.test.mjs",
     "eval:research-loop": "node tools/evals/research-loop/cli.mjs",

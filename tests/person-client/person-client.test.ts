@@ -346,7 +346,7 @@ describe('shared Jira tool commands', () => {
       expect(result.code).toBe(1);
       expect(JSON.parse(result.stderr)).toEqual({
         ok: false, action: 'tools-connect', reason: 'account_mismatch',
-        error: 'That Jira account does not match your previously connected Jira account. Try again with that account.',
+        error: 'That Jira account does not match your previously connected Jira account. Try again with that account, or disconnect first to connect a different account.',
       });
     });
   });

@@ -85,3 +85,31 @@ it('reads only the mapped spaces in a project scope, and nothing for an unmapped
     await expect(source.list({})).rejects.toMatchObject({ code: 'unauthorized' });
   } finally { f.db.close(); }
 });
+
+it('connects another Confluence account only after the person\'s own Disconnect', async () => {
+  const db = new Database(':memory:');
+  try {
+    let account = 'account-fixture', tags: Readonly<Record<string, string>> = {};
+    const nango: ConfluenceNangoV1 = { connect: vi.fn(async value => { tags = value; return { link: 'https://connect.nango.dev/fixture' }; }),
+      find: vi.fn(async value => `confluence-reference-${value.echo_attempt}`), disconnect: vi.fn(async () => {}),
+      connection: vi.fn(async () => ({ tags, access_token: 'synthetic-confluence-token' })) };
+    const fetch = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/oauth/token/accessible-resources') return Response.json([{ id: cloud, url: site, scopes: ['read:page:confluence', 'read:space:confluence', 'search:confluence', 'read:confluence-user'] }]);
+      if (path.endsWith('/rest/api/user/current')) return Response.json({ accountId: account, type: 'known', accountType: 'atlassian' });
+      throw new Error(`unexpected Confluence endpoint ${path}`);
+    });
+    const service = createConfluencePersonConnectionV1({ store: new ConfluenceConnectionStoreV1(db), nango, cloud_id: cloud, fetch: fetch as typeof globalThis.fetch,
+      authenticate: token => ({ ...person, authorization_sha256: canonicalSha256({ token }) }) });
+    const session = { access_token: 'session' };
+    const connectAs = async (who: string) => { account = who; const begun = await service.connect(session); return service.status({ ...session, attempt: begun.attempt }); };
+    expect(await connectAs('account-fixture')).toMatchObject({ status: 'complete' });
+    // A reconnect cannot move the connection to another account.
+    expect(await connectAs('account-other')).toMatchObject({ status: 'failed', failure_reason: 'account_mismatch' });
+    expect(service.tool(session)).toMatchObject({ personal_status: 'revoked' });
+    expect(await service.disconnect(session)).toEqual({ schema_version: 1, connected: false });
+    expect(service.tool(session)).toMatchObject({ personal_status: 'unlinked', external_subject_id: null });
+    expect(await connectAs('account-other')).toMatchObject({ status: 'complete' });
+    expect(service.tool(session)).toMatchObject({ personal_status: 'linked', external_scope_id: cloud, external_subject_id: 'account-other' });
+  } finally { db.close(); }
+});

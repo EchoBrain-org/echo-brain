@@ -7,7 +7,11 @@ import type { StructuredGenerationInput, StructuredGenerationPort } from "@echo-
 import { SqlitePersonDocumentRepositoryV1 } from "../src/adapters/persistence/sqlite/document-v1.js";
 import { SqlitePersonOriginalContextRetrievalV1 } from "../src/adapters/persistence/sqlite/person-original-context-retrieval-v1.js";
 import { SqlitePersonAgenticAskAuditV1 } from "../src/adapters/persistence/sqlite/person-agentic-ask-audit-v1.js";
+import { SqlitePersonTextSourceInboxV1 } from "../src/adapters/persistence/sqlite/person-text-source-v1.js";
+import { SqliteProjectContextRepositoryV1 } from "../src/adapters/persistence/sqlite/project-context-v1.js";
 import { createPersonDocumentApplicationV1 } from "../src/application/document-v1.js";
+import { createProjectContextApplicationV1 } from "../src/application/project-context-application-v1.js";
+import { PersonDocumentProcessingV1 } from "../src/composition/person-document-processing-v1.js";
 import { createPersonLiveAnswerRouteV1, type CreatePersonLiveAnswerRouteOptionsV1 } from "../src/composition/person-live-answer-route-v1.js";
 import type { PersonPageCitationV1, PersonTicketCitationV1 } from "@echo-brain/organization-api";
 import type { PersonLiveEvidenceItemV1, PersonLiveEvidenceSourceV1 } from "@echo-brain/organization-authority-kernel/shared/person-live-evidence-v1";
@@ -159,6 +163,23 @@ describe("Agentic Ask with stored source evidence", () => {
     expect(body.response_sha256).toBe(canonicalSha256(answer)); expect(body.principal_id).toBe(OWNER.principal_id);
     expect(body).toMatchObject({ model_calls: 4, rounds: 3 }); expect(auditRow(f.database)!.body_json).not.toContain("October");
     for (const prompt of f.prompts) expect(prompt).not.toMatch(/desk_[a-f0-9]{16}|source:[a-f0-9]{64}/);
+  });
+
+  it.each([
+    { name: "300 characters", title: `${"pasted ".repeat(42)}ending` },
+    { name: "4,000 bytes", title: `${"pasted ".repeat(570)}pastedtail` },
+  ])("answers from a note whose first line is $name, for its author and for another reader", async ({ title }) => {
+    const f = fixture();
+    // As the desktop saves a pasted paragraph: the note's whole first line is its title.
+    createProjectContextApplicationV1({ authenticate: () => authorization(OWNER), repository: new SqliteProjectContextRepositoryV1(f.database, () => PROJECT_CONTEXT_NOW) })
+      .submitUploadV3("owner", { schema_version: 3, kind: "echo-person-update-submit-v3", request_id: randomUUID(), title, text: `${title}\nThe launch window is October.`, association_project_ids: [PROJECT_ALPHA], audience: { kind: "team" } });
+    expect(await new PersonDocumentProcessingV1(new SqlitePersonDocumentRepositoryV1(f.database), undefined, new SqlitePersonTextSourceInboxV1(f.database)).runOnce(new AbortController().signal)).toBe("admitted");
+    for (const access_token of ["owner", "member"]) {
+      const answer = await f.ask(access_token);
+      expect(answer.outcome).toBe("answered");
+      // The answer names the note by a label it can carry: the start of the title.
+      expect(answer.citations).toMatchObject([{ kind: "note", label: `${title.slice(0, 197)}…` }]);
+    }
   });
 
   it("names the authenticated asker to the model, only from their own directory entry, and never in the audit", async () => {

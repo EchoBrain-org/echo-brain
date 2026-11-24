@@ -24,18 +24,13 @@ import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
   acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
   closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
-  hostFailed, keepNewProject, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, projectSettingsModal, readUpdate, refreshStatus,
-  retryStart, sheetShown, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
+  hostFailed, keepNewProject, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, readUpdate, refreshStatus,
+  retryStart, sheetShown, sheetUp, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
   useStore, WARNINGS, windowState, zoomOut, type State,
 } from './store.js';
 import { woke } from './freshness.js';
 
 if (navigator.userAgent.includes('Mac')) document.documentElement.classList.add('mac');
-
-function sheetUp(): boolean {
-  const { compose } = getState();
-  return Boolean((compose && !compose.hidden) || sheetShown() || projectSettingsModal());
-}
 
 /** How long a toast that says something went well stays: one that warns stays until the next page. */
 const TOAST_MS = 8_000;

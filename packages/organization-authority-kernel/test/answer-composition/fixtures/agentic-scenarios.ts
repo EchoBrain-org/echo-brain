@@ -1,10 +1,14 @@
 import { canonicalSha256, sha256Digest } from "@echo-brain/federation-protocol";
+import type { PersonAnswerCitationV8 } from "@echo-brain/organization-api";
 import { vi } from "vitest";
 import { createAgenticAskV5, createAgenticResearchV1, type AgenticAskAuditEntryV1 } from "../../../src/answer-composition/agentic-ask-v1.js";
+import { ANSWER_PROMPT } from "../../../src/answer-composition/agentic-ask-v1-model-protocol.js";
 import type { AgenticEvidenceBundleV1 } from "../../../src/answer-composition/agentic-evidence-bundle-v1.js";
+import { FOLLOW_UP_RESOLVER_PROMPT, THREAD_RESOLVER_PROMPT } from "../../../src/answer-composition/agentic-follow-up-resolver-v1.js";
 import { createAgenticModelGateV1 } from "../../../src/answer-composition/agentic-model-gate-v1.js";
 import { AGENTIC_RESEARCH_LIVE_BUDGET_V1 } from "../../../src/answer-composition/agentic-research-v1.js";
 import type { StructuredGenerationInput, StructuredGenerationPort, StructuredGenerationUsageV1 } from "../../../src/answer-composition/structured-generation-v1.js";
+import { observeCoreRuntimeV1, type CoreRuntimeObservationV1 } from "../../../src/shared/core-runtime-observation-v1.js";
 import type { EvidenceDeskItemV1, EvidenceDeskPortV1 } from "../../../src/shared/evidence-desk-v1.js";
 import type { EvidenceDeskItemV2, EvidenceDeskPortV2, EvidenceDeskResultV2 } from "../../../src/shared/evidence-desk-v2.js";
 
@@ -145,6 +149,39 @@ export const SCENARIOS: Readonly<Record<string, Scenario>> = {
 export function recorded(input: StructuredGenerationInput): StructuredGenerationInput {
   const { on_progress: _progress, ...rest } = input;
   return rest;
+}
+
+/** A desk item as an earlier answer cited it, for a previous turn (ADR-0047). */
+export const cited = (item: EvidenceDeskItemV2, kind: PersonAnswerCitationV8["kind"]): PersonAnswerCitationV8 => ({
+  citation: item.citation as PersonAnswerCitationV8["citation"], kind, label: item.label, visibility: item.visibility,
+  ...(item.citation.kind === "approved_record" ? { ref: `meeting:${item.citation.record_sha256}` as const } : {}),
+});
+/** Replies by role: the resolver's (either prompt), research steps', and the writer's, each in order; an unscripted call fails the Ask. */
+export function scripted(script: { readonly resolver?: readonly unknown[]; readonly steps?: readonly unknown[]; readonly writer?: readonly unknown[] }) {
+  const inputs: StructuredGenerationInput[] = [];
+  const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
+  const roleOf = (input: StructuredGenerationInput) => input.system_prompt === THREAD_RESOLVER_PROMPT || input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
+    : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
+  return {
+    inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
+    model: { generate: async (input: StructuredGenerationInput) => {
+      inputs.push(recorded(input));
+      const reply = queue[roleOf(input)].shift();
+      if (reply === undefined) throw new Error(`unscripted ${roleOf(input)} call`);
+      if (typeof reply === "function") return (reply as () => unknown)();
+      return reply;
+    } },
+  };
+}
+export const finishOn = (question: string, evidence: readonly string[]) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "found", evidence }] }], actions: [{ tool: "finish", args: {} }] });
+export const searchFor = (question: string, query: string) => ({ parts: [{ question, notes: "", needs: [{ need: "what the question asks", status: "open", evidence: [] }] }], actions: [{ tool: "search", args: { query } }] });
+/** A run under the request's observer: the corrections every span of it counted, summed. */
+export async function observed<T>(operation: () => Promise<T>): Promise<{ readonly value: T; readonly corrections: Readonly<Record<string, number>> }> {
+  const events: CoreRuntimeObservationV1[] = [];
+  const value = await observeCoreRuntimeV1("research_run", operation, { observer: event => { events.push(event); } });
+  const corrections: Record<string, number> = {};
+  for (const event of events) if (event.event !== "started") for (const [name, count] of Object.entries(event.model_corrections ?? {})) corrections[name] = (corrections[name] ?? 0) + count;
+  return { value, corrections };
 }
 
 /** Replays one scenario through Ask, the V8 core: scripted replies in order, and a clock that stands still. */

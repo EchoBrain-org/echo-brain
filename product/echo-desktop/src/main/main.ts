@@ -13,7 +13,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  changesLogLine, externalUrl, externalSourcePermalink, HOST_TIMEOUT_MS, hostGoneFailure, isWriteCall, MAIN_METHODS, MAX_COPY_CHARACTERS,
+  changesLogLine, externalUrl, externalSourcePermalink, HOST_TIMEOUT_MS, hostGoneFailure, MAIN_METHODS, MAX_COPY_CHARACTERS, mayChange,
   noticeOf, paramsLimit, plainJsonBytes, remoteDebuggingRequested, rpcLogName, STATUS_METHODS, versionLine,
   type AccountCommand, type AppStatus, type EventName, type Events, type FileHandle, type HostMethodName, type HostNotice, type HostReply, type MainMethods,
   type Notice, type Result, type UpdateState,
@@ -176,7 +176,7 @@ function startHost(restarted = false): void {
 
 function callHost(method: HostMethodName | 'host.drain', params: unknown): Promise<Result<unknown>> {
   const requestId = (params as { request_id?: unknown } | null)?.request_id;
-  const write = isWriteCall(method, params);
+  const write = mayChange(method, params);
   // No host took it, so nothing left the machine: a write says so, and Invite
   // removes the empty folder it made, so trying again can use the same name.
   if (!host) return Promise.resolve({ ok: false, failure: hostGoneFailure(hostGaveUp ? 'host_failed' : 'host_restarted', write, requestId, false) });

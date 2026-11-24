@@ -27,19 +27,23 @@ function matchesTarget(connection: StoredSlackConnectionV1, target: SlackApprova
 /**
  * Binds a Slack credential lookup to the exact durable presentation target.
  * The second check is deliberately after the asynchronous Nango token read:
- * a reconnect must not let a previously selected DM use a new connection.
+ * a reconnect must not let a previously selected DM use a new connection, and
+ * a reviewer removed during the read gets no request, though their link may
+ * still be stored active.
  */
 export function createTargetBoundSlackApprovalPosterV1(input: {
   readonly target: SlackApprovalTargetV1;
   readonly activeConnection: () => StoredSlackConnectionV1 | undefined;
   readonly targetCurrent: (target: SlackApprovalTargetV1) => boolean;
+  /** Whether the reviewer this poster delivers to is an active member now. */
+  readonly reviewerActive: () => boolean;
   readonly botToken: SlackBotTokenSourceV1;
   readonly needsReinstall: (connection: StoredSlackConnectionV1) => boolean;
   readonly markNeedsReinstall: (connection: StoredSlackConnectionV1) => void;
 }): SlackApprovalPosterV1 {
   const requireBoundConnection = (): StoredSlackConnectionV1 => {
     const connection = input.activeConnection();
-    if (connection === undefined || !matchesTarget(connection, input.target) || !input.targetCurrent(input.target)) {
+    if (connection === undefined || !matchesTarget(connection, input.target) || !input.targetCurrent(input.target) || !input.reviewerActive()) {
       throw new Error("Slack approval target is no longer current");
     }
     return connection;
@@ -48,7 +52,7 @@ export function createTargetBoundSlackApprovalPosterV1(input: {
     const selected = requireBoundConnection();
     const token = await input.botToken.botToken(selected, tokenOptions);
     const current = input.activeConnection();
-    if (current === undefined || current.state_sha256 !== selected.state_sha256 || !matchesTarget(current, input.target) || !input.targetCurrent(input.target)) {
+    if (current === undefined || current.state_sha256 !== selected.state_sha256 || !matchesTarget(current, input.target) || !input.targetCurrent(input.target) || !input.reviewerActive()) {
       throw new Error("Slack approval target changed during token selection");
     }
     return token;
@@ -165,7 +169,7 @@ export function createSlackApprovalPresenterV1(options: {
   readonly core: ApprovalCoreV1;
   readonly target: (reviewer: ApprovalActorV1) => SlackApprovalTargetV1 | null;
   readonly targetCurrent: (target: SlackApprovalTargetV1) => boolean;
-  readonly poster: (target: SlackApprovalTargetV1) => SlackApprovalPosterV1;
+  readonly poster: (target: SlackApprovalTargetV1, reviewerActive: () => boolean) => SlackApprovalPosterV1;
   readonly projects: (reviewer: ApprovalActorV1) => readonly { project_id: string; name: string }[];
   readonly now?: () => Date;
 }): ApprovalPresenterV1 {
@@ -275,7 +279,9 @@ export function createSlackApprovalPresenterV1(options: {
   };
   const pendingActive = (proposal: ApprovalProposalViewV1 | undefined): proposal is ApprovalProposalViewV1 => proposal !== undefined && proposal.reviewer_active && proposal.status === "pending";
   const isAborted = (signal: AbortSignal) => signal.aborted;
-  const provider = (target: SlackApprovalTargetV1): SlackApprovalPosterV1 => options.poster(target);
+  // The poster waits for its bot token after this pass's own check, so it reads the reviewer's membership again around that wait.
+  const provider = (target: SlackApprovalTargetV1, approvalId: string): SlackApprovalPosterV1 =>
+    options.poster(target, () => options.core.proposal(approvalId)?.reviewer_active !== false);
 
   // Only actual delivery attempts emit spans; idle reconciliation and polling stay quiet.
   const deliver = <T extends { kind: string }>(row: PresentationRow,
@@ -305,6 +311,10 @@ export function createSlackApprovalPresenterV1(options: {
         const target = JSON.parse(row.target_json) as SlackApprovalTargetV1;
         if (!options.targetCurrent(target)) { backoff(row, true); continue; }
         const proposal = options.core.proposal(row.approval_id);
+        // A removed reviewer gets no Slack call, though their link may still be stored active (a removal can stop before its
+        // link write). A row with a marker posted or in flight ends as a stale target does; one with nothing posted yet ends
+        // below, as it does for any proposal that is no longer pending.
+        if (proposal?.reviewer_active === false && (row.delivery === "posted" || row.marker_state === "in_flight")) { backoff(row, true); continue; }
         if (row.delivery === "opening") {
           if (!pendingActive(proposal)) { unrepresentable.run(asIso(now()), row.approval_id); changed = true; continue; }
           // Any card-build failure is this row's problem; it must not stall the rows after it.
@@ -312,7 +322,7 @@ export function createSlackApprovalPresenterV1(options: {
             cannotRepresent(row); changed = true; continue;
           }
           try {
-            const opened = await deliver(row, "open_dm", () => provider(target).openDirectMessage(target.slack_subject_id, signal));
+            const opened = await deliver(row, "open_dm", () => provider(target, row.approval_id).openDirectMessage(target.slack_subject_id, signal));
             if (!options.targetCurrent(target) || opened.kind !== "opened") { backoff(row, false, opened.kind === "retry_allowed" ? opened.retry_after_ms : undefined); continue; }
             if (!pendingActive(options.core.proposal(row.approval_id))) {
               if (finishUnposted.run(opened.channel_id, asIso(now()), row.approval_id).changes === 1) changed = true;
@@ -338,7 +348,7 @@ export function createSlackApprovalPresenterV1(options: {
             if (beginMarker.run(markerStartedAt, markerStartedAt, row.approval_id).changes !== 1) continue;
             const inFlight = { ...row, marker_state: "in_flight" as const, marker_started_at: markerStartedAt };
             try {
-              const posted = await deliver(row, "post_marker", () => provider(target).postMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id! }, signal));
+              const posted = await deliver(row, "post_marker", () => provider(target, row.approval_id).postMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id! }, signal));
               if (!options.targetCurrent(target)) { backoff(inFlight); uncertain = true; continue; }
               if (posted.kind === "posted") {
                 if (persistMarker.run(posted.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
@@ -353,7 +363,7 @@ export function createSlackApprovalPresenterV1(options: {
           } else {
             try {
               if (row.marker_started_at === null) throw new Error("in-flight marker has no durable start time");
-              const reconciled = await deliver(row, "reconcile_marker", () => provider(target).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, post_started_at: row.marker_started_at!, reconciliation_started_at: asIso(now()) }, signal));
+              const reconciled = await deliver(row, "reconcile_marker", () => provider(target, row.approval_id).reconcileMarker({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, post_started_at: row.marker_started_at!, reconciliation_started_at: asIso(now()) }, signal));
               if (!options.targetCurrent(target)) { backoff(row); uncertain = true; continue; }
               if (reconciled.kind === "posted") {
                 if (persistMarker.run(reconciled.provider_message_ts, asIso(now()), row.approval_id).changes !== 1) { uncertain = true; continue; }
@@ -367,12 +377,14 @@ export function createSlackApprovalPresenterV1(options: {
             }
           }
           const liveProposal = options.core.proposal(row.approval_id);
+          // The reviewer may have been removed while the marker call was awaited.
+          if (liveProposal?.reviewer_active === false) { backoff(row, true); continue; }
           const shows = liveProposal === undefined ? "superseded" : outcome(liveProposal);
           const message = database.prepare("SELECT dm_channel_id,message_ts FROM authority_approval_presentations_v1 WHERE approval_id=? AND surface='slack'").get(row.approval_id) as { dm_channel_id: string; message_ts: string };
           try {
             // Built inside the try: a card that cannot be built backs this row off instead of stalling the others.
             const publishedCard = shows === "open" ? card(liveProposal!) : closed(liveProposal, shows);
-            const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
+            const published = await deliver(row, "publish_card", () => provider(target, row.approval_id).publish({ approval_id: row.approval_id, dm_channel_id: message.dm_channel_id, provider_message_ts: message.message_ts, card: publishedCard }, signal));
             if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
             persistCard.run(shows, canonicalSha256(publishedCard as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
           } catch (error) {
@@ -388,7 +400,7 @@ export function createSlackApprovalPresenterV1(options: {
         if (shows === row.shows && row.card_sha256 !== null) continue;
         try {
           const redraw = shows === "open" ? card(proposal) : closed(proposal, shows);
-          const published = await deliver(row, "publish_card", () => provider(target).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
+          const published = await deliver(row, "publish_card", () => provider(target, row.approval_id).publish({ approval_id: row.approval_id, dm_channel_id: row.dm_channel_id!, provider_message_ts: row.message_ts!, card: redraw }, signal));
           if (!options.targetCurrent(target) || published.kind !== "done") { backoff(row, false, published.kind === "uncertain" ? published.retry_after_ms : undefined); uncertain = true; continue; }
           persistCard.run(shows, canonicalSha256(redraw as unknown as JsonValue), asIso(now()), row.approval_id); changed = true;
         } catch (error) {

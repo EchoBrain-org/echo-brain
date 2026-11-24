@@ -50,7 +50,24 @@ export interface PersonAnswerPreviousV1 {
   readonly statements: readonly PersonAnswerPreviousStatementV1[];
   /** The earlier answer's citations, as its response carried them, each once. */
   readonly citations: readonly PersonAnswerCitationV8[];
+  /** Only on a follow-up (ADR-0056): the older turns of the thread it continues, oldest first, under the previous turn's rules. */
+  readonly earlier?: readonly PersonAnswerEarlierTurnV1[];
 }
+
+/** One older turn of the thread a follow-up continues (ADR-0056). */
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier'>;
+
+/** One of the asker's other threads (ADR-0056): their typed questions, oldest first, only their own words (R2), never stored. */
+export interface PersonAnswerThreadV1 {
+  readonly questions: readonly string[];
+  /** ISO-8601 UTC with milliseconds. */
+  readonly asked_at: string;
+}
+
+/** Where a question belongs when not in the open thread (ADR-0056); several `other` indexes mean it could be any of them. */
+export type PersonAnswerThreadPlacementV1 =
+  | { readonly kind: 'new' }
+  | { readonly kind: 'other'; readonly threads: readonly number[] };
 
 /**
  * One thing a follow-up could mean: a short label naming it, and the full
