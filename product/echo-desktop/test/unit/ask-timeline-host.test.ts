@@ -26,7 +26,7 @@ vi.mock('node:fs', async original => {
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
 import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askThreads } from '../../src/host/ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
   deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES, timelinePath, timelineTurn,
@@ -406,6 +406,23 @@ describe('what the page sends with an Ask and a check', () => {
     // An Ask again carries none, and the list and the turn fit the body together.
     expect(askThreads([thread], previous.question, { ...previous, purpose: 'ask_again' })).toBeNull();
     expect(askThreads([{ ...thread, questions: ['é'.repeat(600_000)] }], 'Who owns it?', previous)).toBeNull();
+  });
+
+  it('leaves the other threads out with an earlier turn it refuses: listed without that turn\'s own thread, they would place the question anywhere but where it was typed', () => {
+    const global = { kind: 'global' } as const;
+    const thread = { questions: ['When does Apollo launch?'], asked_at: '2026-10-24T09:00:00.000Z' };
+    expect(askContext(previous, [thread], 'Who owns it?', global)).toEqual({ previous, threads: [thread], refused: [] });
+    // The turn refused: the list is good on its own, and still does not go.
+    expect(askThreads([thread], 'Who owns it?', undefined)).toEqual([thread]);
+    expect(askContext({ ...previous, purpose: 'guess' }, [thread], 'Who owns it?', global)).toEqual({ refused: ['previous', 'threads'] });
+    expect(askContext({ ...previous, purpose: 'guess' }, [], 'Who owns it?', global)).toEqual({ refused: ['previous', 'threads'] });
+    expect(askContext({ ...previous, purpose: 'guess' }, undefined, 'Who owns it?', global)).toEqual({ refused: ['previous'] });
+    // The list refused: the turn still goes, as before.
+    expect(askContext(previous, [{ ...thread, questions: [] }], 'Who owns it?', global)).toEqual({ previous, refused: ['threads'] });
+    // Neither sent, or the list alone, the empty one included.
+    expect(askContext(undefined, undefined, 'Who owns it?', global)).toEqual({ refused: [] });
+    expect(askContext(undefined, [], 'Who owns it?', global)).toEqual({ threads: [], refused: [] });
+    expect(askContext(undefined, [thread], 'Who owns it?', global)).toEqual({ threads: [thread], refused: [] });
   });
 
   it('checks any number of items, each a citation that can go, within the 1 MiB request body', () => {

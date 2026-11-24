@@ -16,7 +16,7 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askPrevious, askProgressLines, askRecordArgv, askSourceArgv, askThreads, silence } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askContext, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
 import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, timelineTurn } from './timeline.js';
@@ -610,17 +610,12 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       // A retired or malformed scope is refused, never widened to all accessible context.
       if (scope?.kind !== 'global' && scope?.kind !== 'project') return code('invalid_request');
       const text = askText(question);
-      // The earlier turn a follow-up or Ask again carries, checked as the client checks it (C3). One it would refuse is
-      // context, not the question: the Ask goes without it rather than failing.
-      const checked = earlier === undefined ? undefined : askPrevious(earlier, text, scope);
       if (text === '') return code('invalid_request');
-      if (checked === null && __ECHO_TEST_HOOK__) console.error('[client] ask previous refused; asking without it');
-      const previous = checked ?? undefined;
-      // The asker's other threads (ADR-0056), checked beside that turn as the request carries them. Context too: a list
-      // the validator refuses is not sent, and the answer then places the question nowhere.
-      const listed = others === undefined ? undefined : askThreads(others, text, previous);
-      if (listed === null && __ECHO_TEST_HOOK__) console.error('[client] ask threads refused; asking without them');
-      const threads = listed ?? undefined;
+      // The earlier turn a follow-up or Ask again carries (C3) and the asker's other threads (ADR-0056), checked as the
+      // client checks them. They are context, not the question: what it would refuse is left out rather than failing the
+      // Ask, and a refused turn takes the threads listed beside it (askContext).
+      const { previous, threads, refused } = askContext(earlier, others, text, scope);
+      if (__ECHO_TEST_HOOK__) for (const left of refused) console.error(`[client] ask ${left} refused; asking without`);
       // An Ask's steps reach the page as they are printed (ask.ts); every line it prints, a heartbeat's included, shows it is alive.
       const steps = abortSignal !== undefined
         ? askProgressLines(cancel_id, expect, abortSignal, notice => port.postMessage({ notice: 'ask.progress', payload: notice }),
