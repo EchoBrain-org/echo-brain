@@ -930,6 +930,13 @@ export function isWriteCall(method: string, params: unknown): boolean {
   const operation = (params as { request?: { operation?: unknown } | null } | null | undefined)?.request?.operation;
   return !(typeof operation === 'string' && READ_OPERATIONS[method]?.has(operation) === true);
 }
+/**
+ * Whether a call may change what is kept: the Authority's (isWriteCall), or this computer's own Ask timeline. One no
+ * host answered says whether it was made (hostGoneFailure), so a move of turns no host took is known not to have happened.
+ */
+export function mayChange(method: string, params: unknown): boolean {
+  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.move';
+}
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
   ['list', 'home', 'next', 'retry', 'items', 'item', 'send', 'set_state', 'assign', 'send_item', 'edit'],

@@ -74,9 +74,9 @@ let checks: ((items: readonly { asked_at: string; citation: { kind: string; tick
 let script: ((params: Record<string, unknown>) => unknown) | null;
 /**
  * How a `timeline.move` ends: as the host does it (null); refused, the file as it was; timed out, the file as it was;
- * or taken by the file with its reply lost on the way back.
+ * taken by no host, as main says when none is running; or taken by the file with its reply lost on the way back.
  */
-let moveEnds: null | 'refused' | 'timeout' | 'lost';
+let moveEnds: null | 'refused' | 'timeout' | 'unsent' | 'lost';
 /** While set, a `timeline.move` is taken by the file at once and its reply waits for this. */
 let moveGate: Promise<unknown> | null;
 /** The turns, by what was typed for them, whose `timeline.put` fails. */
@@ -111,6 +111,7 @@ beforeEach(() => {
     if (method !== 'timeline.move') return base(method, params);
     if (moveEnds === 'refused') return fail('failed');
     if (moveEnds === 'timeout') return fail('timeout', { retryable: true });
+    if (moveEnds === 'unsent') return fail('host_restarted', { retryable: true, mutation_outcome: 'not_submitted' });
     const reply = await base(method, params);
     if (moveGate) await moveGate;
     if (moveEnds === 'lost') throw new Error('the reply was lost');
@@ -1499,6 +1500,35 @@ describe('merging threads, and Undo', () => {
     expect(store.getState().ask?.merged).toBeNull();
     expect(store.mergedLine()).toBeNull();
     expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
+  });
+
+  it('keeps an earlier merge\'s Undo when a later move, or that Undo, reached no host: nothing moved, and the page says so', async () => {
+    const { billing, pilot } = seeded();
+    seed(...kept(), ...threadIn(GLOBAL, ['Where is the ledger?', HOUR]));
+    const ledger = kept().at(-1)!;
+    const store = await startStore();
+    const { THREADS_NOT_SAVED } = await import('../../src/renderer/store.js');
+    await store.openThread(pilot[0]!.id);
+    await flush();
+    store.mergeThread(billing[0]!.id);
+    await flush();
+    moveEnds = 'unsent';
+    store.mergeThread(ledger.id);
+    await flush();
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(filed()['Where is the ledger?']).toBe(ledger.id);
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    await store.undoMerge();
+    await flush();
+    expect(store.getState().toast).toBe(THREADS_NOT_SAVED);
+    expect(store.mergedLine()).toBe('Merged with Who owns billing?');
+    expect(filed()['Who owns billing?']).toBe(pilot[0]!.id);
+    // Reached this time, the Undo goes through.
+    moveEnds = null;
+    await store.undoMerge();
+    await flush();
+    expect(filed()['Who owns billing?']).toBe(billing[0]!.id);
+    expect(store.mergedLine()).toBeNull();
   });
 
   it('says nothing moved when the file holds none of the turns a merge names: their answers were never saved', async () => {

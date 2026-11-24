@@ -4532,8 +4532,12 @@ export function askBusy(current: State = state): boolean {
   return Boolean(current.ask?.asking) || current.timeline.moving;
 }
 
-/** A reply that leaves a move's outcome unknown: none came in time, the host went away holding it, or the file may have changed all the same. */
+/**
+ * A reply that leaves a move's outcome unknown: none came in time, the host went away holding it, or the file may have
+ * changed all the same. Never one no host took (`not_submitted`): that move was not made.
+ */
 function unconfirmed(failure: Failure): boolean {
+  if (failure.mutation_outcome === 'not_submitted') return false;
   return failure.code === 'timeout' || failure.code === 'host_restarted' || failure.mutation_outcome === 'unknown';
 }
 
@@ -4561,8 +4565,9 @@ function labelled(turn: TimelineTurn, thread: string | null): TimelineTurn {
  * stays): moved, that is the move. Refused, nothing moved: because the file
  * does not hold a turn named, the page says so; because one was elsewhere
  * than the page had it, it says the questions had moved. A failure the host
- * answered moved nothing either, and the page says so. With no answer to
- * go by (none in time, or none at all) nothing changes here, any Undo goes,
+ * answered, or a move no host took (main says so), moved nothing either, and
+ * the page says so. With no answer to go by (none in time, the host gone while
+ * it held the move, or none at all) nothing changes here, any Undo goes,
  * since it would move turns the file may hold elsewhere, and the page says
  * ECHO could not confirm it: only reading the file again, as a restart does,
  * says what it holds. Answers the turns moved, 'failed', or null when not
