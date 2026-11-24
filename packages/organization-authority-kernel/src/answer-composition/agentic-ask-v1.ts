@@ -65,7 +65,7 @@ export type {
   AgenticAskAnswerWithReceiptV3, AgenticAskProgressInputV3, AgenticAskProgressRequestV1, AgenticAskProgressSinkV3,
 } from "./agentic-ask-progress-v1.js";
 export { createAgenticAskProgressRequestV1 } from "./agentic-ask-progress-recorder-v1.js";
-// The follow-up resolution eval (ADR-0047) and the thread resolution eval (ADR-0056) run the product's resolver on its own.
+// The resolution evals (ADR-0047, ADR-0056) run the product's resolver on its own.
 export { resolveAgenticFollowUpOnceV1, resolveAgenticThreadOnceV1, type AgenticFollowUpCarryV1, type AgenticResolutionKeptV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
@@ -148,10 +148,7 @@ function askerName(value: { readonly display_name: string } | undefined): string
   return name.length === 0 || name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(name) ? undefined : name;
 }
 
-/**
- * What only an Ask carries beside its question: the asker's previous turn (ADR-0047), their other threads (ADR-0056),
- * and the resolution of those kept between attempts.
- */
+/** What only an Ask carries: its previous turn, other threads, and their resolution kept between attempts. */
 type AskedWithV1 = Pick<AgenticAskProgressInputV3, "previous" | "threads" | "follow_up">;
 
 /** Ask's question as the API takes it (validatePersonQuestionText), checked by that one rule, or null. */
@@ -187,7 +184,7 @@ function researchOnlyOutput(bundle: AgenticEvidenceBundleV1, researched: Agentic
 function questionBrief(question: string, budget: AgenticResearchBudgetV1): AgenticBriefV1 {
   return { goal: { kind: "question", question }, starting: [], budget, options: {} };
 }
-/** Research that never ran: a follow-up that asked which one (ADR-0047), a question that belongs to other threads (ADR-0056), or a request stopped before research began. */
+/** Research that never ran: an answer that asks instead of answering (ADR-0047, ADR-0056), or a request stopped before research. */
 const NO_RESEARCH: AgenticResearchProgressV1 = Object.freeze({
   receipts: Object.freeze([]), rounds: 0, fallbacks: 0, searches: 0, search_hits: 0, retrieved_tickets: 0,
   refused_reads: 0, repeated_refusals: 0, unchecked_items: 0, sources_looked_at: 0, most_reads_in_a_step: 0,
@@ -282,7 +279,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
    * access fences, audit), the research loop, then a renderer (Ask's for a
    * question, the trigger's own for a task, or none) and the shared release step.
    */
-  /** Every request researches, except a follow-up that asked which one (ADR-0047) and a question that belongs to other threads (ADR-0056). */
+  /** Every request researches, except an answer that asks instead of answering (ADR-0047, ADR-0056). */
   type RequestOutput = {
     readonly response?: PersonAnswerResponseV8; readonly rendered?: unknown; readonly research?: AgenticResearchResultV1; readonly writer_evidence: readonly string[]; readonly receipt?: PersonAskReceiptV3;
     /** The follow-ups an Ask answer drafted and its release saved (ADR-0053); absent for none. */
@@ -403,15 +400,13 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
 
       try {
         // ---- a follow-up (ADR-0047): what it refers to, before research; an Ask again researches the question as asked ----
-        // ---- with the asker's other threads or the thread's older turns (ADR-0056): also where the question belongs ----
+        // ---- and, with threads or older turns (ADR-0056), where the question belongs ----
         let researchBrief = brief;
         let resolvedQuestion: string | undefined;
-        /** What the answer says of the asker's threads (ADR-0056): nothing, unless the request carried them. */
         let placed: Pick<PersonAnswerResponseV8, "thread" | "merge"> = {};
         // An Ask again asks one earlier question again where it was asked: nothing resolves or places it.
         if (goal.kind === "question" && (previous?.purpose === "follow_up" || (previous === undefined && threads !== undefined))) {
-          // What the resolver is shown. A resolution an earlier attempt of this request already paid for is used as it
-          // is, only when it was made from exactly this; any other attempt resolves anew.
+          // A resolution an earlier attempt already paid for is reused only when made from exactly this (agenticResolutionKeyV1).
           const asking = {
             question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC",
             ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }),
@@ -422,23 +417,20 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           if (kept === undefined) followUp?.on_resolved?.(Object.freeze({ key, value: resolved }));
           const { placement } = resolved;
           placed = agenticThreadFieldsV1(placement);
-          /** An answer that asks instead of answering: no research runs, and it is released as every answer is. */
+          /** An answer that asks instead of answering: released as every answer is, with no research. */
           const ask = async (response: PersonAnswerResponseV8): Promise<RequestOutput> => {
             phase = "final";
             const { released, ...receipt } = await release(response.outcome, 0, response, agenticAskAnswerSha256V1(response));
             return Object.freeze({ response: released, writer_evidence: Object.freeze([]), ...receipt });
           };
-          // One path for each place the question can belong, and for each thing it can refer to in the open thread.
           switch (placement.thread) {
-            // It belongs to other threads: it is not answered here, and the answer names them.
             case "other": return await ask(agenticElsewhereResponseV1(options.desk.scope, goal.question, placement));
-            // A new subject: research answers the question as asked, from nothing of the open thread.
+            // A new subject: researched as asked, starting from nothing of the open thread.
             case "new": break;
             case "open": {
               const { resolution } = placement;
               switch (resolution.resolution) {
-                // More than one thing could fit: the answer asks which one, and names no thread to merge. The question
-                // is asked again once one is chosen, and that answer does.
+                // Several things fit: the answer asks which one, with no merge until the chosen question's answer.
                 case "clarify": return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices));
                 // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
                 case "resolved": {
@@ -511,10 +503,8 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         const writer = createAskRendererV1({
           answer_prompt: answerPrompt,
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
-          // An answer to an Ask that carried its previous turn or the asker's threads (ADR-0056) names the question it
-          // answers and says where that question belongs. An Ask again's writer also says what is different since the earlier
-          // answer (ADR-0047). With none of its sentences left to compare with, an Ask again is answered as asked: it cannot
-          // say what changed.
+          // An answer to an Ask that carried its previous turn or threads names its question and where it belongs (ADR-0056).
+          // An Ask again's writer also says what changed, unless no sentence is left to compare with (ADR-0047).
           ...(previous === undefined && threads === undefined ? {} : { answers: resolvedQuestion ?? goal.question, placed }),
           ...(previous?.purpose === "ask_again" && previous.statements.length > 0 ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
           // Only a request that saves follow-ups drafts them (ADR-0053).

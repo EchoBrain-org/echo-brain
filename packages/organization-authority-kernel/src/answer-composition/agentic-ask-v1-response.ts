@@ -114,8 +114,7 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
  * Ask's answer, as its audit binds it: the direct statement and parts, and, on an answer to a request that carried the
  * previous turn (ADR-0047), the question it answers, what is different since and the choices it offers. An answer that
  * drafted follow-ups (ADR-0053) binds them too: `drafts`, what is saved, when the caller has them, else their ids. An
- * answer to a request that carried the asker's threads (ADR-0056) binds where it says the question belongs and the
- * threads it says to merge. An answer with none of these hashes as before.
+ * answer to a request that carried threads (ADR-0056) binds `thread` and `merge`. With none of these, it hashes as before.
  */
 export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8, drafts?: readonly AskFollowUpDraftV1[]): Sha256Digest {
   const previous = {

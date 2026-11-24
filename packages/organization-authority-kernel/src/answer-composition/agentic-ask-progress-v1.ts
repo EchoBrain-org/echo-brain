@@ -37,10 +37,7 @@ export interface AgenticAskProgressRequestV1 {
   elapsed(): number;
 }
 
-/**
- * One streamed Ask: the question, its V3 sink, and what the request carried beside it: the asker's previous turn
- * (ADR-0047) and their other threads (ADR-0056).
- */
+/** One streamed Ask: the question, its V3 sink, and the previous turn (ADR-0047) and other threads (ADR-0056) it carried. */
 export interface AgenticAskProgressInputV3 {
   readonly question: string;
   readonly signal?: AbortSignal;
@@ -48,9 +45,8 @@ export interface AgenticAskProgressInputV3 {
   /** The request this run is an attempt of; without it, the run is the whole request. */
   readonly request?: AgenticAskProgressRequestV1;
   readonly previous?: PersonAnswerPreviousV1;
-  /** The asker's other threads, as the request carried them: context for placing the question, never evidence. */
+  /** Context for placing the question, never evidence. */
   readonly threads?: readonly PersonAnswerThreadV1[];
-  /** What an earlier attempt of the same request resolved, and where to report what this one resolves. */
   readonly follow_up?: AgenticFollowUpCarryV1;
 }
 
