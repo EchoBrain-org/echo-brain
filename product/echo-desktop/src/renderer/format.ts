@@ -61,11 +61,6 @@ const ASKED_TIME = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '
 const ASKED_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
 const ASKED_DAY_AND_YEAR = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-/** Whether an Ask turn was asked today, here. */
-export function askedToday(iso: string, now = Date.now()): boolean {
-  return Date.parse(iso) >= startOfDay(now);
-}
-
 /** When an Ask turn was asked, as its row says it: the time for today ("3:41 PM"), else the day ("Oct 14"), with its year when not this year's. */
 export function askedWhen(iso: string, now = Date.now()): string {
   const time = Date.parse(iso);

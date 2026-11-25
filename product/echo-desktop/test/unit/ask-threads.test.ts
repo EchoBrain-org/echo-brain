@@ -1499,6 +1499,20 @@ describe('the way out of every wait', () => {
     expect([store.getState().barScope, store.getState().barText]).toEqual([GLOBAL, 'how often do they fail?']);
   });
 
+  it('closes an Ask opened only for a question whose placing the widened bar abandoned, as a cancelled one closes', async () => {
+    seed(...threadIn(inApollo, ['Which tests fail?', 5 * DAY]));
+    const store = await startStore();
+    await store.openProject(apollo);
+    const placing = held.hold('ask.run');
+    void store.ask('how often do they fail?');
+    await flush();
+    expect(store.getState().ask).toMatchObject({ forQuestion: true, thread: null });
+    store.widenScope();
+    placing(elsewhere(asked()[0]!, [0]));
+    await flush();
+    expect([store.getState().ask, asked().length, store.getState().barText]).toEqual([null, 1, 'how often do they fail?']);
+  });
+
   it('offers no button for a thread "Which one?" named that is no longer a thread in the timeline read again, and picking it does nothing', async () => {
     const { billing, pilot } = seeded();
     script = params => (params.threads ? elsewhere(params, [placeOf(params, 'When does the pilot start?'), placeOf(params, 'Who owns billing?')]) : null);

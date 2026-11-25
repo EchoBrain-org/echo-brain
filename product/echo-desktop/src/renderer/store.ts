@@ -4274,7 +4274,7 @@ export const THREAD_OUT_OF_REACH = message({ code: 'not_found', retryable: false
  * What a line or a quick reply calls a conversation none of whose turns kept the person's words: never its first
  * heading, which a model may have written (R2). Only the door lists one by that heading.
  */
-export const UNNAMED_CONVERSATION = 'an earlier conversation';
+const UNNAMED_CONVERSATION = 'an earlier conversation';
 
 /** A conversation "Which one?" offers (ADR-0056, ADR-0057): its label, and its project's name when it lives outside the place the question was asked in. */
 export interface ThreadChoice {
@@ -4321,16 +4321,21 @@ export async function chooseThread(id: string): Promise<void> {
  * ECHO named one conversation, where the question was asked (R15): the words are asked in it as a plain follow-up. While
  * its newest thread is active Ask jumps there first, as a pick would; a joined thread never changes (R12), so the
  * question shows alone and its answer starts a thread that continues it (R13). `asked`: when the person asked the
- * question, which decides active or joined (R11). The bar widened meanwhile asks nothing, so nothing moves either.
+ * question, which decides active or joined (R11). The bar widened meanwhile asks nothing, so nothing moves either: the
+ * question ends as a cancelled one does, its words back in the bar.
  */
 function placeIn(chain: Chain, words: string, links: readonly string[], scope: AskScope, asked: number): void {
   const view = state.ask;
   if (!view) return;
+  if (!sameScope(state.barScope, scope)) {
+    cancelAsk();
+    wordsBack(words);
+    return;
+  }
   const shown = view.thread?.id ?? null;
   const target = chain.newest;
-  const there = sameScope(state.barScope, scope);
-  if (there && target.home.kind === 'global') goToHome(target.home, undefined);
-  if (there && threadActive(target, asked)) showThread(target.id, null, true, view.forQuestion);
+  if (target.home.kind === 'global') goToHome(target.home, undefined);
+  if (threadActive(target, asked)) showThread(target.id, null, true, view.forQuestion);
   else set({ ask: { ...view, seq: ++seq, asking: null } });
   void askThere(chain, words, links, scope, { shown }, asked);
 }
