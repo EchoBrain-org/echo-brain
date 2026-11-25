@@ -79,9 +79,12 @@ export function personAnswerLabelWordsV1(text: string): string[] {
   return (text.normalize('NFC').match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).map(word => word.toLowerCase());
 }
 
-/** Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds at least one word. */
+/**
+ * Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds at least one word. It holds
+ * no control that sets the direction of text: one shows a typed word's letters in another order, as a word nobody typed.
+ */
 export function isPersonAnswerLabelV1(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
+  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !/[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]/u.test(value)
     && [...value].length <= PERSON_ANSWER_LABEL_MAX_CHARS_V1 && personAnswerLabelWordsV1(value).length > 0;
 }
 

@@ -557,8 +557,8 @@ export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8
   previous: boolean, labels = false): 'unsent' | 'unplaced' | 'unasked' | null {
   const named = [...(answer.thread?.kind === 'other' ? answer.thread.threads : []), ...(answer.merge ?? [])];
   if (threads === undefined ? answer.thread !== undefined || answer.merge !== undefined : named.some(index => index >= threads)) return 'unsent';
-  if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined))) return 'unplaced';
   if (answer.label !== undefined && !(labels && previous)) return 'unasked';
+  if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined))) return 'unplaced';
   return null;
 }
 

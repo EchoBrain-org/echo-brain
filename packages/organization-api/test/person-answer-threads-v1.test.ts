@@ -117,6 +117,9 @@ describe('a conversation\'s label (ADR-0057)', () => {
     for (const label of ['', ' pilot', 'pilot ', 'pilot\nstart', 'pilot start', 'pilot\u0007', '::: ...', 'p'.repeat(81), 'éte', 7, null, undefined]) {
       expect(isPersonAnswerLabelV1(label), JSON.stringify(label)).toBe(false);
     }
+    // A control that sets the direction of text would show "evil" as "live", a word nobody typed; right-to-left words need none.
+    for (const label of ['\u202Eevil\u202C', 'pilot \u202Bstart', '\u2066pilot\u2069', 'pilot\u2067']) expect(isPersonAnswerLabelV1(label), JSON.stringify(label)).toBe(false);
+    expect(isPersonAnswerLabelV1('\u05D8\u05D9\u05D9\u05E1 \u05D4\u05EA\u05D7\u05DC\u05D4')).toBe(true);
     expect(personAnswerLabelFitsV1('PILOT: start, owns, annual plans', typed)).toBe(true);
     // Words are used as typed: a different form of a typed word is not that word.
     for (const label of ['pilot owner', 'pilot starts', 'the pilots', 'billing']) expect(personAnswerLabelFitsV1(label, typed), label).toBe(false);
@@ -167,8 +170,9 @@ describe('a conversation\'s label (ADR-0057)', () => {
     const labelled = { question: 'Did the Apollo launch date change?', label: 'Apollo launch date' };
     expect(personAnswerThreadsProblemV1(labelled, 1, true, true)).toBeNull();
     expect(personAnswerThreadsProblemV1(labelled, undefined, true, true)).toBeNull();
+    // The answer as the response validator takes it: a label never comes beside a placement.
     for (const [continued, labels] of [[true, false], [false, true], [false, false]] as const) {
-      expect(personAnswerThreadsProblemV1({ ...labelled, thread: { kind: 'new' } }, 1, continued, labels), `${continued} ${labels}`).toBe('unasked');
+      for (const threads of [1, undefined]) expect(personAnswerThreadsProblemV1(labelled, threads, continued, labels), `${threads} ${continued} ${labels}`).toBe('unasked');
     }
     // An answer with no label is as it was, whatever was asked.
     expect(personAnswerThreadsProblemV1({ question: 'Q?' }, 1, true)).toBeNull();
