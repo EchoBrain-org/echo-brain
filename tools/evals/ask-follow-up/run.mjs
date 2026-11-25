@@ -17,7 +17,7 @@ import { createOpenRouterAnswerCompositionGenerationBundleV1 } from "@echo-brain
 import { assertExplicitRun, boundedInteger, codeIdentity, generationMetadata, json, observedGeneration, outputDirectory, readFlags, safeError, sha256 } from "../shared/runner.mjs";
 import {
   CASES_FILE, GROUPS, gradeTrial, loadCases, summarizeRules,
-  THREAD_CASES_FILE, THREAD_GROUPS, gradeThreadTrial, loadThreadCases, summarizeThreadRules,
+  THREAD_CASES_FILE, THREAD_GROUPS, gradeThreadTrial, loadThreadCases, summarizeThreadLabels, summarizeThreadRules, threadTrialLabel,
 } from "./grade.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +34,7 @@ const CODE_FILES = Object.freeze([
   "packages/organization-authority-kernel/dist/answer-composition/agentic-follow-up-resolver-v1.js",
   "packages/organization-authority-kernel/dist/answer-composition/agentic-model-gate-v1.js",
   "packages/organization-authority-kernel/dist/answer-composition/agentic-ask-v1-model-protocol.js",
+  "packages/organization-api/dist/person-answer-previous-v1.js",
   "providers/openrouter/dist/openrouter-answer-composition-generation-bundle-v1.js",
   "providers/openrouter/dist/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js",
 ]);
@@ -55,7 +56,8 @@ const SETS = Object.freeze({
   threads: Object.freeze({
     cases_file: THREAD_CASES_FILE, cases_path: "tools/evals/ask-follow-up/thread-cases.json", groups: THREAD_GROUPS, load: loadThreadCases,
     // The grader itself says whether the trials are the whole registered run: the gate is its, not the selection's.
-    trial: runThreadTrial, summarize: (results, document) => summarizeThreadRules(results, document.cases),
+    // Labels (ADR-0057) are counted beside the rules, never in them.
+    trial: runThreadTrial, summarize: (results, document) => Object.freeze({ ...summarizeThreadRules(results, document.cases), labels: summarizeThreadLabels(results) }),
     group: (trials) => groupCounts(trials, (list) => ({ named_all: list.filter((entry) => entry.named_all).length, merged: list.filter((entry) => entry.merged).length })),
     report_kind: "echo-ask-thread-evaluation-v1", progress_kind: "echo-ask-thread-evaluation-progress-v1", report_prefix: "ask-thread-evaluation",
     progress: (result) => ({ thread: result.thread }),
@@ -88,8 +90,9 @@ export function help() {
     "question, or, for threads, an open thread, the asker's other threads and a question. It goes through the production",
     "OpenRouter generation bundle; nothing is read from any tool. --out must be outside the repository and private; the",
     "report is written there with mode 0600. It keeps case ids, each trial's resolution (its resolved question, source",
-    "numbers and choices, synthetic text) or placement (its thread and merge numbers), its grade, and model metadata; never",
-    "prompts, raw replies, credentials or provider payloads.",
+    "numbers and choices, synthetic text) or placement (its thread and merge numbers, and the open thread's label, made of",
+    "the case's words), its grade, and model metadata; never prompts, raw replies, credentials or provider payloads. Labels",
+    "are counted beside the thread rules and decide nothing.",
     "",
     "Exit 0 when the set's deciding rules pass (follow-up: rules 1 and 2, so follow-ups may ship; threads: rules 1, 2 and",
     "4 over the whole set, every case once with three trials, so ECHO may pick threads), 1 when they do not, 2 on a usage",
@@ -174,7 +177,7 @@ function placementKept(placement) {
   if (placement === null) return { thread: null };
   switch (placement.thread) {
     // Its rewritten question and choices are the follow-up set's to grade.
-    case "open": return { thread: "open", resolution: placement.resolution.resolution, ...merge(placement.merge) };
+    case "open": return { thread: "open", resolution: placement.resolution.resolution, ...merge(placement.merge), ...(placement.label === undefined ? {} : { label: placement.label }) };
     case "new": return { thread: "new" };
     case "other": return { thread: "other", threads: numbers(placement.threads), ...merge(placement.merge) };
   }
@@ -191,6 +194,7 @@ export async function runThreadTrial(caseDefinition, trial, structuredOutput, ge
     case_id: caseDefinition.id, group: caseDefinition.group, trial,
     ...placementKept(placement),
     ...kept(gradeThreadTrial(caseDefinition, placement, resolved?.fallback === true)),
+    ...threadTrialLabel(caseDefinition, placement, resolved?.fallback === true),
   });
 }
 

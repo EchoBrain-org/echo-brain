@@ -4,7 +4,7 @@
  * structured reply alone, and the four rules are counts over trials; the thread resolution eval (ADR-0056) below likewise.
  */
 import { readFileSync } from "node:fs";
-import { validatePersonAnswerRequestV3, validatePersonQuestionText } from "@echo-brain/organization-api";
+import { personAnswerLabelFitsV1, validatePersonAnswerRequestV3, validatePersonQuestionText } from "@echo-brain/organization-api";
 
 export const CASES_FILE = new URL("./cases.json", import.meta.url);
 /** Each group's number of cases, as pre-registered. */
@@ -227,6 +227,26 @@ export function gradeThreadTrial(caseDefinition, placement, fallback = false) {
     default: throw new Error(`unknown thread group ${caseDefinition.group}`);
   }
   return Object.freeze({ passed, named_all: namedAll, merged: merge.length > 0 });
+}
+
+/**
+ * A thread trial's label (ADR-0057), reported only and never graded. For an answer in the open thread (`same` or
+ * `resolved`, from a reply, not the fallback): whether a label came back after the kernel's own check, and whether it fits
+ * the case's own questions as the desktop checks it. Nothing for any other trial.
+ */
+export function threadTrialLabel(caseDefinition, placement, fallback = false) {
+  if (fallback || placement?.thread !== "open" || placement.resolution.resolution === "clarify") return Object.freeze({});
+  const { previous } = caseDefinition;
+  const questions = [...(previous?.earlier ?? []).map((turn) => turn.question), ...(previous === undefined ? [] : [previous.question]), caseDefinition.question];
+  const labelled = placement.label !== undefined;
+  return Object.freeze({ labellable: true, labelled, label_fits: labelled && personAnswerLabelFitsV1(placement.label, questions) });
+}
+
+/** The labels of a thread run, counted beside its rules and never part of them: no label result gates a release. */
+export function summarizeThreadLabels(trials) {
+  const open = trials.filter((trial) => trial.labellable === true);
+  const labelled = open.filter((trial) => trial.labelled === true);
+  return Object.freeze({ reported_only: true, open_trials: open.length, labelled: labelled.length, fitting: count(labelled, (trial) => trial.label_fits === true) });
 }
 
 /** Whether graded trials are the whole registered run, which alone decides: every registered case, trials 1 to 3, once. */

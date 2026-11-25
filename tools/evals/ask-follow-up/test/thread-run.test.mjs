@@ -169,6 +169,34 @@ test("writes a private report outside the repository that applies the five pre-r
   assert.deepEqual([misrouting.report.echo_picks_threads, qualifies(misrouting.report, options())], [false, false]);
 });
 
+test("reports the open thread's labels beside the rules: how many came back past the kernel's check and fit the case, deciding nothing", async (t) => {
+  const { root, credential } = privateRoot(t);
+  const out = parseArgs(args(credential, join(root, "report"))).out;
+  const options = { set: "threads", caseIds: null, trials: 3, timeoutMs: 15_000, out, credentialFile: "/unused" };
+  const openTrials = document.cases.filter((entry) => entry.expect.thread === "open").length * 3;
+  /** The expected reply, with a label beside every open one: `words` picks it from the case. */
+  const labelling = (words) => oracle((entry) => (entry.expect.thread === "open" ? { ...expected(entry), label: words(entry) } : undefined));
+  // The new question's first two words are the person's own: the kernel keeps them, and they fit the case.
+  const own = (entry) => entry.question.split(" ").slice(0, 2).join(" ");
+  const kept = await run(options, { loaded: { structured_output: labelling(own), generation }, progress: () => undefined });
+  assert.deepEqual(kept.report.labels, { reported_only: true, open_trials: openTrials, labelled: openTrials, fitting: openTrials });
+  const trial = kept.report.results.find((result) => result.case_id === "open-details-on-that-ticket");
+  assert.deepEqual([trial.label, trial.labelled, trial.label_fits], ["what are", true, true]);
+  // A word no question of the case has is dropped by the kernel: nothing comes back, and the trial still passes.
+  const dropped = await run(options, { loaded: { structured_output: labelling(() => "Zanzibar"), generation }, progress: () => undefined });
+  assert.deepEqual(dropped.report.labels, { reported_only: true, open_trials: openTrials, labelled: 0, fitting: 0 });
+  // No label result moves a rule or the gate, and the registered set is unchanged.
+  const plain = await run(options, { loaded: { structured_output: oracle(), generation }, progress: () => undefined });
+  for (const report of [kept.report, dropped.report]) {
+    assert.deepEqual([report.rules, report.echo_picks_threads, report.complete], [plain.report.rules, plain.report.echo_picks_threads, plain.report.complete]);
+    assert.equal(report.cases_sha256, plain.report.cases_sha256);
+  }
+  assert.deepEqual(plain.report.labels, { reported_only: true, open_trials: openTrials, labelled: 0, fitting: 0 });
+  assert.ok(Object.hasOwn(plain.report.code.before.files_sha256, "packages/organization-api/dist/person-answer-previous-v1.js"));
+  // Only the open thread's trials are counted; another place carries no label key.
+  assert.ok(plain.report.results.filter((result) => result.thread !== "open").every((result) => !("labellable" in result) && !("label" in result)));
+});
+
 test("partial_or_repeated_cases_cannot_qualify_threads", async (t) => {
   const { root, credential } = privateRoot(t);
   const out = parseArgs(args(credential, join(root, "report"))).out;
