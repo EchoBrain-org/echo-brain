@@ -103,7 +103,9 @@ they are needed. None is stored.
    person was already looking at, nothing moved, so there is no line.
 4. **The question is about a joined thread.** A new chat starts. One faint
    line at its top says "Continues (label) from (date)". The label opens the
-   older chat. Right after ECHO started it, the line also carries "Undo".
+   older chat. When ECHO named that conversation for the question, the line
+   also carries "Undo" right after. A question the person asked there
+   themselves has the line and no Undo.
 5. **ECHO cannot tell.** It asks, as a reply: "Which one do you mean?", with
    a quick reply for each conversation it could be and "New question" last.
    A quick reply shows the label, and the project's name when the
@@ -133,8 +135,12 @@ they are needed. None is stored.
      as "New question" asks them. The page shows that new chat. A person who
      meant the conversation they were in reaches it through the door.
    Undo is offered until the next question, the next jump, or Ask closing.
+   It is offered only when ECHO named another conversation for the question.
    A question ECHO started as a new subject has no Undo, and neither does one
-   the person placed themselves ("Which one do you mean?", Ask again).
+   the person placed themselves: typed in the conversation it continues,
+   picked under "Which one do you mean?", or asked again. Try again on a
+   question ECHO placed keeps its Undo. So does a quick reply between things
+   that is asked in such a question's place.
 8. **Unchanged:** the bar and its "Try asking" suggestions (shown only while
    Ask is closed), the scope chip, progress, what an answer contains,
    sources, Copy, drafted follow-ups, and the sidebar's Ask.
@@ -144,15 +150,16 @@ they are needed. None is stored.
 Look and feel only. Nothing here changes what is asked, kept or sent.
 
 - **Your questions** are messages on the right, in a soft grey bubble, as
-  typed.
+  typed. A quick reply shows the question it asked, and Ask again the
+  question it asked again, as in threads v1.
 - **ECHO's replies** are messages on the left, in a white bubble. No avatar
   and no name.
 - **Short first.** The statement the answer opens with is its own short
   message: its direct answer, or the first sentence of a one-part answer that
   opens with a sentence. The rest of the answer follows as the next message,
   with the blocks (lists, tables, timelines, quotes) and citations inside it.
-  An answer that opens with a table, a list or a card, or has several parts,
-  is one message.
+  An answer with no direct answer that opens with a table, a list or a card,
+  or has several parts, is one message.
 - **Times** sit in the middle between messages, as in a texting app: above
   the first turn shown, the first of a day, and one asked an hour or more
   after the one before it.
@@ -174,7 +181,8 @@ canvas https://claude.ai/artifact/LPH5TbV5ZLNaufcJEk1xxf.
 
 ## Rules
 
-Threads v1's R1 and R3 to R10 stand. R2 is replaced, and six rules are added.
+Threads v1's R1 and R3 to R9 stand. R2 is replaced, R10 is tightened, and six
+rules are added.
 
 - **R2 (replaced). Only own words describe a thread.** A label is either a
   question the person typed in the conversation, or a line in which every
@@ -182,10 +190,22 @@ Threads v1's R1 and R3 to R10 stand. R2 is replaced, and six rules are added.
   label that fails this is dropped, wherever it is found. One exception stays
   from threads v1, on this device only: a thread none of whose turns kept the
   person's words is listed behind the door by its first turn's heading.
-  Nothing of it is sent, so ECHO never places a question in it.
+  Nothing of it is sent, so ECHO never places a question in it. Nowhere else
+  does the page show that heading, which a model may have written: a line
+  that would name such a thread says "an earlier conversation".
+- **R10 (tightened). A model-written question goes only while all it was
+  written from is readable, all the way back.** Threads v1 checked the turns
+  a question followed and what each of those carried. A link can now bring
+  another conversation's turns into a request, so the check follows every
+  turn a request carried, and what each of those followed and carried in
+  turn, until it reaches turns that followed nothing. A turn no longer kept,
+  or one that does not record what it carried, fails the check, and the
+  typed words go.
 - **R11. A thread is active for 7 days after its newest turn.** Each new turn
   starts the 7 days again. Nothing is stored: a thread is active or joined by
-  the age of its newest turn. Exactly 7 days is joined.
+  the age of its newest turn. Exactly 7 days is joined. The time that counts
+  is when the person asked the question, however long placing it then took,
+  and that is also the time its turn is kept under.
 - **R12. A joined thread never changes.** No turn is added to it, moved into
   it or moved out of it, and none of its turns is removed.
 - **R13. A question that belongs to a joined thread starts a thread that
@@ -199,13 +219,18 @@ Threads v1's R1 and R3 to R10 stand. R2 is replaced, and six rules are added.
   in it carries its turns, oldest first, under R6 and R10. It never forks: a
   question typed while any older part of it is shown continues its newest
   thread. If that thread is active the question lands in it and the page
-  shows it; if it is joined, R13 starts a thread that continues it.
+  shows it; if it is joined, R13 starts a thread that continues it. One thing
+  stays from threads v1: a question typed while an earlier exchange is open
+  (from its line, or from one of the bar's suggestions) continues that
+  exchange and carries the turns up to it. Its answer still lands at the end.
 - **R15. ECHO acts, and the person can undo.** After ECHO puts a question
   somewhere other than what the person was looking at (another active
   thread, or a new thread that continues a joined one), the page says so in
   one line and offers Undo. Undo removes only the turn ECHO just placed, and
   only while it is still the newest turn of its thread and no other turn
-  names it.
+  names it. Only ECHO naming a conversation is a placement. Where a rule
+  lands a question the person asked in a conversation (R13, R14), nothing was
+  placed for them, so there is no Undo.
 - **R16. ECHO joins conversations by linking, never by moving.** When an
   answer names another conversation as plainly the same thing, the turn that
   lands names that conversation's newest thread in `continues`. From then on
@@ -227,15 +252,18 @@ decide when ECHO asks instead of acting.
   for a conversation when it is one line of 1 to 80 characters with at least
   one word, and each of its words, ignoring case, is a word of a question the
   person typed in that conversation. Words are used as typed: "owns" does not
-  allow "owner". One function holds the rule for the API, the kernel and the
-  desktop (`personAnswerLabelFitsV1`).
+  allow "owner". It holds no control character that sets the direction of
+  text, which could show a typed word's letters in another order. One
+  function holds the rule for the API, the kernel and the desktop
+  (`personAnswerLabelFitsV1`).
 - **Who checks.** The desktop holds the person's typed words, so its check
   decides: before it keeps a label, and each time it shows or sends one. The
   Authority checks what it can see (T1 to T3). A label that fails is dropped,
   never repaired, and the Ask goes on without it.
 - **What a conversation's label is.** The label on the newest of its turns
   that has one and still passes. With none, the first question typed in its
-  newest thread, which is threads v1's name.
+  newest thread that has one, which is threads v1's name. Only turns asked
+  in the conversation's home count, for its label and for its links.
 - **Stable.** ECHO is shown the current label and keeps it unless the new
   question adds something it does not cover.
 - **No extra call.** The label comes back from the call that already places
@@ -365,9 +393,11 @@ interface PersonAnswerResponseV8 {
   thread's.
 - A label is kept only on an `open` reply that is `same` or `resolved`. The
   thread resolver sees the person's questions only inside the request's
-  turns, where a question may be a model's rewrite. So the kernel checks the
-  form, and drops a label with a word that is in no question of the open
-  thread and not in the new question. A dropped label is counted
+  turns, where a question may be a model's rewrite. The kernel first takes
+  the label as it takes any line a model writes: trimmed, with line breaks
+  and runs of spaces made single spaces, and no word changed or cut. Then it
+  checks the form, and drops a label with a word that is in no question of
+  the open thread and not in the new question. A dropped label is counted
   (`resolver_label_dropped`), never sent back for repair, and the answer goes
   without one.
 - A request with neither `threads` nor `previous.earlier` still takes the
@@ -378,7 +408,9 @@ interface PersonAnswerResponseV8 {
 ### T4. Authority
 
 Nothing new is stored, logged or audited. Labels reach the kernel as sent,
-after T1's validation.
+after T1's validation. On staging, while LangSmith tracing is on, a label
+appears in a run's exported model inputs and outputs, as the questions it is
+made of already do.
 
 ### T5. Person client
 
@@ -390,12 +422,14 @@ returned label as T2 says.
 
 - **Saved turn.** `TimelineTurn` gains `label?` and `continues?`. The host's
   `timelineTurn` accepts a label in form, and in `continues` a list of turn
-  ids, each once.
+  ids, each once. When the file is read, a saved label that is not in form is
+  left out and its turn still shows.
 - **Landing, one rule.** An answer lands in its conversation's newest thread
   when the question was asked less than 7 days after that thread's newest
   turn. Otherwise it lands in a thread of its own whose turn names that
   thread in `continues` (R13). A new subject lands in a thread of its own
-  that names nothing.
+  that names nothing. Until its answer lands, a question shows where it was
+  typed, or alone when its answer will start a thread.
 - **Placement.** When ECHO names one other conversation in the same home:
   - its newest thread is active: Ask jumps there and asks;
   - its newest thread is joined: Ask shows a new chat and asks the words as a
@@ -410,7 +444,17 @@ returned label as T2 says.
   7 days old, and no kept turn names it in `follows`, `again_of`, `carried`
   or `continues`. Otherwise it removes nothing and the page says so, as a
   warning that stays until the next page. Nothing shows removed before the
-  file agrees, and while it is being kept nothing else can be asked.
+  file agrees, and while it is being kept nothing else can be asked. A later
+  change to a kept turn (the sources a check found unreadable) is written
+  only in that turn's place (`timeline.put` with `known`), so a change still
+  on its way when Undo removes the turn never brings it back.
+- **What was decided stays decided.** A failed question keeps that ECHO
+  placed it, so Try again offers the same Undo. A "Which one do you mean?"
+  between things keeps the links and the placement of the question it is
+  for, and the quick reply picked lands with both.
+- **The timeline forgotten.** Signing out, or another account signing in,
+  stops a question on its way or still being prepared: it was built from
+  turns that are gone.
 - **Linking (R16).** When an answer's `merge` names other conversations, the
   turn that lands lists the newest thread of each in `continues`, in the same
   write that saves the turn. One in another home is left out (R9). Nothing
@@ -422,7 +466,9 @@ returned label as T2 says.
 - **The door.** The list opens from the title. "New question" sets one flag
   on the page, "next question is fresh": the next typed question is sent with
   neither `previous` nor `threads`. The flag is cleared when a question is
-  asked, a conversation is picked, or Ask closes.
+  asked, a conversation is picked, or Ask closes. Capture or a sheet coming
+  up over the page closes the list, so its Return never picks a conversation
+  behind them.
 - **Removed.** The thread's name line and merging by hand. Also everything
   that existed only to move turns between threads: `timeline.move`, the
   merge's Undo, the "Merged with" line and the messages about questions that
@@ -436,7 +482,9 @@ The founder asked that this work add no state-machine problems.
 - One short-lived record on the page, "what ECHO just placed": none, on its
   way, landed, cleared. "On its way" is a field of the question on its way,
   so it cannot outlive it. It takes the place of the merge's Undo record and
-  is cleared at the same points.
+  is cleared at the same points. A failed question and a "Which one do you
+  mean?" between things carry the same mark, so Try again and a quick reply
+  keep the Undo.
 - `timeline.remove` takes the place of `timeline.move` and its busy flag
   (`timeline.removing`).
 - Taken away: the move between threads and the merge's Undo, with their
@@ -454,9 +502,9 @@ The founder asked that this work add no state-machine problems.
 - Rule 4 (never merge wrongly) now guards links. It matters more than
   before: a wrong link joins two conversations for good.
 - Added, reported only: for trials that answer in the open thread, how many
-  returned a label and how many of those fit the case's own questions. No
-  label result gates a release, because a failed label is dropped.
-- Not built: how often a fitting label is kept unchanged. No registered case
+  returned a label that passed the kernel's check. A label that fails that
+  check is dropped before it is counted. No label result gates a release.
+- Not built: how often a label is kept unchanged. No registered case
   shows a current label, and the registered cases do not change.
 - **If the gate fails,** ECHO does not place questions: the desktop stops
   sending `threads`, as threads v1 says. What is left works without it. A
@@ -466,9 +514,10 @@ The founder asked that this work add no state-machine problems.
   would then be the only way to move, and whether it should stay hidden is a
   call for that day.
 - Unit and end-to-end tests pin each rule: R2's check on the desktop and in
-  the API, R11's 7 days at the boundary, R12, R13 for each of its three ways
-  in, R14, R15 (Undo while on its way, Undo after landing, and each reason
-  `timeline.remove` refuses), R16, and the door.
+  the API, R10 all the way back, R11's 7 days at the boundary, R12, R13 for
+  each of its three ways in, R14, R15 (Undo while on its way, Undo after
+  landing, each reason `timeline.remove` refuses, and no Undo for the
+  person's own question), R16, and the door.
 
 ## Known and accepted
 
@@ -486,6 +535,21 @@ The founder asked that this work add no state-machine problems.
   handles that as before.
 - Follow-ups an undone answer drafted stay, unsent, in the person's own
   list. Undo removes the answer from this computer only.
+- A save that fails can split a conversation after a restart. If the first
+  turn of a thread that continues another could not be saved, later turns in
+  it are saved without the link, and after ECHO restarts they show as a
+  conversation of their own. The page says at the time that the answer could
+  not be saved.
+- "Which one do you mean?" between things shows no line. When ECHO placed
+  the question first, the "Continuing" line and its Undo come back once a
+  quick reply is picked.
+- Find, behind the door, looks at a conversation's label and its typed
+  questions as they are sent. A question a later one repeats is found by the
+  later wording.
+- A word is a run of letters, so in a language written without spaces a
+  whole phrase counts as one word. There a label can only repeat a phrase as
+  it was typed, and most conversations keep their first question as their
+  name. Nothing is shown or sent that was not typed.
 - 7 days and 80 characters are product choices. The first is the founder's
   rule. The second keeps a label to one line of a "Which one?" button.
 
@@ -527,6 +591,12 @@ The founder asked that this work add no state-machine problems.
 10. **An earlier turn shows the question as typed,** not the full question
     ECHO worked out, because the reply's first message sits right under it.
 11. **Undo leaves drafted follow-ups** in the person's own list.
+12. **Undo only when ECHO chose.** A question the person typed in a
+    conversation, even one a week old, gets no Undo: they put it there. Only
+    a question ECHO moved to another conversation has one.
+13. **"an earlier conversation".** A line that would name a conversation
+    none of whose questions kept the person's words says this, because its
+    old heading may be a model's.
 
 ## Delivery
 

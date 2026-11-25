@@ -84,7 +84,11 @@ Adopt option 1, with the founder's decisions above.
 - **A conversation is a thread with everything it continues or is linked
   to.** It is one entry in the request's `threads`, it has one label, and
   "Which one?" offers it once. A follow-up carries its turns as `previous`
-  and `earlier`, under the same checks as before (INV-PERMISSIONS-015).
+  and `earlier`, under the same checks as before (INV-PERMISSIONS-015). A
+  link can bring another conversation's turns into a request, so ADR-0056's
+  rule for a question a model wrote is tightened: it goes only while every
+  turn it could have been written from is kept and readable, followed all
+  the way back through what each turn carried.
 - **ECHO links instead of merging.** The answer's `merge` is unchanged on the
   wire. The desktop now writes the named conversations into `continues` on
   the turn that lands, in the write that saves it. `timeline.move`, merging
@@ -96,7 +100,11 @@ Adopt option 1, with the founder's decisions above.
   stops a question on its way, or removes the one turn that landed in a
   compare-and-set write (`timeline.remove`: only the newest turn of an active
   thread that no kept turn names), and asks the same words as a new question
-  with nothing carried.
+  with nothing carried. Only ECHO naming another conversation is a
+  placement: a question the person asked in a conversation has no Undo,
+  wherever the rules land it. A later change to a kept turn is written only
+  in its place, so one still on its way never brings back a turn Undo
+  removed.
 - **Labels in the person's own words.** This replaces ADR-0056's rule that
   only typed questions describe a thread: a label may also be a line whose
   every word the person typed in that conversation. `POST /v7/person/ask`
@@ -107,7 +115,8 @@ Adopt option 1, with the founder's decisions above.
   label with a word in no question it was shown; the desktop, which alone
   holds the typed words, checks before it keeps, shows or sends one. A label
   that fails is dropped and never fails an Ask. 80 characters keeps a label
-  to one line of a "Which one?" button (ADR-0055).
+  to one line of a "Which one?" button (ADR-0055). A label holds no control
+  character that sets the direction of text.
 - **The page is one conversation.** The thread's name line and the list
   under it are gone (this updates ADR-0049's page and ADR-0056's). Questions
   are messages on the right and replies on the left. The page title is a
@@ -115,7 +124,9 @@ Adopt option 1, with the founder's decisions above.
   there until then.
 - **No new stored or logged data on the Authority.** Labels are the asker's
   own words, context like `previous`, never evidence, and are not stored.
-  The audit record stays one content-free row per request.
+  The audit record stays one content-free row per request. On staging, while
+  LangSmith tracing is on, a label appears in a run's exported model
+  payloads, as the questions it is made of already do.
 - **Unchanged.** A request with neither `threads` nor `earlier` gets byte
   for byte the earlier prompts, schemas and responses, and no label.
 
