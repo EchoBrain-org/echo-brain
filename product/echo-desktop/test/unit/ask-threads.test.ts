@@ -1160,14 +1160,16 @@ describe('a question a model wrote goes only while every turn that could have in
   });
 
   it('follows what a question was written from all the way back: a turn carried by a turn its request carried counts, though that request never carried it', async () => {
+    const teams = turn('Which teams are there?', 7 * DAY);
     const other = orion();
-    // Asked in the other thread after it, carrying it; the pilot's follow-up carried this one, and not the turn before it.
-    const between = turn('What does that team own?', 5 * DAY, { follows: other.id, thread: other.id, carried: [other.id] });
+    // It followed a turn that still reads, and carried the other thread's turn only as an older turn; the pilot's
+    // follow-up carried this one, and neither of those.
+    const between = turn('What does that team own?', 5 * DAY, { follows: teams.id, thread: teams.id, carried: [teams.id, other.id] });
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 3 * DAY]);
     const rewrite = `Who signs off the pilot that ${NAME} leads?`;
     const followUp = turn(rewrite, 2 * DAY, { text: 'and who signs it off?', typed: 'and who signs it off?', follows: pilot[0]!.id, thread: pilot[0]!.id,
       answer: answerOf('and who signs it off?'), carried: [pilot[0]!.id, between.id] });
-    seed(other, between, ...pilot, followUp);
+    seed(teams, other, between, ...pilot, followUp);
     const store = await startStore();
     orionGone();
     store.askAgain(followUp.id);
@@ -1179,6 +1181,28 @@ describe('a question a model wrote goes only while every turn that could have in
     store.askAgain(followUp.id);
     await flush();
     expect(asked()[1]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
+  });
+
+  it.each<[string, (rewritten: TimelineTurn, first: TimelineTurn) => TimelineTurn[], boolean]>([
+    // [the record, the timeline with the rewritten turn last named `rewritten`, whether its full question goes]
+    ['names itself as the turn it followed', rewritten => [{ ...rewritten, follows: rewritten.id }], false],
+    ['names itself among the turns it carried', (rewritten, first) => [first, { ...rewritten, carried: [first.id, rewritten.id] }], false],
+    ['follows a turn kept after it', (rewritten, first) => [{ ...rewritten, follows: first.id }, first], false],
+    ['shares a turn with another it carried, each reached once', (rewritten, first) => {
+      const [left, right] = ['and the budget?', 'and the owner?'].map((question, at) => turn(question, (5 - at) * DAY, { follows: first.id, thread: first.id, carried: [first.id] }));
+      return [first, left!, right!, { ...rewritten, follows: left!.id, carried: [left!.id, right!.id] }];
+    }, true],
+  ])('takes a history that comes back on itself as no history, and one that only meets again as whole: a turn that %s', async (_how, timeline, whole) => {
+    const first = turn('When does the pilot start?', 6 * DAY);
+    const rewrite = 'Who signs off the pilot for the launch?';
+    const rewritten = turn(rewrite, 2 * DAY, { text: 'and who signs it off?', typed: 'and who signs it off?', follows: first.id, thread: first.id,
+      answer: answerOf('and who signs it off?'), carried: [first.id] });
+    seed(...timeline(rewritten, first));
+    const store = await startStore();
+    store.askAgain(rewritten.id);
+    await flush();
+    const sent = whole ? rewrite : 'and who signs it off?';
+    expect(asked()[0]).toMatchObject({ question: sent, previous: { purpose: 'ask_again', question: sent } });
   });
 
   it('sends no question a model wrote once a turn its request carried is no longer kept, though every turn there reads', async () => {
@@ -1480,6 +1504,48 @@ describe('the way out of every wait', () => {
     expect(store.getState().timeline.turns).toHaveLength(5);
   });
 
+  it('drops a pick still reading its project, and an Ask again still checking with Ask closed, when the timeline is forgotten: nothing is asked and the page stays', async () => {
+    const { tests, pilot } = seeded();
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Which tests fail?'), placeOf(params, 'Who owns billing?')]) : null);
+    const store = await startStore();
+    await store.ask('are they fixed?');
+    await flush();
+    const reading = held.hold('projects.read');
+    const pick = store.chooseThread(tests[0]!.id);
+    await readAgain(store);
+    reading(ok(apollo));
+    await pick;
+    await flush();
+    expect([asked().length, store.getState().route.page]).toEqual([1, 'home']);
+    store.closeAsk();
+    const check = held.hold('ask.check');
+    store.askAgain(pilot[1]!.id);
+    await flush();
+    await readAgain(store);
+    check(ok({ items: [{ state: 'same' }, { state: 'same' }] }));
+    await flush();
+    expect([asked().length, store.getState().ask]).toEqual([1, null]);
+  });
+
+  it('asks in a picked conversation when the person picked it, however long reading its project took (R11): picked a second before the week is up, it lands in that thread', async () => {
+    const tests = threadIn(inApollo, ['Which tests fail?', 7 * DAY - 1000]);
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 2 * DAY]);
+    seed(...tests, ...billing);
+    script = params => (params.threads ? elsewhere(params, [0, 1]) : null);
+    const store = await startStore();
+    await store.ask('are they fixed?');
+    await flush();
+    const reading = held.hold('projects.read');
+    const pick = store.chooseThread(tests[0]!.id);
+    vi.setSystemTime(NOW.getTime() + 2000);
+    reading(ok(apollo));
+    await pick;
+    await flush();
+    const landed = kept().at(-1)!;
+    expect(landed).toMatchObject({ text: 'are they fixed?', thread: tests[0]!.id, asked_at: NOW.toISOString() });
+    expect(landed).not.toHaveProperty('continues');
+  });
+
   it('moves nothing when × widens the bar while ECHO is placing the question: Ask stays on the thread it showed, nothing is asked, and the words go back to the bar', async () => {
     const tests = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
     const flaky = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
@@ -1741,6 +1807,46 @@ describe('a joined thread never changes: a question for it starts a thread that 
     expect([store.continuesNote()!.undo, store.getState().ask?.placed != null]).toEqual([undo, undo]);
   });
 
+  it('shows the line with no Undo while a question typed in a joined thread is on its way, as after it lands; and Undo for none ECHO sends back to the conversation that was on screen', async () => {
+    const { billing } = seeded();
+    const store = await opened(billing[0]!.id);
+    const land = held.hold('ask.run');
+    void store.ask('who approves the invoices?');
+    await flush();
+    expect(store.getState().ask?.asking).toMatchObject({ thread: null, continues: billing[0]!.id, placed: false });
+    expect(store.continuesNote()).toMatchObject({ thread: billing[0]!.id, undo: false });
+    await store.undoPlaced();
+    expect(calls('ask.cancel')).toEqual([]);
+    land(answered(asked()[0]!));
+    await flush();
+    expect([store.continuesNote()?.undo, store.getState().ask?.placed]).toEqual([false, null]);
+    // The sidebar's Ask shows that conversation without the person being in it: the next question is placed among all of
+    // them, and ECHO names the one on screen. Nothing went anywhere else, so the line offers no Undo.
+    store.closeAsk();
+    vi.setSystemTime(NOW.getTime() + 8 * DAY);
+    await store.returnToAsk();
+    await flush();
+    const shown = store.threadShown()!.id;
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')]) : null);
+    await store.ask('and who signs them?');
+    await flush();
+    const landed = kept().at(-1)!;
+    expect(landed).toMatchObject({ text: 'and who signs them?', thread: landed.id, continues: [shown] });
+    expect([store.continuesNote()?.undo, store.getState().ask?.placed]).toEqual([false, null]);
+  });
+
+  it('names the older part by what was asked where it lives: a label or words on a turn a file keeps there from another place never show on the line', async () => {
+    const [root] = threadIn(inApollo, ['Which tests are flaky?', 9 * DAY]);
+    const stray = turn('Asked at Home', 8 * DAY + HOUR, { thread: root!.id, label: 'flaky tests' });
+    const [next] = threadIn(inApollo, ['and now?', DAY]).map(each => ({ ...each, continues: [root!.id] }));
+    seed(root!, stray, next!);
+    const store = await startStore();
+    await store.openProject(apollo);
+    await store.openThread(next!.id);
+    await flush();
+    expect(store.continuesNote()).toMatchObject({ thread: root!.id, label: 'Which tests are flaky?' });
+  });
+
   it('calls a joined thread none of whose turns kept the person\'s words "an earlier conversation" on the line, never by its first heading, which a model may have written (R2)', async () => {
     const { typed: _typed, follows: _follows, ...legacy } = turn('What are the details on THERM-490?', 9 * DAY);
     seed(legacy);
@@ -1847,6 +1953,12 @@ describe('a conversation is one: one entry, one button, one way on (R14)', () =>
     const [billing] = threadIn(GLOBAL, ['Who owns billing?', 10 * DAY]);
     const { typed: _typed, follows: _follows, ...untyped } = turn('What are the details on THERM-490?', 3 * DAY, { continues: [billing!.id] });
     expect(chainsOf([billing!, untyped])).toMatchObject([{ id: untyped.id, own: 'Who owns billing?', label: 'Who owns billing?', questions: ['Who owns billing?'] }]);
+    // An untyped root in Apollo, a Home turn a file keeps in its thread, then a question typed in Apollo: only that one names it.
+    const { typed: _unkept, follows: _unknown, ...heading } = turn('Old heading?', 6 * DAY, { scope: inApollo });
+    const elsewhere = turn('Home only words', 5 * DAY, { thread: heading.id });
+    expect([threadsOf([heading, elsewhere])[0]!.own, threadsOf([heading, elsewhere])[0]!.name]).toEqual([undefined, 'Old heading?']);
+    const there = turn('Apollo own words', 4 * DAY, { scope: inApollo, thread: heading.id, follows: heading.id });
+    expect(chainsOf([heading, elsewhere, there])[0]).toMatchObject({ own: 'Apollo own words', label: 'Apollo own words', questions: ['Apollo own words'] });
     const [fail] = threadIn(inApollo, ['Which tests fail?', 5 * DAY]);
     const [flaky] = threadIn(inApollo, ['Which tests are flaky?', 4 * DAY]);
     const apart = (turns: TimelineTurn[]) => chainsOf(turns).map(chain => chain.threads.map(thread => thread.id));
@@ -2148,18 +2260,43 @@ describe('ECHO joins conversations by linking, never by moving (R16)', () => {
 });
 
 describe('what ECHO decided for a question stays decided through "Which one?" between things', () => {
-  it('lands the choice asked in the follow-up\'s place with the link ECHO named, and with the Undo of its placement', async () => {
+  const choices = [{ label: 'March', question: 'Who approves the March invoices?' }, { label: 'April', question: 'Who approves the April invoices?' }];
+  /** From the pilot's thread, a question ECHO moves to billing's, linked to the ledger's, where it could mean two things. */
+  const asking = async () => {
     const billing = threadIn(GLOBAL, ['Who owns billing?', 5 * DAY], ['when is it due?', 4 * DAY]);
     const ledger = threadIn(GLOBAL, ['Where is the ledger?', 3 * DAY]);
     const pilot = threadIn(GLOBAL, ['When does the pilot start?', 2 * DAY]);
     seed(...billing, ...ledger, ...pilot);
-    const choices = [{ label: 'March', question: 'Who approves the March invoices?' }, { label: 'April', question: 'Who approves the April invoices?' }];
     script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')], { merge: [placeOf(params, 'Where is the ledger?')] })
       : params.question === 'who approves the invoices?'
         ? ok({ scope: GLOBAL, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'who approves the invoices?', choices }) : null);
     const store = await opened(pilot[0]!.id);
     await store.ask('who approves the invoices?');
     await flush();
+    return { store, billing, ledger, pilot };
+  };
+
+  it('asks the person\'s own words again, never the quick reply\'s, when Undo stops the choice while it is on its way', async () => {
+    const { store } = await asking();
+    const land = held.hold('ask.run');
+    store.chooseClarified(choices[0]!);
+    await flush();
+    expect(store.getState().ask?.asking).toMatchObject({ question: 'Who approves the March invoices?', typed: 'who approves the invoices?', placed: true });
+    script = null;
+    await store.undoPlaced();
+    await flush();
+    const again = asked().at(-1)!;
+    expect(again).toMatchObject({ question: 'who approves the invoices?' });
+    for (const key of ['previous', 'threads']) expect(again).not.toHaveProperty(key);
+    const saved = kept().at(-1)!;
+    expect(saved).toMatchObject({ text: 'who approves the invoices?', typed: 'who approves the invoices?', thread: saved.id, follows: null });
+    land(answered(asked().at(-2)!));
+    await flush();
+    expect(kept().at(-1)).toEqual(saved);
+  });
+
+  it('lands the choice asked in the follow-up\'s place with the link ECHO named, and with the Undo of its placement', async () => {
+    const { store, billing, ledger, pilot } = await asking();
     expect(store.getState().ask?.clarify).toMatchObject({ kind: 'choices', thread: billing[0]!.id, links: [ledger[0]!.id], echo: { shown: pilot[0]!.id } });
     store.chooseClarified(choices[0]!);
     await flush();

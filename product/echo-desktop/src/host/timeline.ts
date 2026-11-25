@@ -124,11 +124,13 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
  * Keeps `turn` in the account's file: in place of the turn with its id, or at
  * the end. `known`: a change to a turn already kept, so only in its place: one
  * the file no longer holds was taken back (removeTimeline), and a change still
- * on its way then never brings it back. A kept turn stays in the thread the
+ * on its way then never brings it back; a file that cannot be read fails it,
+ * where a first save replaces such a file. A kept turn stays in the thread the
  * file has it in, whatever the page sends: no write moves a turn between
  * threads (ADR-0057, R12).
  */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, known = false): void {
+  // A change is read strictly: with a file that cannot be read it fails, and is never taken as made.
   rewriteTimeline(personDirectory, account, (turns) => {
     const put = turn as unknown as StoredTurn;
     const at = turns.findIndex(kept => kept.id === turn.id);
@@ -136,7 +138,7 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
     const { thread } = turns[at]!;
     turns[at] = typeof thread === 'string' && ID.test(thread) ? { ...put, thread } : put;
     return turns;
-  });
+  }, known);
 }
 
 /**

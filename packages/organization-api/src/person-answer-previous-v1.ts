@@ -74,18 +74,23 @@ export interface PersonAnswerThreadV1 {
  */
 export const PERSON_ANSWER_LABEL_MAX_CHARS_V1 = 80;
 
-/** The words of a text, as the label rule compares them: each run of letters, marks or digits, in NFC and lower case. */
+/**
+ * The words of a text, as the label rule compares them: each run of letters, marks or digits, in NFC and lower case. A
+ * joiner (U+200C, U+200D) belongs to the word it sits in, as it shapes how that word reads (Persian, the Indic scripts).
+ */
 export function personAnswerLabelWordsV1(text: string): string[] {
-  return (text.normalize('NFC').match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).map(word => word.toLowerCase());
+  return (text.normalize('NFC').match(/[\p{L}\p{M}\p{N}\u200C\u200D]+/gu) ?? []).map(word => word.toLowerCase());
 }
 
 /**
- * Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds at least one word. It holds
- * no control that sets the direction of text: one shows a typed word's letters in another order, as a word nobody typed.
+ * Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds a letter, mark or digit. It
+ * holds no character that shows as nothing or changes how the text around it reads (a control, or a format character
+ * other than a joiner): one between two typed words shows them as one word, or their letters in another order, which
+ * nobody typed.
  */
 export function isPersonAnswerLabelV1(value: unknown): value is string {
-  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !/[\p{Cc}\p{Zl}\p{Zp}\u202A-\u202E\u2066-\u2069]/u.test(value)
-    && [...value].length <= PERSON_ANSWER_LABEL_MAX_CHARS_V1 && personAnswerLabelWordsV1(value).length > 0;
+  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !/[\p{Cc}\p{Zl}\p{Zp}]|(?![\u200C\u200D])\p{Cf}/u.test(value)
+    && [...value].length <= PERSON_ANSWER_LABEL_MAX_CHARS_V1 && /[\p{L}\p{M}\p{N}]/u.test(value);
 }
 
 /**

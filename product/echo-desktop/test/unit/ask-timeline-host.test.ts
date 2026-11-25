@@ -172,6 +172,17 @@ describe('the timeline file (C5)', () => {
     // The first save of a turn still keeps it at the end.
     putTimeline(person, ARI, marked);
     expect(readTimeline(person, ARI)[1]).toEqual(marked);
+    // A change is read strictly: a file that cannot be read fails it and is left as it was, where a first save replaces it.
+    const path = timelinePath(person, ARI);
+    writeFileSync(path, 'not json', { mode: 0o600 });
+    expect(() => putTimeline(person, ARI, marked, true)).toThrow();
+    expect(readFileSync(path, 'utf8')).toBe('not json');
+    putTimeline(person, ARI, marked);
+    expect(readTimeline(person, ARI)).toEqual([marked]);
+    // With no file there is nothing to change, and none is made.
+    rmSync(path);
+    putTimeline(person, ARI, marked, true);
+    expect(existsSync(path)).toBe(false);
   });
 
   it('leaves out a saved label that is not in form and shows its turn: a label that fails is dropped, never the answer it came with (R2)', () => {

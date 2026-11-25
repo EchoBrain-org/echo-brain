@@ -388,7 +388,7 @@ export interface Thread {
   readonly turns: readonly TimelineTurn[];
   /** Where it lives: its first turn's scope, or its oldest's once that is gone; every turn is asked there (R9). */
   readonly home: AskScope;
-  /** The question typed for its first turn, or the first typed in it (R2); undefined when nothing in it kept the person's words. */
+  /** The question typed for its first turn, or the first typed in it where it lives (R2); undefined when nothing asked there kept the person's words. */
   readonly own?: string;
   /** What the door lists it by: `own`, or with none its first turn's heading as that turn shows it, never sent and shown nowhere else. */
   readonly name: string;
@@ -408,9 +408,11 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
   return [...grouped].map(([id, own]) => {
     // The turn it is named after is its first; once that is gone, its oldest kept stands in.
     const first = own.find(turn => turn.id === id) ?? own[0]!;
-    const worded = [first, ...own].find(turn => ownWords(turn)?.trim());
+    const home = first.scope;
+    // Only what was asked in its home names it: a turn an older file keeps here from another place never does.
+    const worded = [first, ...own].find(turn => sameScope(turn.scope, home) && ownWords(turn)?.trim());
     const typed = worded && ownWords(worded)!.trim();
-    return { id, turns: own, home: first.scope, ...(typed === undefined ? {} : { own: typed }), name: typed ?? first.text.trim(), asked_at: own.at(-1)!.asked_at };
+    return { id, turns: own, home, ...(typed === undefined ? {} : { own: typed }), name: typed ?? first.text.trim(), asked_at: own.at(-1)!.asked_at };
   });
 }
 

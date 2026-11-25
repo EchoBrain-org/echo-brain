@@ -100,9 +100,9 @@ Adopt option 1, with the founder's decisions above.
   stops a question on its way, or removes the one turn that landed in a
   compare-and-set write (`timeline.remove`: only the newest turn of an active
   thread that no kept turn names), and asks the same words as a new question
-  with nothing carried. Only ECHO naming another conversation is a
-  placement: a question the person asked in a conversation has no Undo,
-  wherever the rules land it. A later change to a kept turn is written only
+  with nothing carried. Only ECHO naming a conversation other than the one
+  the person was looking at is a placement: a question the person asked in
+  a conversation has no Undo, wherever the rules land it. A later change to a kept turn is written only
   in its place, so one still on its way never brings back a turn Undo
   removed.
 - **Labels in the person's own words.** This replaces ADR-0056's rule that
@@ -116,7 +116,8 @@ Adopt option 1, with the founder's decisions above.
   holds the typed words, checks before it keeps, shows or sends one. A label
   that fails is dropped and never fails an Ask. 80 characters keeps a label
   to one line of a "Which one?" button (ADR-0055). A label holds no control
-  character that sets the direction of text.
+  or format character, which could show typed words as a word nobody typed;
+  a joiner inside a word is part of that word.
 - **The page is one conversation.** The thread's name line and the list
   under it are gone (this updates ADR-0049's page and ADR-0056's). Questions
   are messages on the right and replies on the left. The page title is a

@@ -77,8 +77,10 @@ export interface AskAsking extends AskQuestion {
   progress: AskProgress;
   /** The joined thread its answer's own thread will continue (R13), if any: it shows alone under that thread's "Continues" line. */
   continues: string | null;
-  /** ECHO named its conversation, away from what the person was looking at (R15): its line offers Undo, which stops it. */
+  /** ECHO named its conversation, another than the one the person was looking at (R15): its line offers Undo, which stops it. */
   placed: boolean;
+  /** The person's own words for it, which that Undo asks again: the question itself, unless it is a quick reply's. */
+  typed: string | null;
 }
 
 /**
@@ -3677,12 +3679,14 @@ async function loadTimeline(): Promise<void> {
 
 /**
  * Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the
- * host's. An Undo's removal on its way ends here: its reply is for a timeline that is gone. So does a question on its
- * way or being prepared: it was built from turns that are gone, and the same account signing back in reads them again.
+ * host's. An Undo's removal on its way ends here: its reply is for a timeline that is gone. So do a question on its
+ * way or being prepared and a jump still reading its project: they were built from turns that are gone, and the same
+ * account signing back in reads them again.
  */
 function forgetTimeline(): void {
   timelineSeq += 1;
   removeSeq += 1;
+  jumpSeq += 1;
   stopAsk();
   forgetChecks();
   forgetAskCards();
@@ -3909,25 +3913,30 @@ interface Derived {
  * The one rule for a question the model may have written (ADR-0047, C5, R10), first and on Try again alike: it goes
  * only when a check made by this very call finds every turn it could have been written from kept and readable, wherever
  * filed: the turn it followed, those its request carried and a choice's `offered`, and the same of each of those in
- * turn, all the way back. A turn no longer kept, one saved before `follows`, or one naming its thread with no record of
- * what it carried fails it. Otherwise only the typed words go; a first question in them needs no check. The same check
+ * turn, all the way back. A turn no longer kept, one saved before `follows`, one naming its thread with no record of
+ * what it carried, or one that names a turn kept after it fails it. Otherwise only the typed words go; a first question
+ * in them needs no check. The same check
  * covers the older turns that ride (`riding`); one back after its five minutes is as none; access lost later is the
  * Authority's to catch.
  */
 async function questionOf(turn: TimelineTurn, riding: readonly TimelineTurn[] = [], offered: readonly string[] = []): Promise<Derived> {
-  const byId = new Map(state.timeline.turns.map(each => [each.id, each]));
+  const kept = new Map(state.timeline.turns.map((each, at) => [each.id, { each, at }]));
   /** Whether a turn says what its question was written from: one that does not predates the record, so nothing a model wrote from it goes. */
   const recorded = (each: TimelineTurn) => each.follows !== undefined && (each.thread === undefined || each.carried !== undefined);
+  /** The turns a turn names, each to be found before it: a question is written from turns kept before its own. */
+  const named = (each: TimelineTurn, before: number) => [each.follows, ...(each.carried ?? [])].map(id => ({ id, before }));
   const informed = new Map([[turn.id, turn]]);
   let whole = recorded(turn);
-  const pending = [turn.follows, ...(turn.carried ?? []), ...offered];
+  const pending = [...named(turn, kept.get(turn.id)?.at ?? -1), ...offered.map(id => ({ id, before: Number.POSITIVE_INFINITY }))];
   while (pending.length > 0) {
-    const id = pending.pop();
-    if (id == null || informed.has(id)) continue;
-    const each = byId.get(id);
-    if (each === undefined || !recorded(each)) { whole = false; continue; }
-    informed.set(id, each);
-    pending.push(each.follows, ...(each.carried ?? []));
+    const { id, before } = pending.pop()!;
+    if (id == null) continue;
+    const there = kept.get(id);
+    // One kept at or after the turn that names it is a history that comes back on itself, and never ends at a first question.
+    if (there === undefined || there.at >= before || !recorded(there.each)) { whole = false; continue; }
+    if (informed.has(id)) continue;
+    informed.set(id, there.each);
+    pending.push(...named(there.each, there.at));
   }
   const went = Date.now();
   // What is not whole sends typed words whatever a check says: then only the turn's own sources are asked about.
@@ -4045,10 +4054,10 @@ async function askAs(how: AskHow, scope: AskScope, echo?: AskEcho, started = Dat
   let typed: string | null = text;
   if (how.kind !== 'typed') {
     if (!from && how.kind !== 'choice') return;
-    const before = state.ask?.seq;
+    const [before, read] = [state.ask?.seq, timelineSeq];
     derived = from ? await questionOf(from, [], how.kind === 'choice' ? how.carried : []) : null;
-    // Asked meanwhile, Ask closed or moved to another thread, or another account: this one is not asked.
-    if (state.ask?.seq !== before || askBusy() || !sameAccount(account)) return;
+    // Asked meanwhile, Ask closed or moved to another thread, the timeline forgotten, or another account: this one is not asked.
+    if (state.ask?.seq !== before || read !== timelineSeq || askBusy() || !sameAccount(account)) return;
     typed = how.kind === 'choice' ? how.typed : from?.typed ?? null;
     text = how.kind === 'choice' ? (derived?.readable ? how.question : typed) : derived?.question ?? null;
   }
@@ -4059,8 +4068,6 @@ async function askAs(how: AskHow, scope: AskScope, echo?: AskEcho, started = Dat
   const again = how.kind === 'again';
   const view = state.ask ?? { ...newAsk(null), forQuestion: true };
   const mine = ++seq;
-  const cancelId = crypto.randomUUID();
-  activeAskCancelId = cancelId;
   // The conversation it goes on: none when it continues no turn, asks everywhere, or asks again a turn living elsewhere.
   const chain = how.kind === 'everywhere' ? undefined : chainAt(from, scope);
   // Where its answer is to land (R12 to R14): in the conversation's newest thread while that is active. A joined thread
@@ -4069,13 +4076,13 @@ async function askAs(how: AskHow, scope: AskScope, echo?: AskEcho, started = Dat
   const within = target !== undefined && threadActive(target, started) ? target.id : null;
   const continues = target !== undefined && within === null ? target.id : null;
   const named: AskQuestion = { question: text, scope, thread: within };
-  // ECHO named this conversation, and it is not what the person was looking at when they asked (R15): its line offers
-  // Undo. A question a person asked in a conversation is theirs, wherever the rules land it, and has none.
-  const placed = echo !== undefined && target !== undefined && (continues !== null || target.id !== echo.shown);
+  // ECHO named this conversation, and it is not the one the person was looking at when they asked (R15): its line
+  // offers Undo. A question a person asked in a conversation is theirs, wherever the rules land it, and has none.
+  const placed = echo !== undefined && typed !== null && chain !== undefined && chain !== chainOf(echo.shown);
   // Ask again in the open thread is the person picking it: they are in it from here.
   const open = again && view.thread?.id === within ? { ...view.thread, entered: true } : view.thread;
   set({
-    ask: { ...view, seq: mine, thread: open, asking: { ...named, progress: startProgress(started), continues, placed }, clarify: null, failed: null,
+    ask: { ...view, seq: mine, thread: open, asking: { ...named, progress: startProgress(started), continues, placed, typed }, clarify: null, failed: null,
       placed: null, fresh: false, door: false, ...(again ? { opened: null } : {}) },
     sources: freshSources(null), toast: null,
   });
@@ -4085,7 +4092,6 @@ async function askAs(how: AskHow, scope: AskScope, echo?: AskEcho, started = Dat
   if (how.kind === 'typed' && from) {
     derived = await questionOf(from, older);
     if (state.ask?.seq !== mine || !sameAccount(account)) {
-      if (activeAskCancelId === cancelId) activeAskCancelId = null;
       notAsking(mine);
       return; // cancelled, or Ask was left, while what it carries was checked
     }
@@ -4101,6 +4107,9 @@ async function askAs(how: AskHow, scope: AskScope, echo?: AskEcho, started = Dat
   // oldest), and a choice's offer; other conversations go by own words only (R2).
   const went = carries.previous === undefined || !from ? [] : [from.id, ...older.slice(older.length - (carries.previous.earlier?.length ?? 0)).map(each => each.id)];
   const carried = [...new Set([...(how.kind === 'choice' ? how.carried : []), ...went])];
+  // From here the host has a question to stop: Cancel, or leaving Ask, tells it.
+  const cancelId = crypto.randomUUID();
+  activeAskCancelId = cancelId;
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId,
     ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
@@ -4299,7 +4308,7 @@ export function clarifyThreads(current: State = state): ThreadChoice[] {
 export async function chooseThread(id: string): Promise<void> {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'threads' || askBusy() || !clarifyThreads().some(choice => choice.id === id)) return;
-  const bar = state.barScope;
+  const [bar, picked] = [state.barScope, Date.now()];
   const jumped = await jump(id, null, true, true);
   const view = state.ask;
   if (jumped === 'unreachable' && view?.clarify === clarify) {
@@ -4314,7 +4323,8 @@ export async function chooseThread(id: string): Promise<void> {
   }
   const chain = chainOf(id);
   if (jumped !== 'shown' || !chain || view?.thread?.id !== id || askBusy()) return;
-  await askThere(chain, clarify.question, clarify.links, chain.home);
+  // Asked when the person picked it, however long reading its project took (R11).
+  await askThere(chain, clarify.question, clarify.links, chain.home, undefined, picked);
 }
 
 /**
@@ -4553,7 +4563,7 @@ export function continuesNote(current: State = state): ContinuesNote | null {
   const placed = view.placed;
   const undo = view.asking ? starting !== null && view.asking.placed
     : placed?.kind === 'continued' && shown !== undefined && shown.turns.some(turn => turn.id === placed.turn);
-  return { thread: older.id, label: labelOf(older.turns, chain.questions) ?? older.own ?? UNNAMED_CONVERSATION, asked_at: older.asked_at, undo };
+  return { thread: older.id, label: labelOf(homeTurns(older, older.home), chain.questions) ?? older.own ?? UNNAMED_CONVERSATION, asked_at: older.asked_at, undo };
 }
 
 /**
@@ -4570,11 +4580,11 @@ export async function undoPlaced(): Promise<void> {
   if (!view || !account || state.timeline.removing) return;
   const asking = view.asking;
   if (asking) {
-    if (!asking.placed) return;
+    if (!asking.placed || asking.typed === null) return;
     // The person's own move: a jump still waiting gives way to it (navSeq).
     navSeq += 1;
     stopAsk();
-    void askAs(asNew(asking.question), asking.scope);
+    void askAs(asNew(asking.typed), asking.scope);
     return;
   }
   const placed = view.placed;

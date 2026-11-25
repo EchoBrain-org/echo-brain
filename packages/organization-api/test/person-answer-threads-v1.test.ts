@@ -120,6 +120,17 @@ describe('a conversation\'s label (ADR-0057)', () => {
     // A control that sets the direction of text would show "evil" as "live", a word nobody typed; right-to-left words need none.
     for (const label of ['\u202Eevil\u202C', 'pilot \u202Bstart', '\u2066pilot\u2069', 'pilot\u2067']) expect(isPersonAnswerLabelV1(label), JSON.stringify(label)).toBe(false);
     expect(isPersonAnswerLabelV1('\u05D8\u05D9\u05D9\u05E1 \u05D4\u05EA\u05D7\u05DC\u05D4')).toBe(true);
+    // Nor anything that shows as nothing: between "pay" and "roll" it would show "payroll", which nobody typed.
+    for (const hidden of ['\u200E', '\u200F', '\u061C', '\u200B', '\u2060', '\u00AD', '\uFEFF']) {
+      expect(isPersonAnswerLabelV1(`pay${hidden}roll`), JSON.stringify(hidden)).toBe(false);
+    }
+    expect(isPersonAnswerLabelV1('\u200C')).toBe(false);
+    // A joiner is part of the word it sits in: the word as typed with it passes, and it never joins two typed words into one.
+    const persian = '\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645';
+    expect([isPersonAnswerLabelV1(persian), personAnswerLabelWordsV1(persian)]).toEqual([true, [persian]]);
+    expect(personAnswerLabelFitsV1(persian, [`${persian} \u0628\u062F\u0627\u0646\u0645`])).toBe(true);
+    expect(personAnswerLabelFitsV1(persian.replace('\u200C', ''), [persian])).toBe(false);
+    expect([isPersonAnswerLabelV1('pay\u200Croll'), personAnswerLabelFitsV1('pay\u200Croll', ['pay roll'])]).toEqual([true, false]);
     expect(personAnswerLabelFitsV1('PILOT: start, owns, annual plans', typed)).toBe(true);
     // Words are used as typed: a different form of a typed word is not that word.
     for (const label of ['pilot owner', 'pilot starts', 'the pilots', 'billing']) expect(personAnswerLabelFitsV1(label, typed), label).toBe(false);
