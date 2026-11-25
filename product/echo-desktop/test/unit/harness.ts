@@ -5,6 +5,7 @@
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
+import { THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
 import type { AskTook, State } from '../../src/renderer/store.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
@@ -89,8 +90,8 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
 /**
  * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
  * turns (in place, or at the end; one the file has in a thread stays in it),
- * `timeline.move` moves them between threads (ADR-0056) and `timeline.read`
- * reads them. A test reads or seeds them, or deletes one as the host's own
+ * `timeline.remove` takes back the one ECHO just placed (ADR-0057) and
+ * `timeline.read` reads them. A test reads or seeds them, or deletes one as the host's own
  * sign-out does.
  */
 export const timelineFiles = new Map<string, TimelineTurn[]>();
@@ -120,15 +121,19 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
         return ok({});
       }
-      case 'timeline.move': {
-        // Compare and set, all or nothing, as the host moves: only while the file holds every named turn where its group says.
-        const group = new Map((params.moves as { from: string | null; to: string; turns: string[] }[]).flatMap(move => move.turns.map(turn => [turn, move] as const)));
+      case 'timeline.remove': {
+        // Compare and set, as the host removes (removeTimeline): only the newest turn of an active thread, by this
+        // computer's clock, that no kept turn names; a turn the file does not hold is not held.
+        const id = params.turn as string;
         const file = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
-        const named = file.filter(turn => group.has(turn.id));
-        const moved = named.length === group.size && named.every(turn => (turn.thread ?? null) === group.get(turn.id)!.from);
-        const now = moved ? file.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to } : turn)) : file;
-        timelineFiles.set(fileOf(params.expect as Expect), now);
-        return ok({ moved, turns: now.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: turn.thread ?? null })) });
+        const at = file.findIndex(turn => turn.id === id);
+        if (at < 0) return ok({ removed: true });
+        const { thread, asked_at } = file[at]!;
+        const names = (turn: TimelineTurn) => turn.follows === id || turn.again_of === id || turn.carried?.includes(id) === true || turn.continues?.includes(id) === true;
+        const removed = thread !== undefined && Date.now() - Date.parse(asked_at) < THREAD_ACTIVE_MS
+          && !file.slice(at + 1).some(later => later.thread === thread) && !file.some(other => other.id !== id && names(other));
+        if (removed) timelineFiles.set(fileOf(params.expect as Expect), file.filter(turn => turn.id !== id));
+        return ok({ removed });
       }
       case 'ask.check': return fail('not_supported');
       case 'projects.activity': return ok({ items: lists().active.map(project => ({ project_id: project.project_id, latest_at: null })) });

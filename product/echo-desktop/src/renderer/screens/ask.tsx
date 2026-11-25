@@ -5,27 +5,27 @@ import type {
   ApprovedRecord, OpenItemView, RecordItem, TimelineTurn, ToolContainerKind,
 } from '../../shared/protocol.js';
 import {
-  answerGaps, answerSays, answerSentences, blockTitle, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement, shownArranged,
-  shownItems, statementGroups, tableDay, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
+  answerGaps, answerLead, answerSays, answerSentences, blockTitle, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement,
+  shownArranged, shownItems, statementGroups, tableDay, type AnswerLead, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
-import { askedToday, askedWhen, identity, initial, meetingTime } from '../format.js';
+import { askedStamp, askedWhen, meetingTime, stamped } from '../format.js';
 import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
   activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
-  chooseThread, clarifyThreads, closeSources, copyAnswer, foundNothingInProject, fullTurns,
-  fullPageOffered, litAtoms, mergedLine, mergeThread, nothingLine, openCompose, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
-  retryAsk, retryEvidence, retryRecord, scopeName, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, threadList, threads, threadShown, toggleEarlier, toggleSourceList,
-  toggleTurn, turnOf, undoMerge, widenScope,
+  chooseThread, clarifyThreads, closeDoor, closeSources, continuesNote, copyAnswer, doorRows, foundNothingInProject, fullTurns,
+  fullPageOffered, litAtoms, movedNote, newQuestion, nothingLine, openCompose, openDoor, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
+  retryAsk, retryEvidence, retryRecord, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, toggleEarlier, toggleSourceList,
+  toggleTurn, turnOf, undoPlaced, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, behindEarlierLine, mergeable, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, behindEarlierLine, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
-import { Caret, Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
+import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
 
 /**
  * "Try asking": the empty bar's suggestions, over the page just above the bar.
@@ -57,7 +57,8 @@ const CLOSED = { open: false, active: -1 };
  * Going to the empty bar (a click, or an arrow key) offers what to ask in its
  * scope; the caret only waiting there, as it does whenever the window comes
  * forward, offers nothing. Typing, Escape or leaving the bar closes them.
- * From 200 characters the bar counts them, and at its limit says why it stops.
+ * While Ask is open there are no suggestions, and the up arrow in the empty
+ * bar opens the door instead (ADR-0057).
  */
 export function Bar({ state }: { state: State }) {
   // While another app is in front nothing says which project is open, or what
@@ -74,6 +75,7 @@ export function Bar({ state }: { state: State }) {
   useEffect(() => { setSuggesting(CLOSED); }, [where]);
   const pick = (suggestion: Suggestion) => { setSuggesting(CLOSED); pickSuggestion(suggestion); };
   const onKeyDown = (event: KeyboardEvent) => {
+    if (state.ask && text === '' && event.key === 'ArrowUp' && !covered && !sheetUp(state)) { event.preventDefault(); openDoor(); return; }
     if (text !== '' || !suggestionsShown(state)) return;
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
@@ -128,10 +130,13 @@ interface TurnView {
   readonly groups: readonly SourceGroup[];
   readonly checks: TurnChecks | undefined;
   readonly shows: Shows;
+  /** The statement the answer opens with, shown as its own short message; null when it opens with anything else. */
+  readonly lead: AnswerLead | null;
 }
 
 function turnView(turn: TimelineTurn, checks: TurnChecks | undefined): TurnView {
-  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer, checks), checks, shows: showsOf(checks) };
+  const shows = showsOf(checks);
+  return { id: turn.id, answer: turn.answer, groups: turnGroups(turn.answer, checks), checks, shows, lead: answerLead(turn.answer, shows) };
 }
 
 /** A source's first citation stands for it: its kind, its label, its record or its link. */
@@ -208,9 +213,9 @@ function Claim({ state, view, statement, id }: { state: State; view: TurnView; s
   return <span {...statementProps(state, view, id, 'claim')}><Said state={state} view={view} statement={statement} id={id} text={statement.text} /></span>;
 }
 
-/** The places of a block's sentences a check leaves to show. */
-function shownPlaces(view: TurnView, part: AnswerPart, places: readonly number[]): number[] {
-  return places.filter(place => view.shows(part.statements[place]!.citation_indexes));
+/** The places of a block's sentences Ask shows there: those a check leaves, but the answer's lead, which is its own message. */
+function shownPlaces(view: TurnView, part: AnswerPart, index: number, places: readonly number[]): number[] {
+  return places.filter(place => view.shows(part.statements[place]!.citation_indexes) && view.lead?.id !== `${index}.${place}`);
 }
 
 /** A bullet, or a numbered step: its sentence and its numbers, lit on its own. */
@@ -224,13 +229,15 @@ function Claims({ state, view, part, index, statements }: { state: State; view: 
     <Claim state={state} view={view} statement={part.statements[place]!} id={`${index}.${place}`} /></Fragment>)}</>;
 }
 
-/** A lead (`lead`) or a paragraph: the sentences of `statements` a check leaves to show, one after another. */
+/** A lead (`lead`) or a paragraph: the sentences of `statements` Ask shows there (shownPlaces), one after another; nothing when none is left. */
 function Prose({ state, view, part, index, statements, lead }: {
   state: State; view: TurnView; part: AnswerPart; index: number; statements: readonly number[]; lead: boolean;
 }) {
+  const shown = shownPlaces(view, part, index, statements);
+  if (shown.length === 0) return null;
   return (
     <p class={lead ? 'answer-lead selectable' : 'answer-paragraph selectable'}>
-      <Claims state={state} view={view} part={part} index={index} statements={shownPlaces(view, part, statements)} />
+      <Claims state={state} view={view} part={part} index={index} statements={shown} />
     </p>
   );
 }
@@ -242,7 +249,7 @@ function Points({ state, view, part, index, statements, ordered }: {
   const List = ordered ? 'ol' : 'ul';
   return (
     <List class={`answer-bullets${ordered ? ' answer-steps' : ''} selectable`}>
-      {shownPlaces(view, part, statements).map(at => <Point key={at} state={state} view={view} statement={part.statements[at]!} id={`${index}.${at}`} />)}
+      {shownPlaces(view, part, index, statements).map(at => <Point key={at} state={state} view={view} statement={part.statements[at]!} id={`${index}.${at}`} />)}
     </List>
   );
 }
@@ -398,10 +405,12 @@ function Arranged({ state, view, part, index, blocks, opening }: {
 }) {
   const drawn = drawnBlocks(blocks);
   const showing = shownArranged(part, drawn, view.shows);
+  // A block of sentences whose only one left is the answer's lead has nothing to show here: the lead is its own message.
+  const left = (block: ArrangedBlock) => (block.kind !== 'answer' && block.kind !== 'text') || shownPlaces(view, part, index, block.statements).length > 0;
   return (
     <div class="answer-layout">
       {drawn.map((block, place) => {
-        if (!showing[place]) return null;
+        if (!showing[place] || !left(block)) return null;
         const title = blockTitle(block);
         return (
           <Fragment key={place}>
@@ -415,33 +424,44 @@ function Arranged({ state, view, part, index, blocks, opening }: {
 }
 
 /**
- * The answer: each part in the blocks the writer arranged its sentences in
- * (ADR-0051), or, when it could write none, what research found. A part with
- * nothing to show is left out, and so is a sentence citing a source you can
- * no longer read (ADR-0047). Only typed actionable explanations are shown.
- * An answer that says nothing and shows no explanation says `empty`, its
- * turn's line (nothingLine), unless the project's own line under it says so
- * (null): no answer is left blank.
+ * ECHO's reply (ADR-0057): a message on the left with no name or mark. The statement the answer opens with is its own
+ * short message; the rest follows as the next, each part in the blocks the writer arranged its sentences in
+ * (ADR-0051), or, when it could write none, what research found. A part with nothing to show is left out, and so is a
+ * sentence citing a source you can no longer read (ADR-0047). Only typed actionable explanations are shown. An answer
+ * that says nothing and shows no explanation says `empty`, its turn's line (nothingLine), unless the project's own
+ * line under it says so (null): no answer is left blank.
  */
-function AgenticAnswer({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
+function Reply({ state, view, empty, dimmed = false }: { state: State; view: TurnView; empty: string | null; dimmed?: boolean }) {
   const answer = view.answer;
   const gaps = answerGaps(answer, view.shows);
   // A part opens the answer when it is the first and no direct answer is above it.
   const parts = answer.parts.map((part, index) => ({ part, index, opening: index === 0 && !answer.direct })).filter(({ part }) => partShows(part, view.shows));
   const said = answerSays(answer, view.shows);
+  const opens = view.lead;
+  // The message after the lead: anything else the answer shows, or, with no lead, all of it and the line that stands for nothing.
+  const rest = opens ? opens.more : said || gaps.length > 0 || empty !== null;
   return (
-    <div class={`agentic-answer${dimmed ? ' dimmed' : ''}`} data-testid="answer">
-      {answer.direct && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
-      {parts.map(({ part, index, opening }) => (
-        <section class="answer-part" key={index}>
-          {/* One part answers the question itself: its label would repeat it. */}
-          {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
-          {part.blocks && <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />}
-          {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
-        </section>
-      ))}
-      {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
-      {!said && gaps.length === 0 && empty !== null && <p class="answer-empty" data-testid="answer-empty">{empty}</p>}
+    <div class={`reply${dimmed ? ' dimmed' : ''}`} data-testid="answer">
+      {opens && (
+        <div class="msg echo">
+          <Statement state={state} view={view} statement={opens.statement} id={opens.id} />
+        </div>
+      )}
+      {rest && (
+        <div class="msg echo agentic-answer">
+          {answer.direct && !opens && <Statement state={state} view={view} statement={answer.direct} id="direct" />}
+          {parts.map(({ part, index, opening }) => (
+            <section class="answer-part" key={index}>
+              {/* One part answers the question itself: its label would repeat it. */}
+              {answer.parts.length > 1 && <div class="section-label">{part.question}</div>}
+              {part.blocks && <Arranged state={state} view={view} part={part} index={index} blocks={part.blocks} opening={opening} />}
+              {part.records?.map((statement, place) => <Found key={`record-${place}`} state={state} view={view} statement={statement} id={`${index}.r${place}`} />)}
+            </section>
+          ))}
+          {gaps.map(gap => <p key={gap} class="answer-empty" data-testid="answer-gap">{gap}</p>)}
+          {!said && gaps.length === 0 && empty !== null && <p class="answer-empty" data-testid="answer-empty">{empty}</p>}
+        </div>
+      )}
     </div>
   );
 }
@@ -463,7 +483,7 @@ function SinceList({ state, view, since, at }: { state: State; view: TurnView; s
   const shown = since.map((statement, place) => ({ statement, place })).filter(({ statement }) => view.shows(statement.citation_indexes));
   if (shown.length === 0) return null;
   return (
-    <div class="since" data-testid="since">
+    <div class="msg echo since" data-testid="since">
       <ChangedSince at={at} />
       <ul class="since-items selectable">
         {shown.map(({ statement, place }) => (
@@ -566,17 +586,18 @@ function CopyAnswer({ turn }: { turn: TimelineTurn }) {
  * long it took when this Ask asked it ("3 sources · 20s"), which opens onto a
  * row per source; with no sources, what it looked through ("Looked through 68
  * items · 41s"), in words alone. On the right, Ask again on a turn
- * asked before this Ask (`again`), and Copy answer (`copy`), which shows
- * while the pointer is on the turn or focus is in it.
+ * asked before this Ask (`again`), Copy answer (`copy`), which shows
+ * while the pointer is on the turn or focus is in it, and Show less on an
+ * earlier turn opened from its first message (`fold`), which folds it again.
  */
-function TurnFoot({ state, turn, view, took, again, copy }: {
-  state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean;
+function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
+  state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean; fold?: boolean;
 }) {
   const count = view.groups.length;
   const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? lookedThrough(took.receipt) : null;
   const label = [what, took ? duration(took.took) : null].filter(Boolean).join(' · ');
   const listed = state.sources?.listed.includes(view.id) === true;
-  if (label === '' && !again && !copy) return null;
+  if (label === '' && !again && !copy && !fold) return null;
   return (
     <div class="turn-foot" data-testid="turn-foot">
       <div class="foot-line">
@@ -590,6 +611,7 @@ function TurnFoot({ state, turn, view, took, again, copy }: {
             <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
           )}
           {copy && <CopyAnswer turn={turn} />}
+          {fold && <button type="button" class="foot-action" data-testid="timeline-fold" aria-expanded="true" onClick={() => toggleTurn(turn.id)}>Show less</button>}
         </span>
       </div>
       {listed && count > 0 && <SourceRows state={state} view={view} />}
@@ -602,13 +624,22 @@ function againAt(state: State, turn: TimelineTurn): string | null {
   return turn.again_of === undefined ? null : turnOf(turn.again_of, state)?.asked_at ?? null;
 }
 
+/** What a reply says when every sentence of it cites a source you can no longer read (ADR-0047): the answer is left out, never blank. */
+const UNREADABLE = 'You can no longer read what this answer cited.';
+
+/** A question as the person asked it: a message on the right. */
+function Asked({ text, testid = 'question' }: { text: string; testid?: string }) {
+  return <div class="msg you selectable" data-testid={testid}>{text}</div>;
+}
+
 /**
  * A turn in full: the latest, or one asked since Ask was opened. The question
- * as the asker typed it, as the turn's heading; Ask again's "Changed since";
- * the answer; the project's own line when nothing in it matched (Ask across
- * everything offered under the thread's latest, `last`); and the one line
- * under it (TurnFoot), with what it looked through when this Ask asked it
- * (`took`) and Ask again on one asked before this Ask (`current` false).
+ * as the asker typed it, a message on the right; ECHO's reply on the left: Ask
+ * again's "Changed since", then the answer (Reply); the project's own line
+ * when nothing in it matched (Ask across everything offered under the thread's
+ * latest, `last`); and the one line under it (TurnFoot), with what it looked
+ * through when this Ask asked it (`took`) and Ask again on one asked before
+ * this Ask (`current` false).
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
@@ -616,9 +647,10 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
   const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
-      <div class="question selectable" data-testid="question">{turn.text}</div>
+      <Asked text={turn.text} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {!omitted && <AgenticAnswer state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
+        : <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
@@ -636,54 +668,54 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
 }
 
 /**
- * An earlier turn, folded to one line (ADR-0047): its project's square (none
- * for all context), its full question, and when it was asked. The line opens
- * the answer as it was (OpenedTurn), and is then its heading. One behind the
- * earlier questions' line is kept out of Ask's live region (`quiet`), so
- * opening that line does not read them all out.
+ * An earlier turn, short (ADR-0047, ADR-0057): the question as asked, and the
+ * reply's first message only, which opens the answer in place as it was
+ * (OpenedTurn), with Show less under it to fold it again. The first message is
+ * the statement the answer opens with; an answer that opens with anything else
+ * shows the first sentence the page shows of it, and one that shows none says
+ * so. One behind the earlier questions' line is kept out of Ask's live region
+ * (`quiet`), so opening that line does not read them all out.
  */
 function FoldedTurn({ state, turn, opened, quiet }: { state: State; turn: TimelineTurn; opened: boolean; quiet: boolean }) {
-  const checks = checksOf(turn, state);
-  const square = turn.scope.kind === 'project'
-    ? <span class="turn-square" style={identity(turn.scope.project_id)} aria-hidden="true">{initial(scopeName(turn.scope, state))}</span>
-    : <span class="turn-square none" aria-hidden="true" />;
+  const view = turnView(turn, checksOf(turn, state));
+  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const first = view.lead?.statement.text ?? answerSentences(turn.answer).find(([, sentence]) => view.shows(sentence.citation_indexes))?.[1].text;
   return (
-    <div class={`folded-turn${opened ? ' open' : ''}`} data-turn={turn.id} aria-live={quiet ? 'off' : undefined}>
-      <button type="button" class="folded" data-testid="timeline-row" aria-expanded={opened} onClick={() => toggleTurn(turn.id)}>
-        {square}
-        <span class="q" data-testid="timeline-question">{turn.question}</span>
-        <span class="when">{askedWhen(turn.asked_at)}</span>
-      </button>
-      {opened && <OpenedTurn state={state} turn={turn} checks={checks} />}
+    <div class="folded-turn" data-turn={turn.id} aria-live={quiet ? 'off' : undefined}>
+      <Asked text={turn.text} testid="timeline-question" />
+      {opened ? <OpenedTurn state={state} turn={turn} view={view} omitted={omitted} /> : (
+        <button type="button" class="msg echo folded" data-testid="timeline-row" aria-expanded="false" onClick={() => toggleTurn(turn.id)}>
+          <span class="short">{omitted ? UNREADABLE : first ?? nothingLine(turn, state)}</span>
+        </button>
+      )}
     </div>
   );
 }
 
 /**
- * An earlier turn opened from its line: Ask again's "Changed since", its
- * answer as it was, dimmed, what you can no longer read left out, then the
- * line under it with Ask again.
+ * An earlier turn opened from its first message: Ask again's "Changed
+ * since", its answer as it was, dimmed, what you can no longer read left
+ * out, then the line under it with Ask again and Show less.
  */
-function OpenedTurn({ state, turn, checks }: { state: State; turn: TimelineTurn; checks: TurnChecks | undefined }) {
-  const view = turnView(turn, checks);
-  const omitted = allOmitted(turn, checks) && answerGaps(turn.answer, view.shows).length === 0;
+function OpenedTurn({ state, turn, view, omitted }: { state: State; turn: TimelineTurn; view: TurnView; omitted: boolean }) {
   return (
     <div class="opened" data-testid="opened-turn">
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {!omitted && <AgenticAnswer state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
+        : <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} fold />
     </div>
   );
 }
 
-/** "Which one?": between things in an answer, or between threads (ADR-0056) with "New question" last. */
+/** "Which one do you mean?": a reply with a quick reply for each thing an answer named, or each conversation (ADR-0056), "New question" last. */
 function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   const asking = askBusy(state);
   return (
     <div class="turn" data-testid="clarify">
-      <div class="question selectable" data-testid="question">{clarify.question}</div>
-      <p class="answer-paragraph">Which one?</p>
+      <Asked text={clarify.question} />
+      <div class="msg echo">Which one do you mean?</div>
       <div class="choices">
         {clarify.kind === 'choices' ? clarify.choices.map(choice => (
           <button type="button" key={choice.question} class="choice" data-testid="choice" disabled={asking} title={choice.question}
@@ -703,24 +735,42 @@ function Clarify({ state, clarify }: { state: State; clarify: AskClarify }) {
   );
 }
 
-/** The thread list's id on the page, for the name that opens it to say what it controls. */
-const THREAD_LIST_ID = 'ask-thread-list';
+/** The door's id on the page, for the title that opens it to say what it controls. */
+const DOOR_ID = 'ask-door';
 
 /**
- * The thread list (ADR-0056): picking a row, the open thread's own included, puts the person in that thread; Merge shows
- * only on rows of the open thread's home (R9). A dialog, not a menu or listbox: it holds a field, focus really moves
- * between rows, and a row has a second button, so each home is a list and the open thread's row is the current one.
+ * Ask's title (ADR-0057): the one hidden door. It reads as the page's title and is a button; nothing else on the
+ * page says a list is behind it.
  */
-export function ThreadList({ state, onDone }: { state: State; onDone: () => void }) {
+export function AskTitle({ state }: { state: State }) {
+  const open = state.ask?.door === true;
+  return (
+    <button type="button" class="title-button" data-testid="ask-title" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? DOOR_ID : undefined}
+      onClick={() => (open ? closeDoor() : openDoor())}>Ask</button>
+  );
+}
+
+/**
+ * The door's list (ADR-0057): "Find", then "New question", then one row for each conversation, the one asked in most
+ * recently first. Picking a row jumps to that conversation; in another project that is the click a change of scope
+ * needs (R5). A dialog, not a menu or listbox: it holds a field, and focus really moves between its rows. Escape
+ * (the window's), a click or focus anywhere else closes it; the caret then goes back to the bar.
+ */
+export function Door({ state }: { state: State }) {
   const [find, setFind] = useState('');
   const field = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { field.current?.focus(); }, []);
-  const open = threadShown(state);
+  // The title's own click closes it itself: counted as inside, so one click never closes it and opens it again.
+  const inside = (target: EventTarget | null) => target instanceof Element && (list.current?.contains(target) === true || target.closest('[data-testid="ask-title"]') !== null);
+  useLayoutEffect(() => {
+    const away = (event: MouseEvent) => { if (!inside(event.target)) closeDoor(); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, []);
   const busy = askBusy(state);
-  // Either way the list closes and the caret goes back to the bar, for the next question.
-  const then = (act: () => void) => () => { onDone(); act(); document.getElementById('ask-field')?.focus(); };
-  const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>('[data-testid="thread-row"]') ?? []);
+  const then = (act: () => void) => () => { closeDoor(); act(); };
+  const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>('button') ?? []);
   const onKeyDown = (event: KeyboardEvent) => {
     const all = rows();
     const at = all.indexOf(document.activeElement as HTMLButtonElement);
@@ -729,96 +779,38 @@ export function ThreadList({ state, onDone }: { state: State; onDone: () => void
       const next = event.key === 'ArrowDown' ? all[Math.min(at + 1, all.length - 1)] : at <= 0 ? field.current : all[at - 1];
       next?.focus();
     } else if (event.key === 'Enter' && event.target === field.current) {
+      // Return in "Find" picks the first conversation it found.
       event.preventDefault();
-      all.find(row => !row.disabled)?.click();
+      list.current?.querySelector<HTMLButtonElement>('[data-testid="door-row"]:not(:disabled)')?.click();
     }
   };
   return (
-    <div class="menu thread-list" id={THREAD_LIST_ID} data-testid="thread-list" role="dialog" aria-label="Threads" aria-live="off" tabIndex={-1} ref={list} onKeyDown={onKeyDown}>
-      <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find a thread" aria-label="Find a thread" data-testid="thread-find"
+    <div class="menu door" id={DOOR_ID} data-testid="door" role="dialog" aria-label="Conversations" tabIndex={-1} ref={list} onKeyDown={onKeyDown}
+      onFocusOut={(event) => { if (event.relatedTarget !== null && !inside(event.relatedTarget)) closeDoor(); }}>
+      <input ref={field} class="field small" type="search" autocomplete="off" placeholder="Find" aria-label="Find a conversation" data-testid="door-find"
         value={find} onInput={event => setFind((event.target as HTMLInputElement).value)} />
-      <div class="thread-groups">
-        {threadList(state, find).map((group) => {
-          const heading = group.home.kind === 'project' ? scopeName(group.home, state) : 'No project';
-          // Each home is a list named by its heading, which is then not read a second time.
-          return (
-            <div class="thread-group" role="list" aria-label={heading} key={group.home.kind === 'project' ? group.home.project_id : ''}>
-              <div class="menu-label" data-testid="thread-group" aria-hidden="true">{heading}</div>
-              {group.threads.map((thread) => {
-                const current = thread.id === open?.id;
-                return (
-                  <div class="thread-item" role="listitem" key={thread.id}>
-                    <button type="button" class="menu-item thread-row" data-testid="thread-row" aria-current={current ? 'true' : undefined} disabled={busy}
-                      title={thread.name} onClick={then(() => void openThread(thread.id))}>
-                      <span class="name">{thread.name}</span><span class="when">{askedWhen(thread.asked_at)}</span>
-                    </button>
-                    {mergeable(thread, open) && (
-                      <button type="button" class="link-button thread-merge" data-testid="thread-merge" aria-label="Merge into this thread" disabled={busy}
-                        onClick={then(() => mergeThread(thread.id))}>Merge</button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+      <div class="door-rows" role="list">
+        <div role="listitem">
+          <button type="button" class="menu-item door-new" data-testid="door-new" disabled={busy} onClick={then(newQuestion)}><Plus /><span class="name">New question</span></button>
+        </div>
+        {doorRows(state, find).map(row => (
+          <div role="listitem" key={row.id}>
+            <button type="button" class="menu-item door-row" data-testid="door-row" aria-current={row.current ? 'true' : undefined} disabled={busy}
+              title={row.label} onClick={then(() => void openThread(row.id))}>
+              <span class="name">{row.label}</span>
+              {row.project !== null && <span class="where" data-testid="door-project">{row.project}</span>}
+              <span class="when">{askedWhen(row.asked_at)}</span>
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-/**
- * Ask's first line (ADR-0056): the open thread's name, or "New thread", opening the thread list under it, which is this
- * line's own state; after a merge, one faint line says so, with Undo.
- */
-function ThreadHead({ state }: { state: State }) {
-  const [open, setOpen] = useState(false);
-  const head = useRef<HTMLDivElement>(null);
-  const name = useRef<HTMLButtonElement>(null);
-  // The list is of what Ask showed when it opened, so it closes when that changes; the caret then goes to the bar.
-  const shown = threadShown(state)?.id ?? null;
-  const asking = Boolean(state.ask?.asking);
-  const closeOnItsOwn = () => {
-    if (document.getElementById(THREAD_LIST_ID)?.contains(document.activeElement)) document.getElementById('ask-field')?.focus();
-    setOpen(false);
-  };
-  useLayoutEffect(closeOnItsOwn, [shown]);
-  useLayoutEffect(() => { if (asking) closeOnItsOwn(); }, [asking]);
-  useLayoutEffect(() => {
-    if (!open) return;
-    const away = (event: MouseEvent) => { if (!head.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', away);
-    return () => document.removeEventListener('mousedown', away);
-  }, [open]);
-  // Escape here closes only the list (the window's would close Ask), and only when pressed in the name or the list with
-  // nothing up over the page, which keeps its own Escape.
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (!open || event.key !== 'Escape' || sheetUp(state)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    setOpen(false);
-    name.current?.focus();
-  };
-  // Focus gone to something outside the name and the list: the list is no longer where the person is.
-  const onFocusOut = (event: FocusEvent) => {
-    if (open && event.relatedTarget instanceof Node && !head.current?.contains(event.relatedTarget)) setOpen(false);
-  };
-  const merged = mergedLine(state);
-  return (
-    <div class="thread-head" ref={head} onKeyDown={onKeyDown} onFocusOut={onFocusOut}>
-      <button type="button" ref={name} class="thread-name" data-testid="thread-name" aria-haspopup="dialog" aria-expanded={open}
-        aria-controls={open ? THREAD_LIST_ID : undefined} onClick={() => setOpen(!open)}>
-        <span class="name">{threadShown(state)?.name ?? 'New thread'}</span><Caret />
-      </button>
-      {open && <ThreadList state={state} onDone={() => setOpen(false)} />}
-      {merged !== null && (
-        <div class="thread-merged" data-testid="thread-merged" role="status">
-          <span class="name">{merged}</span>
-          <button type="button" class="link-button inline" data-testid="thread-undo" disabled={askBusy(state)} onClick={undoMerge}>Undo</button>
-        </div>
-      )}
-    </div>
-  );
+/** Undo, on a faint line (R15): it takes back what ECHO just did with the question. */
+function Undo({ state }: { state: State }) {
+  return <button type="button" class="note-link strong" data-testid="placed-undo" disabled={state.timeline.removing} onClick={() => void undoPlaced()}>Undo</button>;
 }
 
 /**
@@ -833,21 +825,23 @@ function EarlierLine({ count, open }: { count: number; open: boolean }) {
   );
 }
 
-/** The quiet line above the first of today's turns, when earlier days have turns. */
-function Today() {
-  return <div class="today" role="separator" data-testid="today"><span>Today</span></div>;
+/** When a turn was asked, in the middle between messages, as a texting app says it. */
+function Stamp({ at }: { at: string }) {
+  return <div class="note stamp" role="separator" data-testid="stamp">{askedStamp(at)}</div>;
 }
 
 /** How near its bottom the timeline counts as read to the end. */
 const FOLLOW_PX = 40;
 
 /**
- * Ask, on one thread of the timeline (ADR-0047, ADR-0056): the thread's name,
- * which opens the list of them all; the newest three earlier turns as one
- * line each under the line the older ones fold into, the latest and those
- * asked since Ask was opened in full, then a question on its way, "Which
- * one?", or one that failed. Newest at the bottom, with a quiet Today above
- * the first of today's turns, folded away with it.
+ * Ask, on one thread of the timeline (ADR-0047, ADR-0056), as a conversation
+ * (ADR-0057): nothing on it names or lists threads. When the thread has an
+ * older part of its conversation, one faint line at the top says so and opens
+ * it; then the newest three earlier turns, short, under the line the older
+ * ones fold into; the latest and those asked since Ask was opened in full;
+ * then a question on its way, "Which one do you mean?", or one that failed.
+ * Newest at the bottom, a turn's time in the middle above it when it is the
+ * first shown, the first of its day, or an hour after the one before.
  */
 export function AskView({ state }: { state: State }) {
   const thread = state.ask!;
@@ -875,7 +869,7 @@ export function AskView({ state }: { state: State }) {
     if (view.scrollHeight - view.scrollTop - view.clientHeight < FOLLOW_PX) { savePosition({ kind: 'bottom' }); return; }
     // Anchors follow document order. Locate the first visible one with logarithmic layout reads, only when the person
     // actually scrolls; streaming progress neither scans the thread nor replaces a citation they chose to read.
-    const items = anchors.current ??= view.querySelectorAll('[data-reading-anchor], .question, .folded');
+    const items = anchors.current ??= view.querySelectorAll('[data-reading-anchor], .msg.you, .folded');
     const bounds = view.getBoundingClientRect();
     let low = 0, high = items.length;
     while (low < high) {
@@ -937,11 +931,13 @@ export function AskView({ state }: { state: State }) {
     if (view) { view.scrollTop = view.scrollHeight; placedAt.current = view.scrollTop; }
     savePosition({ kind: 'bottom' });
   };
-  // Only a thread shown, a new question, answer, choice or failure scrolls to the bottom: turns joining or leaving the
-  // thread (a merge, its Undo, a read) and a move dropping a question being prepared leave the reading where it is.
+  // Only a thread shown, a new question, answer, choice or failure scrolls to the bottom: a turn joining or leaving the
+  // thread otherwise (a read, an Undo's removal) leaves the reading where it is.
   useLayoutEffect(toBottom, [thread.asked, thread.asking === null, thread.failed, thread.clarify]);
-  // Those turns, and the merged line, change what is above the reading: it stays where it was, as when the view changes size.
-  useLayoutEffect(restoreReading, [turns.map(turn => turn.id).join(' '), mergedLine(state)]);
+  // Those turns, and the faint lines, change what is above the reading: it stays where it was, as when the view changes size.
+  const continues = continuesNote(state);
+  const moved = movedNote(state);
+  useLayoutEffect(restoreReading, [turns.map(turn => turn.id).join(' '), continues?.thread, continues?.undo, moved?.turn]);
   // A suggestion opened Ask at a turn: that turn comes into view.
   useLayoutEffect(() => {
     if (thread.focus === null) return;
@@ -969,37 +965,45 @@ export function AskView({ state }: { state: State }) {
     }
   };
   const { asking, failed, clarify } = thread;
-  const now = Date.now();
-  // Today's line goes above its first turn, or, with none yet, above the question on its way; only when earlier days have turns.
-  const first = turns.findIndex(turn => askedToday(turn.asked_at, now));
-  const today = first > 0 ? first : first === -1 && turns.length > 0 && (asking || clarify || failed) ? turns.length : -1;
   const full = fullTurns(thread);
   const behind = new Set(behindEarlierLine(turns, full));
+  const shown = turns.filter(turn => thread.earlier || !behind.has(turn.id));
+  // What waits under the turns says its time as a turn does: a question on its way by when it was asked, any other by now.
+  const waiting = asking ? new Date(asking.progress.started).toISOString() : clarify || failed ? new Date().toISOString() : null;
+  const movedLine = moved && <div class="note" data-testid="moved-note"><span>Continuing {moved.label}</span><span aria-hidden="true">·</span><Undo state={state} /></div>;
   return (
     <section class="ask timeline" data-testid="ask-view" aria-live="polite" ref={scroller} onScroll={onScroll} onClickCapture={chooseReading}>
-      {/* With nothing asked yet there is no thread to name or list. */}
-      {threads(state).length > 0 && <ThreadHead state={state} />}
+      {continues && (
+        <div class="note" data-testid="continues-note">
+          <span>Continues</span>
+          <button type="button" class="note-link" data-testid="continues-open" disabled={askBusy(state)} onClick={() => void openThread(continues.thread)}>{continues.label}</button>
+          <span>from {askedWhen(continues.asked_at)}</span>
+          {continues.undo && <><span aria-hidden="true">·</span><Undo state={state} /></>}
+        </div>
+      )}
       {behind.size > 0 && <EarlierLine count={behind.size} open={thread.earlier} />}
-      {turns.map((turn, index) => (thread.earlier || !behind.has(turn.id)) && (
+      {shown.map((turn, index) => (
         <Fragment key={turn.id}>
-          {index === today && <Today />}
+          {stamped(turn.asked_at, shown[index - 1]?.asked_at) && <Stamp at={turn.asked_at} />}
+          {moved?.turn === turn.id && movedLine}
           {shownInFull(turn, turns, full)
-            ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={index === turns.length - 1} />
+            ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={turn.id === turns.at(-1)?.id} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} quiet={behind.has(turn.id)} />}
         </Fragment>
       ))}
-      {today === turns.length && <Today />}
+      {waiting !== null && stamped(waiting, shown.at(-1)?.asked_at) && <Stamp at={waiting} />}
+      {moved?.turn === null && movedLine}
       {asking && (
         <div class="turn">
-          <div class="question selectable" data-testid="question">{asking.question}</div>
+          <Asked text={asking.question} />
           <Asking progress={asking.progress} />
         </div>
       )}
       {clarify && <Clarify state={state} clarify={clarify} />}
       {failed && (
         <div class="turn" data-testid="ask-failed">
-          <div class="question selectable">{failed.question}</div>
-          <div class="error" data-testid="ask-error">{message(failed.failure)}</div>
+          <Asked text={failed.question} />
+          <div class="msg echo error" data-testid="ask-error">{message(failed.failure)}</div>
           {failed.failure.retryable && (
             <div class="actions">
               <button type="button" class="link-button" data-testid="ask-retry" disabled={askBusy(state)} onClick={retryAsk}>Try again</button>

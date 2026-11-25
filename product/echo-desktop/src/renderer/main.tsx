@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect } from 'preact/hooks';
 import { on } from './api.js';
 import { itemTitle } from './needs.js';
 import { ConfirmSignOut } from './screens/account.js';
-import { AskView, Bar, SourcePane } from './screens/ask.js';
+import { AskTitle, AskView, Bar, Door, SourcePane } from './screens/ask.js';
 import { Compose } from './screens/compose.js';
 import { Decision } from './screens/decision.js';
 import { Stops } from './screens/altitude.js';
@@ -22,8 +22,8 @@ import { Sidebar, UpdateRow } from './screens/sidebar.js';
 import { SignedOut } from './screens/signin.js';
 import { ToolConnect, ToolManage, Tools } from './screens/tools.js';
 import {
-  acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeFollowUp,
-  closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
+  acceptDrop, accountCommand, askProgress, canDrop, cancelMemberChange, cancelProjectSettingsAction, cancelRevoke, cancelSkip, clearBar, clearToast, closeAsk, closeCompose, closeDoor,
+  closeFollowUp, closeOwnerPicker, closeProjects, closeReader, closeSheet, closeSigninForm, dismissProjectSetting, findingSheet, followUpShown, followUpsShown, getState, goHome,
   hostFailed, keepNewProject, newProjectProgress, openCapture, openNotified, openOnlyMe, pageCovered, paneTarget, readUpdate, refreshStatus,
   retryStart, sheetShown, sheetUp, shownItem, signinPhase, toastOpensOnlyMe, toggleEmployeeMenu, toggleMemberMenu, toggleReaderMenu, toggleSidebar, trayOrganization, updateChanged,
   useStore, WARNINGS, windowState, zoomOut, type State,
@@ -57,10 +57,10 @@ function escape(): void {
 }
 
 /**
- * Back steps back one level: a sheet (or what is open in it), compose, the
- * answer (and the source beside it), an item page or a follow-ups list (the
- * one before it, or the page under them), reader, then a project or People &
- * invites. An owner picker closes first.
+ * Back steps back one level: a sheet (or what is open in it), compose, Ask's
+ * door, the answer (and the source beside it), an item page or a follow-ups
+ * list (the one before it, or the page under them), reader, then a project or
+ * People & invites. An owner picker closes first.
  */
 function back(): void {
   const state = getState();
@@ -80,6 +80,8 @@ function back(): void {
   if (state.compose && !state.compose.hidden) return state.compose.picking ? closeProjects() : closeCompose();
   // An owner picker under a follow-up an answer drafted (ADR-0053) closes before Ask does.
   if (state.ask && state.askCards.picker) return closeOwnerPicker();
+  // The door (ADR-0057) closes before Ask does.
+  if (state.ask?.door) return closeDoor();
   if (state.ask) return closeAsk();
   const view = followUpShown(state);
   if (view?.kind !== 'decision' && view?.picker) return closeOwnerPicker();
@@ -102,6 +104,9 @@ function App() {
   // New project stepped aside or closed: the caret goes to the bar of the project it opened.
   const making = sheetShown(state)?.kind === 'new-project';
   useLayoutEffect(() => { if (!making) focusBar(); }, [making]);
+  // Ask's door closed (a pick, Escape, a click elsewhere): the caret goes back to the bar, for the next question.
+  const door = !pageCovered(state) && state.ask?.door === true;
+  useLayoutEffect(() => { if (!door) focusBar(); }, [door]);
 
   // A toast that says something went well goes by itself, counted while it can be seen.
   useEffect(() => {
@@ -194,7 +199,7 @@ function App() {
   const progress = sheet?.kind === 'new-project' ? newProjectProgress(sheet) : null;
   const toasts = !state.concealed;
   return (
-    <Shell state={state} title={title} center={homeShows ? <Stops state={state} /> : null} backLabel={backLabel} pane={pane}
+    <Shell state={state} title={title} center={homeShows ? <Stops state={state} /> : state.ask && !covered ? <AskTitle state={state} /> : null} backLabel={backLabel} pane={pane}
       trailing={inProject && !covered && !state.ask ? <><MembersButton state={state} /><ProjectToolsButton state={state} /><ProjectSettingsButton state={state} /></> : null}>
       <main class="page">
         {covered ? <div class="cover" data-testid="concealed">ECHO</div>
@@ -225,6 +230,7 @@ function App() {
       {/* Under a toast, not hidden by it: Try again and Dismiss stay in reach. */}
       {banner && <div class={`banner${state.toast ? ' below' : ''}`} data-testid="change-banner"><ChangeLine change={banner} /></div>}
       <Bar state={state} />
+      {door && <Door state={state} />}
       {pane && <SourcePane state={state} />}
       {state.compose && !state.compose.hidden && <Compose state={state} />}
       {!state.concealed && <ProjectSettings state={state} />}

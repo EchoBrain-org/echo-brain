@@ -26,8 +26,9 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   await askFromHome(page, question);
   await expect(page.getByTestId('answer')).toBeVisible();
   expect(run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body })))
-    // A typed question is one to be placed among your threads (ADR-0056): with none yet, the list it carries is empty.
-    .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question, threads: [] } }]);
+    // A typed question is one to be placed among your conversations (ADR-0056): with none yet, the list it carries is
+    // empty. Every Ask but an Ask again reads labels (ADR-0057).
+    .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question, threads: [], labels: true } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   // No lock in the answer: ECHO reads the ticket with your own access (ADR-0049).
   await expect(page.getByTestId('answer').getByRole('img', { name: /only you/i })).toHaveCount(0);
@@ -208,7 +209,10 @@ test('an answer the writer arranged in blocks draws every block in the window, a
   const { page } = run;
   await askFromHome(page, 'Can THERM start PVT?');
   const answer = page.getByTestId('answer');
-  await expect(answer.locator('.answer-lead').getByTestId('statement-text')).toHaveText('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
+  // The statement the answer opens with is its own short message (ADR-0057); the blocks follow in the next, and it is not said twice.
+  await expect(answer.locator('.msg.echo').first().getByTestId('statement-text')).toHaveText('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
+  await expect(answer.locator('.msg.echo')).toHaveCount(2);
+  await expect(answer.getByText('Yes, PVT can start: the 72-hour soak passed on Oct 23.')).toHaveCount(1);
   await expect(answer.locator('h3.answer-heading')).toHaveText(['Soak test', 'Before PVT', 'Open risk']);
   for (const block of ['.answer-table', '.answer-timeline', '.answer-card', 'ol.answer-steps', '.answer-quote']) await expect(answer.locator(block).first()).toBeVisible();
   // A table keeps its own box.

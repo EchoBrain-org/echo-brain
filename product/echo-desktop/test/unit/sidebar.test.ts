@@ -162,7 +162,7 @@ describe('Ask', () => {
   async function on(route: State['route'], open: boolean): Promise<State> {
     const { getState } = await import('../../src/renderer/store.js');
     const ask = { seq: 1, thread: null, latest: null, asked: [], opened: null, openedAt: 0, focus: null, earlier: false, forQuestion: false, asking: null, clarify: null, failed: null,
-      took: {}, merged: null };
+      took: {}, placed: null, fresh: false, door: false };
     return {
       ...getState(), route, ask: open ? ask : null,
       status: { client_version: 'test', signed_in: true, account: { ...ACCOUNT, role: 'owner' } },

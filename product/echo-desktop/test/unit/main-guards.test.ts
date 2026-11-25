@@ -39,8 +39,8 @@ describe('a call no host answered', () => {
     expect(hostGoneFailure('host_restarted', false, 7, false)).toEqual({ code: 'host_restarted', retryable: true });
   });
 
-  it('counts a save or a move of this computer\'s own Ask timeline as a change, so one no host took was never made', () => {
-    for (const method of ['timeline.put', 'timeline.move']) {
+  it('counts a save or a removal of this computer\'s own Ask timeline as a change, so one no host took was never made', () => {
+    for (const method of ['timeline.put', 'timeline.remove']) {
       expect(mayChange(method, {})).toBe(true);
       expect(hostGoneFailure('host_restarted', mayChange(method, {}), undefined, false)).toEqual({ code: 'host_restarted', retryable: true, mutation_outcome: 'not_submitted' });
     }

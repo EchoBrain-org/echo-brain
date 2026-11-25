@@ -801,6 +801,15 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
     }
   });
 
+  it('passes a label on only to an Ask that read labels and carried a previous turn, and refuses one it did not ask for (ADR-0057, T2)', () => {
+    const question = 'did the pilot date move?';
+    const labelled = line({ question, label: 'pilot: start, date' });
+    for (const threads of [undefined, 2]) expect(answerView(labelled, scope, threads, true, true)).toMatchObject({ question, label: 'pilot: start, date' });
+    expect(answerView(line({ question }), scope, 2, true, true)).not.toHaveProperty('label');
+    // Not read (an older desktop, or an Ask again), or with no previous turn: an answer carrying one is not this Ask's.
+    for (const [continued, labels] of [[true, false], [false, true]] as const) expect(() => answerView(labelled, scope, undefined, continued, labels)).toThrow(ViewError);
+  });
+
   it('reads a source check (C1): a state per item asked, in order; anything else is not its output', () => {
     const check = (items: unknown[]) => ({ schema_version: 1, kind: 'echo-person-ask-check-v1', items });
     expect(askCheckView(check([{ state: 'same' }, { state: 'unreadable' }, { state: 'unknown' }]), 3))

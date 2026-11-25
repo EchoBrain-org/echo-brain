@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -425,54 +425,58 @@ test('a latest citation chosen at the end while a question is on its way opens i
   await expect(page.getByTestId('asking')).toHaveCount(0);
 });
 
-test('a merge, its Undo and a move this computer refuses leave the sentence being read where it was: only a new question, answer, choice or failure goes to the end', async () => {
-  run = await launch('ask-scroll');
+test('the line that says ECHO moved a question going away, when its Undo is refused, leaves the sentence being read where it was: only a new question, answer, choice or failure goes to the end', async () => {
+  run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Two threads with no project: a short one, then a long answer in a thread of its own.
-  await ask(page, 'Quick status');
+  // Two conversations with no project. A long question about billing, typed in the pilot's: ECHO moves it to billing's,
+  // and one faint line above it says so, with Undo.
+  await ask(page, 'Who owns billing?');
   await page.getByTestId('back').click();
-  await ask(page, 'Long readout');
+  await page.getByTestId('sidebar-home').click();
+  await ask(page, 'When does the pilot start?');
+  await ask(page, 'Long readout on billing invoices');
+  await expect(page.getByTestId('moved-note')).toBeVisible();
   const bottom = () => page.getByTestId('ask-view').evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(bottom).toBeLessThan(1);
-  // The person reads a sentence in the middle of the long answer, 180 pixels down the view.
-  const sentence = page.getByTestId('turn').last().getByTestId('statement-text').nth(7);
+  // The person reads the answer's second sentence, 240 pixels down the view, with the line and its Undo in view above it.
+  const sentence = page.getByTestId('turn').last().getByTestId('statement-text').nth(1);
   await sentence.evaluate((element) => {
     const view = element.closest('.ask')!;
-    view.scrollTop += element.getBoundingClientRect().top - view.getBoundingClientRect().top - 180;
+    view.scrollTop += element.getBoundingClientRect().top - view.getBoundingClientRect().top - 240;
   });
   await settled(page);
+  await expect(page.getByTestId('placed-undo')).toBeInViewport();
   const stays = async () => {
     await settled(page);
-    await expect.poll(async () => Math.abs(await offset(sentence) - 180)).toBeLessThanOrEqual(1);
+    await expect.poll(async () => Math.abs(await offset(sentence) - 240)).toBeLessThanOrEqual(1);
   };
   await stays();
-  // The short thread joins from the list: its question shows as one line above, and the sentence stays where it was.
-  const merge = async () => {
-    await page.getByTestId('thread-name').click();
-    const quick = page.getByTestId('thread-list').locator('.thread-item').filter({ hasText: 'Quick status' });
-    await quick.hover();
-    await quick.getByTestId('thread-merge').click();
-  };
-  await merge();
-  await expect(page.getByTestId('thread-merged')).toBeVisible();
-  await expect(page.getByTestId('timeline-question')).toHaveText(['Quick status']);
-  await stays();
-  // Undo takes it back out, and the sentence is still where it was.
-  await page.getByTestId('thread-undo').click();
-  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await stays();
-  // A merge this computer refuses (its timeline folder made a link) moves nothing, and the sentence stays too.
+  // An Undo this computer cannot write (its timeline folder made a link) removes nothing and keeps its line: the sentence stays.
   const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
+  const refused = 'That question could not be taken back, so its answer is where it was.';
   renameSync(folder, `${folder}.kept`);
   symlinkSync(`${folder}.kept`, folder);
   try {
-    await merge();
-    await expect(page.getByTestId('toast')).toHaveText('Some questions could not be moved on this computer, so they are where they were.');
-    await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+    await page.getByTestId('placed-undo').click();
+    await expect(page.getByTestId('toast')).toHaveText(refused);
+    await expect(page.getByTestId('moved-note')).toBeVisible();
     await stays();
   } finally {
     rmSync(folder);
     renameSync(`${folder}.kept`, folder);
   }
+  // The file comes to hold a later turn in that thread, which the page has not read: the moved turn is no longer its
+  // newest, so the file itself refuses the Undo (R15). The offer ends, its line goes from above the answer being read,
+  // and the sentence is still where it was.
+  const [name] = readdirSync(folder).filter(each => each.endsWith('.json'));
+  const kept = JSON.parse(readFileSync(join(folder, name!), 'utf8')) as { turns: { id: string; asked_at: string; thread: string; text: string }[] };
+  const movedTurn = kept.turns.find(turn => turn.text === 'Long readout on billing invoices')!;
+  kept.turns.push({ ...kept.turns.find(turn => turn.text === 'Who owns billing?')!, id: '99999999-9999-4999-8999-999999999999', asked_at: new Date().toISOString(), thread: movedTurn.thread });
+  writeFileSync(join(folder, name!), JSON.stringify(kept));
+  await page.getByTestId('placed-undo').click();
+  await expect(page.getByTestId('moved-note')).toHaveCount(0);
+  await expect(page.getByTestId('toast')).toHaveText(refused);
+  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('Long readout on billing invoices');
+  await stays();
 });

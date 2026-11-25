@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerMarkdown, answerSentences, answerText, cardWord, documentName, drawnBlocks, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerLead, answerMarkdown, answerSentences, answerText, cardWord, documentName, drawnBlocks, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -43,6 +43,27 @@ describe('an answer cites sources, not passages', () => {
     expect(statementGroups([1], groups)).toEqual([1]);
     // An index the answer does not have is not a source.
     expect(statementGroups([9], groups)).toEqual([]);
+  });
+});
+
+describe('an answer\'s first statement is its own short message (ADR-0057)', () => {
+  const said = (text: string) => ({ text, citation_indexes: [0], private: false });
+  const one = (blocks: ArrangedBlock[], statements = [said('Yes, it starts Monday.'), said('The plan moved it.')]): Answer => ({ scope: { kind: 'global' }, sources: [page('1')],
+    outcome: 'answered', receipt: { looked_through: 0 }, parts: [{ question: 'When?', status: 'answered', statements, blocks }] });
+  it('leads with a direct answer, or the first sentence shown of a one-part answer that opens with the answer or untitled text, and says whether more follows', () => {
+    expect(answerLead(one([{ kind: 'answer', statements: [0] }, { kind: 'text', statements: [1] }]), () => true)).toMatchObject({ id: '0.0', statement: said('Yes, it starts Monday.'), more: true });
+    expect(answerLead(one([{ kind: 'text', statements: [0] }], [said('Only this.')]), () => true)).toMatchObject({ id: '0.0', more: false });
+    expect(answerLead({ ...one(paragraphs([0, 1])), direct: said('Yes.') }, () => true)).toMatchObject({ id: 'direct', more: true });
+    // With all a check left hidden there is nothing to lead with.
+    expect(answerLead(one([{ kind: 'answer', statements: [0, 1] }]), citations => citations.length === 0)).toBeNull();
+  });
+  it('has no separate lead for an answer that opens with a table, points or a titled block, or that has several parts', () => {
+    const table: ArrangedBlock = { kind: 'table', statements: [0], columns: ['Item'], rows: [{ cells: ['A'], citation_indexes: [0] }] } as ArrangedBlock;
+    for (const first of [table, { kind: 'points', ordered: false, statements: [0] }, { kind: 'text', title: 'Dates', statements: [0] }] as ArrangedBlock[]) {
+      expect(answerLead(one([first, { kind: 'text', statements: [1] }]), () => true)).toBeNull();
+    }
+    const two = one(paragraphs([0, 1]));
+    expect(answerLead({ ...two, parts: [two.parts[0]!, { ...two.parts[0]!, question: 'Who?' }] }, () => true)).toBeNull();
   });
 });
 

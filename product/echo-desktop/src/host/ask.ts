@@ -16,13 +16,19 @@ import { askStepView } from './views.js';
  * account the page shows, as every call: a client signed in as another by
  * then asks nothing and prints no step, so the page's account check of each
  * step is the client's own. `previous` (ADR-0047) and `threads` (ADR-0056)
- * come already checked (askContext).
+ * come already checked (askContext). It reads labels (askLabels).
  */
 export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[]): string[] {
   return ['ask', `--question=${text}`, '--progress',
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`]),
-    ...(threads === undefined ? [] : [`--threads=${JSON.stringify(threads)}`])];
+    ...(threads === undefined ? [] : [`--threads=${JSON.stringify(threads)}`]),
+    ...(askLabels(previous) ? ['--labels'] : [])];
+}
+
+/** Whether an Ask reads labels (ADR-0057): every Ask but an Ask again, beside which the request's own rule refuses them. */
+export function askLabels(previous: AskPrevious | undefined): boolean {
+  return previous?.purpose !== 'ask_again';
 }
 
 /** Whether the API's own validator takes `value`. */

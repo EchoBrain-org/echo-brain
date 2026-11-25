@@ -35,6 +35,8 @@
   --field: #0F1013;
   --hover: rgba(255, 255, 255, 0.04);
   --selected: rgba(255, 255, 255, 0.075);
+  /* Your own message in Ask's conversation (ADR-0057): a soft fill, with no line. */
+  --bubble: rgba(255, 255, 255, 0.09);
   /* A tag's quiet fill: a word that only says something, never a control. */
   --tag: rgba(255, 255, 255, 0.07);
   --line: rgba(255, 255, 255, 0.07);
@@ -98,6 +100,7 @@
     --text: #111113;
     --muted: #50535A;
     --faint: #65686F;
+    --bubble: #E9E9E7;
     --primary: #111113;
     --on-primary: #FFFFFF;
     --signal: #D78951;
@@ -273,82 +276,74 @@ button.account-row:hover { background: var(--raise); }
 .match-row .label { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .match-row.suggestion.active { background: var(--selected); }
 
-/* Ask: one thread, newest at the bottom (ADR-0047, ADR-0056). The latest turn and those asked since Ask opened
-   are in full; every earlier one is a line that opens it. No borders between turns: space alone sets them apart. */
+/* Ask: one thread as a conversation, newest at the bottom (ADR-0047, ADR-0056, ADR-0057). Your questions are messages on
+   the right; ECHO's replies are on the left, with no name or mark. The latest turn and those asked since Ask opened are
+   in full; an earlier one shows its reply's first message, which opens the rest. Nothing on the page names a thread. */
 /* Ask and its bar keep a column short enough to read (ADR-0049). The full page scrolls, with the column inside it, so its
    scrollbar stays at the page edge. */
-.main:has(.ask) { --ask-width: 720px; --turn-gap: 48px; }
+.main:has(.ask) { --ask-width: 720px; --turn-gap: 20px; }
 .ask { position: relative; align-self: stretch; width: 100%; min-width: 0; overflow-y: auto; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: var(--turn-gap); padding: 24px 24px 16px; }
 .ask > * { width: min(100%, var(--ask-width)); min-width: 0; margin-inline: auto; }
-.turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; }
-/* The thread's name, Ask's first line (ADR-0056): one quiet line that stays in reach above the turns, with its list under it.
-   It holds the page's top padding itself, so it sticks at the very top and no turn shows above it. */
-.ask:has(> .thread-head) { padding-top: 0; }
-.thread-head { position: sticky; top: 0; z-index: 2; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 0 6px; background: var(--ink); }
-.ask > .thread-head + * { margin-top: calc(12px - var(--turn-gap)); }
-/* A turn brought into view stops under the name, not behind it. */
-.ask [data-turn] { scroll-margin-top: 48px; }
-.thread-name { max-width: 100%; display: flex; align-items: center; gap: 6px; margin-left: -8px; padding: 4px 8px; border: 0; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--muted); background: transparent; }
-.thread-name:hover, .thread-name[aria-expanded="true"] { color: var(--text); background: var(--hover); }
-.thread-name svg { flex-shrink: 0; }
-.thread-name .name, .thread-row .name, .thread-merged .name, .thread-choice .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thread-merged { max-width: 100%; display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--faint); }
-.thread-merged .link-button { flex-shrink: 0; }
-/* The thread list: a menu under the name, as wide as a question needs. */
-.thread-list { top: 44px; left: -8px; right: auto; width: min(440px, 100%); max-height: min(420px, calc(100vh - 220px)); gap: 4px; padding: 8px; overflow-wrap: normal; }
-/* A click on the list's own edge keeps the keyboard in it, with no ring of its own. */
-.thread-list:focus { outline: none; }
-.thread-groups { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-.thread-list .menu-label { padding: 6px 10px 2px; font-size: 11.5px; font-weight: 500; color: var(--faint); }
-.thread-item { position: relative; display: flex; align-items: center; }
-.thread-row { flex-grow: 1; min-width: 0; height: 34px; gap: 12px; }
-.thread-row .name { flex-grow: 1; }
-.thread-row .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
-.thread-row[aria-current="true"] { background: var(--selected); }
-/* Merge shows on the row the pointer or the keyboard is on, over the end of its line. */
-.thread-merge { position: absolute; right: 4px; opacity: 0; font-size: 12.5px; background: var(--raise); }
-.thread-item:hover .thread-merge, .thread-item:focus-within .thread-merge { opacity: 1; }
-.thread-item:has(.thread-merge):hover .when, .thread-item:has(.thread-merge):focus-within .when { visibility: hidden; }
-/* The question is the turn's heading: the answer's size, heavier. */
-.ask .question { font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
+/* A short conversation sits just above the bar, as in a texting app; a long one scrolls as before. */
+.ask > :first-child { margin-top: auto; }
+.turn, .folded-turn { flex-shrink: 0; display: flex; flex-direction: column; gap: 6px; }
+.ask [data-turn] { scroll-margin-top: 16px; }
+/* A message. Yours: soft grey, on the right, as typed. ECHO's: on the left, a line around it. */
+.msg { min-width: 0; padding: 8px 14px; font-size: 15px; line-height: 1.5; color: var(--text); }
+.msg.you { align-self: flex-end; max-width: 72%; margin-bottom: 4px; border-radius: 18px 18px 6px 18px; background: var(--bubble); white-space: pre-wrap; }
+.msg.echo { align-self: flex-start; max-width: 86%; border: 1px solid var(--line); border-radius: 18px 18px 18px 6px; background: var(--panel); }
+/* A reply's messages, one under another: the first keeps the tail's corner, each after it leans on the one above. */
+.reply { display: flex; flex-direction: column; gap: 4px; }
+.reply > .msg + .msg, .since + .reply > .msg { border-top-left-radius: 6px; }
+.reply > .msg:has(+ .msg), .msg.since:has(+ .reply > .msg) { border-bottom-left-radius: 18px; }
+/* The rest of an answer may hold a table or a timeline: it takes the column's width when it needs it. */
+.msg.agentic-answer { max-width: 100%; padding: 12px 14px; }
 .ask .project-empty { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 13px; color: var(--faint); }
 .answer-empty { margin: 0; font-size: 13px; color: var(--faint); }
-/* Earlier turns: one line each, close together, opening in place. */
-.folded-turn { flex-shrink: 0; display: flex; flex-direction: column; }
-/* Lines sit close together; the line after an opened turn keeps the space between turns. */
-.ask > .folded-turn:not(.open) + .folded-turn { margin-top: calc(4px - var(--turn-gap)); }
-/* The line the earlier questions past the newest three fold into: aligned with the lines' squares, the lines close under it. */
-.ask > .earlier { gap: 10px; min-height: 32px; padding: 6px 10px; font-size: 13px; font-weight: 500; color: var(--faint); }
-.ask > .earlier svg { margin-inline: 2px; }
-.ask > .earlier + .folded-turn { margin-top: calc(4px - var(--turn-gap)); }
-.folded { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 8px 10px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
-.folded:hover { background: var(--hover); }
-.folded .turn-square { width: 16px; height: 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 4px; font-size: 9.5px; font-weight: 600; }
-.folded .turn-square.none { visibility: hidden; }
-.folded .q { flex-grow: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--muted); }
-/* An opened line is its turn's heading: the question once, in full. */
-.folded-turn.open .folded .q { overflow: visible; white-space: normal; font-size: 15px; font-weight: 600; line-height: 1.45; color: var(--text); }
-.folded .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
-/* An old answer opened: as it was, dimmed, under its question. */
-.opened { display: flex; flex-direction: column; gap: 10px; padding: 6px 0 4px 36px; }
-.agentic-answer.dimmed { color: var(--muted); }
-/* "Changed since Oct 14": over Ask again's list of what is different now, each cited. No box. */
+/* An earlier turn's reply: its first message alone, two lines at most. It opens the answer in place. */
+button.msg.folded { text-align: left; color: var(--muted); }
+button.msg.folded:hover { color: var(--text); border-color: var(--line-strong); }
+.msg.folded .short { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+/* An old answer opened: as it was, dimmed, with Show less on the line under it. */
+.opened { display: flex; flex-direction: column; gap: 6px; }
+.reply.dimmed .msg { color: var(--muted); }
+/* A faint line in the middle of the conversation, as a texting app has: when a turn was asked, what ECHO just did with a
+   question and its Undo, the older part a chat continues, and the earlier questions folded away. */
+.note { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 2px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
+.note.stamp { font-size: 12px; }
+.note-link { max-width: 100%; padding: 1px 4px; margin: -1px -2px; border: 0; border-radius: 5px; font-size: inherit; color: var(--muted); background: transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-link:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.note-link.strong { font-weight: 500; }
+.note-link:disabled { cursor: default; }
+.ask > .earlier { justify-content: center; gap: 6px; min-height: 28px; font-size: 12.5px; color: var(--faint); }
+/* The door (ADR-0057): Ask's title is a button that reads as a title, and its list opens under it, over the page. */
+.title-button { padding: 4px 10px; border: 0; border-radius: 7px; font-size: inherit; font-weight: inherit; color: inherit; background: transparent; }
+.title-button:hover, .title-button[aria-expanded="true"] { color: var(--text); background: var(--hover); }
+.door { top: 42px; left: 50%; right: auto; transform: translateX(-50%); z-index: 3; width: min(440px, calc(100% - 32px)); max-height: min(420px, calc(100vh - 220px)); gap: 4px; padding: 8px; }
+/* A click on the list's own edge keeps the keyboard in it, with no ring of its own. */
+.door:focus { outline: none; }
+.door-rows { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.door-rows .menu-item { width: 100%; min-width: 0; height: 34px; justify-content: flex-start; gap: 12px; }
+.door-rows .name, .thread-choice .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.door-row .name { flex-grow: 1; }
+.door-row .where, .door-row .when { flex-shrink: 0; font-size: 12px; color: var(--faint); }
+.door-row[aria-current="true"] { background: var(--selected); }
+.door-new { gap: 8px; }
+.door-new svg { flex-shrink: 0; color: var(--muted); }
+/* "Changed since Oct 14": over Ask again's list of what is different now, each cited. The reply's first message. */
 .since { display: flex; flex-direction: column; gap: 6px; }
 .since-label { font-size: 12.5px; font-weight: 500; color: var(--signal-text); }
 .since-items { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 14.5px; line-height: 1.55; color: var(--text); }
 .since-items li { display: flex; gap: 10px; }
 .since-items li::before { content: ""; flex-shrink: 0; width: 5px; height: 5px; margin-top: 9px; border-radius: 3px; background: var(--signal); }
 .since-items li.on { margin: -2px -8px; padding: 2px 8px; border-radius: 8px; background: var(--selected); }
-/* "Which one?": a button per thing a follow-up could mean. */
+/* "Which one do you mean?": a quick reply for each thing a follow-up could mean. */
 .choices { display: flex; flex-wrap: wrap; gap: 8px; }
-.choice { min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; font-size: 14px; color: var(--text); background: transparent; text-align: left; }
+.choice { min-height: 36px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 18px; font-size: 14px; color: var(--text); background: transparent; text-align: left; }
 .choice:hover { background: var(--hover); }
-/* A thread among them (ADR-0056): its name on one line, and its project, quieter, when it lives elsewhere. */
+/* A conversation among them (ADR-0056): its label on one line, and its project, quieter, when it lives elsewhere. */
 .thread-choice { max-width: 100%; display: flex; align-items: center; gap: 10px; }
 .thread-choice .where { flex-shrink: 0; font-size: 12px; color: var(--faint); }
-/* Today, above the first of today's turns when earlier days have some: a quiet word between hairlines. */
-.today { flex-shrink: 0; display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--faint); }
-.today::before, .today::after { content: ""; flex-grow: 1; height: 1px; background: var(--line); }
 .turn .actions { flex-wrap: wrap; margin-left: -8px; }
 .turn .actions .link-button { white-space: nowrap; }
 .section-label { font-size: 12.5px; font-weight: 500; color: var(--muted); }

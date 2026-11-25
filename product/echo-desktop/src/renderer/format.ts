@@ -75,6 +75,24 @@ export function askedWhen(iso: string, now = Date.now()): string {
   return (date.getFullYear() === new Date(now).getFullYear() ? ASKED_DAY : ASKED_DAY_AND_YEAR).format(date);
 }
 
+/** When an Ask turn was asked, as the note between its messages says it: "Today 3:41 PM", or its day and time ("Oct 14, 3:41 PM"). */
+export function askedStamp(iso: string, now = Date.now()): string {
+  const time = Date.parse(iso);
+  if (Number.isNaN(time)) return '';
+  const clock = ASKED_TIME.format(new Date(time));
+  return time >= startOfDay(now) ? `Today ${clock}` : `${askedWhen(iso, now)}, ${clock}`;
+}
+
+/** How long two messages may be apart before the later one says its time again, as a texting app does. */
+const STAMP_AFTER_MS = 60 * 60_000;
+
+/** Whether a turn asked at `iso` says its time: the first shown, the first of its day, or one asked an hour or more after the one before it. */
+export function stamped(iso: string, before: string | undefined): boolean {
+  if (before === undefined) return true;
+  const [time, earlier] = [Date.parse(iso), Date.parse(before)];
+  return time - earlier >= STAMP_AFTER_MS || startOfDay(time) !== startOfDay(earlier);
+}
+
 /** A file's size the way Finder shows it: 15 bytes, 340 KB, 2.1 MB. */
 export function bytes(size: number): string {
   if (size < 1000) return `${size} bytes`;

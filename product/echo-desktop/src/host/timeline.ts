@@ -1,10 +1,11 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
-// keeps one turn (a new one at the end, an old one in its place); a move sets
-// the thread of several at once (ADR-0056). Every turn stays, however old and
-// however many, until the file would pass what this computer can read back as
-// one file; only then do the oldest go. Each write puts a private temporary
-// file in place of the old one, so a reader never meets half a file.
+// keeps one turn (a new one at the end, an old one in its place); a remove
+// takes back the one turn ECHO just placed (ADR-0057). Every other turn stays,
+// however old and however many, until the file would pass what this computer
+// can read back as one file; only then do the oldest go. Each write puts a
+// private temporary file in place of the old one, so a reader never meets half
+// a file.
 // A file that cannot be read at all, or is not a timeline file, reads as empty
 // and is replaced by the next put. Inside a timeline file, one turn the page
 // cannot show is skipped on read and the others show; a put keeps it in the
@@ -14,14 +15,13 @@
 // timeline deletes any other account's, so an account change leaves nothing of
 // the last one here. Kept apart from host.ts so all of it is tested on a real
 // folder.
-import { validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { isPersonAnswerLabelV1, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
 import { constants as buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect,
-  type TimelineAnswer, type TimelineLabel, type TimelineMove, type TimelineTurn,
+  ITEM_ID, THREAD_ACTIVE_MS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect, type TimelineAnswer, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -118,8 +118,8 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
 
 /**
  * Keeps `turn` in the account's file: in place of the turn with its id, or at
- * the end, keeping the thread the file has it in: only a move relabels a turn
- * (ADR-0056), so a save never takes back a move that landed before it.
+ * the end. A kept turn stays in the thread the file has it in, whatever the
+ * page sends: no write moves a turn between threads (ADR-0057, R12).
  */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
   rewriteTimeline(personDirectory, account, (turns) => {
@@ -133,24 +133,25 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
 }
 
 /**
- * A move between threads (ADR-0056): compare-and-set, all or nothing, in one
- * write, only while the file holds every named turn in its group's `from`; a
- * turn saved before threads, named for the first time, is marked `carried: []`.
- * Answers whether it moved, and where the file has each named turn it holds.
- * Read strictly: an unreadable file is a failure, not one with nothing to move.
+ * Undo of a placement (ADR-0057, R15): takes the turn out in one compare-and-set write, only while the file holds it as
+ * the newest turn of an active thread (R12: a joined thread loses none) that no kept turn names (`follows`, `again_of`,
+ * `carried`, `continues`), so nothing kept is left pointing at a turn that is gone. Answers whether the file holds it
+ * now: a turn it never held is not held. Read strictly: an unreadable file is a failure, not one with nothing to remove.
  */
-export function moveTimeline(personDirectory: string, account: Expect, moves: readonly TimelineMove[]): { moved: boolean; turns: TimelineLabel[] } {
-  const group = new Map(moves.flatMap(move => move.turns.map(turn => [turn, move] as const)));
-  // A thread that is not a turn's id names none, as a put takes it.
-  const label = (turn: StoredTurn): string | null => (typeof turn.thread === 'string' && ID.test(turn.thread) ? turn.thread : null);
-  const legacy = (turn: StoredTurn) => (turn.thread === undefined && turn.carried === undefined ? { carried: [] } : {});
-  let moved = true;
-  const turns = rewriteTimeline(personDirectory, account, (held) => {
-    const named = held.filter(turn => group.has(turn.id));
-    moved = named.length === group.size && named.every(turn => label(turn) === group.get(turn.id)!.from);
-    return moved && named.length > 0 ? held.map(turn => (group.has(turn.id) ? { ...turn, thread: group.get(turn.id)!.to, ...legacy(turn) } : turn)) : null;
+export function removeTimeline(personDirectory: string, account: Expect, id: string, now = Date.now()): { removed: boolean } {
+  const names = (turn: StoredTurn): boolean => turn.follows === id || turn.again_of === id
+    || [turn.carried, turn.continues].some(list => Array.isArray(list) && list.includes(id));
+  let removed = true;
+  rewriteTimeline(personDirectory, account, (held) => {
+    const at = held.findIndex(turn => turn.id === id);
+    if (at < 0) return null;
+    const turn = held[at]!;
+    const thread = typeof turn.thread === 'string' && ID.test(turn.thread) ? turn.thread : null;
+    removed = thread !== null && now - Date.parse(turn.asked_at) < THREAD_ACTIVE_MS
+      && !held.slice(at + 1).some(later => later.thread === thread) && !held.some(other => other !== turn && names(other));
+    return removed ? held.filter(each => each !== turn) : null;
   }, true);
-  return { moved, turns: turns.filter(turn => group.has(turn.id)).map(turn => ({ turn: turn.id, thread: label(turn) })) };
+  return { removed };
 }
 
 /** Named but not synced: the file reads as written, so the write may well have happened. */
@@ -353,16 +354,6 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/** A move as the page sends one (ADR-0056), each turn once in the whole move; null for anything else. */
-export function timelineMoves(value: unknown): TimelineMove[] | null {
-  if (!Array.isArray(value)) return null;
-  const id = (each: unknown): each is string => string(each) && ID.test(each);
-  const moves = value.filter((move): move is TimelineMove => record(move) && Object.keys(move).sort().join() === 'from,to,turns'
-    && (move.from === null || id(move.from)) && id(move.to) && Array.isArray(move.turns) && move.turns.length > 0 && move.turns.every(id));
-  const turns = moves.flatMap(move => move.turns);
-  return moves.length === value.length && new Set(turns).size === turns.length ? moves : null;
-}
-
 /** A turn as a put writes it, or null for anything else. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !string(value.question)
@@ -372,10 +363,12 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
   if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
   if (value.typed !== undefined && !string(value.typed)) return null;
   if (value.follows !== undefined && value.follows !== null && !(string(value.follows) && ID.test(value.follows))) return null;
-  // Its thread is a turn's id, and `carried` holds turns each once (ADR-0056).
+  // Its thread is a turn's id; `carried` holds turns and `continues` threads, each once (ADR-0056, ADR-0057).
   if (value.thread !== undefined && !(string(value.thread) && ID.test(value.thread))) return null;
-  if (value.carried !== undefined && !(Array.isArray(value.carried) && value.carried.every(id => string(id) && ID.test(id))
-      && new Set(value.carried).size === value.carried.length)) return null;
+  if (![value.carried, value.continues].every(ids => ids === undefined || (Array.isArray(ids) && ids.every(id => string(id) && ID.test(id))
+      && new Set(ids).size === ids.length))) return null;
+  // Its label in form; whose words it may use is the page's to check each time it reads it (R2).
+  if (value.label !== undefined && !isPersonAnswerLabelV1(value.label)) return null;
   // The sources a check found unreadable: distinct places among the answer's own sources.
   const sources = (value.answer as TimelineAnswer).sources.length;
   if (value.unreadable !== undefined && !(indexes(value.unreadable) && new Set(value.unreadable).size === value.unreadable.length

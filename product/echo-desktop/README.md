@@ -71,32 +71,41 @@ this computer only, in one owner-only file per account beside the person
 session (`ask-timeline-v1`), every turn until the file would pass what the runtime can read back as one string. Our own sign-out,
 or another account signing in here, deletes it; a session that merely ended
 keeps it. The Authority never stores it. Ask opens over the page on one
-thread (ADR-0056, proposed): the turns that carry the same thread label, under
-the thread's name, which opens the list of every thread by home (a project, or
-none) to jump to one or merge one of the same home into the open thread. A
-merge, or its Undo, shows only once this computer has kept it, in one write;
-one it refused moves nothing and the page says so, and one it cannot confirm
-changes nothing on the page and says so, showing correctly after ECHO
-restarts. You are in a thread
-once you have asked in it or picked it since Ask opened, its own row in the
-list included; the sidebar's Ask
-only shows the one you last used. In a thread, a typed question continues it.
-Otherwise it is placed among all your threads, the one shown included: it
-starts a thread, or is asked in the one the answer says it belongs to. The latest turn, and those asked since Ask opened, show in
-full; every earlier turn is one line with its
-project's square (none for all context), its full question,
-**Changed** when a source it cited changed, and when it was asked, with a quiet
-Today line above today's first turn. Back, Escape or any page closes Ask and
-keeps the timeline. Opening Ask checks what the newest ten turns of its thread
+conversation (ADR-0056 and ADR-0057, proposed): the turns that carry the same
+thread label, as messages, yours on the right and ECHO's replies on the left,
+with nothing on the page that names or lists a thread. Threads are how ECHO
+keeps context underneath. One is active for 7 days after its newest turn and
+then joined, part of memory, which never changes: a question that belongs to
+a joined thread starts a new one that continues it, and one line at its top,
+"Continues (label) from (date)", opens the older part. Threads that continue
+or are linked to one another are one conversation, worked out from the saved
+turns each time; nothing stores it. When ECHO puts your question somewhere
+other than what you were looking at, one faint line says so with **Undo**,
+which stops the question or takes its turn back out of this computer's file
+(only while it is still the newest of its thread and nothing names it), then
+asks your words as a new question. The title, **Ask**, is the one door: it,
+or the up arrow in the empty bar, opens a list with Find, **New question**
+and one row for each conversation, labelled only in words you typed. You are
+in a thread once you have asked in it or picked it since Ask opened; the
+sidebar's Ask only shows the one you last used. In a thread, a typed question
+continues its conversation. Otherwise it is placed among all your
+conversations, the one shown included: it starts one, or is asked in the one
+the answer says it belongs to. The latest turn, and those asked since Ask
+opened, show in full; each of the three before shows its question and the
+reply's first message, which opens the rest; older ones sit behind one line.
+A turn's time shows in the middle above it when it is the first shown, the
+first of its day, or an hour after the one before. Back, Escape or any page
+closes Ask and keeps the timeline. Opening Ask checks what the newest ten turns of its thread
 cited in one content-free read (`person ask-check`): at most every five
-minutes for each thread, and quiet when it fails. A turn opened from its line or
-a suggestion is checked too when nothing in the last five minutes said what
-its sources are now, and what a check said shows for five minutes only. A line
-opens its answer as it was, dimmed, under the line as its heading: a sentence
-whose source changed is lit in the signal under "Changed since Oct 14", one
-citing something you can no longer read is left out, and **Ask again** sits on
-the line under it. Nothing is said when nothing changed (ADR-0049); a turn
-with every sentence left out shows only Ask again.
+minutes for each thread, and quiet when it fails. A turn opened from its first
+message or a suggestion is checked too when nothing in the last five minutes
+said what its sources are now, and what a check said shows for five minutes
+only. An earlier turn's first message opens the rest of its answer as it was,
+dimmed, under it: a sentence whose source changed is lit in the signal under
+"Changed since Oct 14", one citing something you can no longer read is left
+out, and **Ask again** sits on the line under it. Nothing is said when nothing
+changed (ADR-0049); a turn with every sentence left out says you can no longer
+read what it cited, with Ask again under it.
 Ask again asks the same full question in the same scope (a turn asked in Mine
 before it went, at Home): the new answer lands at the bottom, opening with
 "Changed since Oct 14" and what is different, each cited, or nothing when
