@@ -1183,16 +1183,18 @@ describe('a question a model wrote goes only while every turn that could have in
     expect(asked()[1]).toMatchObject({ question: rewrite, previous: { purpose: 'ask_again', question: rewrite } });
   });
 
-  it.each<[string, (rewritten: TimelineTurn, first: TimelineTurn) => TimelineTurn[], boolean]>([
-    // [the record, the timeline with the rewritten turn last named `rewritten`, whether its full question goes]
-    ['names itself as the turn it followed', rewritten => [{ ...rewritten, follows: rewritten.id }], false],
-    ['names itself among the turns it carried', (rewritten, first) => [first, { ...rewritten, carried: [first.id, rewritten.id] }], false],
-    ['follows a turn kept after it', (rewritten, first) => [{ ...rewritten, follows: first.id }, first], false],
+  it.each<[string, (rewritten: TimelineTurn, first: TimelineTurn) => TimelineTurn[], number | null]>([
+    // [the record, the timeline holding the turn `rewritten`, how many turns one check asks about when its full question goes (null: it does not)]
+    ['names itself as the turn it followed', rewritten => [{ ...rewritten, follows: rewritten.id, carried: [] }], null],
+    ['names itself among the turns it carried', (rewritten, first) => [first, { ...rewritten, carried: [first.id, rewritten.id] }], null],
+    ['follows a turn that follows it back', (rewritten, first) => [{ ...first, follows: rewritten.id }, { ...rewritten, carried: [] }], null],
+    // A file can keep a turn before the one it followed (a save that failed and was made later): that is no loop.
+    ['is kept before the turn it followed', (rewritten, first) => [rewritten, first], 2],
     ['shares a turn with another it carried, each reached once', (rewritten, first) => {
       const [left, right] = ['and the budget?', 'and the owner?'].map((question, at) => turn(question, (5 - at) * DAY, { follows: first.id, thread: first.id, carried: [first.id] }));
       return [first, left!, right!, { ...rewritten, follows: left!.id, carried: [left!.id, right!.id] }];
-    }, true],
-  ])('takes a history that comes back on itself as no history, and one that only meets again as whole: a turn that %s', async (_how, timeline, whole) => {
+    }, 4],
+  ])('takes a history that comes back on itself as no history, and one that only meets again as whole: a turn that %s', async (_how, timeline, checked) => {
     const first = turn('When does the pilot start?', 6 * DAY);
     const rewrite = 'Who signs off the pilot for the launch?';
     const rewritten = turn(rewrite, 2 * DAY, { text: 'and who signs it off?', typed: 'and who signs it off?', follows: first.id, thread: first.id,
@@ -1201,8 +1203,10 @@ describe('a question a model wrote goes only while every turn that could have in
     const store = await startStore();
     store.askAgain(rewritten.id);
     await flush();
-    const sent = whole ? rewrite : 'and who signs it off?';
+    const sent = checked === null ? 'and who signs it off?' : rewrite;
     expect(asked()[0]).toMatchObject({ question: sent, previous: { purpose: 'ask_again', question: sent } });
+    // Whole, the check made before asking asks about each turn it was written from once, two sources a turn; otherwise only about its own.
+    expect(calls('ask.check')[0]!.items).toHaveLength((checked ?? 1) * 2);
   });
 
   it('sends no question a model wrote once a turn its request carried is no longer kept, though every turn there reads', async () => {
@@ -1533,8 +1537,11 @@ describe('the way out of every wait', () => {
     seed(...tests, ...billing);
     script = params => (params.threads ? elsewhere(params, [0, 1]) : null);
     const store = await startStore();
+    vi.setSystemTime(NOW.getTime() - 5000);
     await store.ask('are they fixed?');
     await flush();
+    // Asked five seconds before, picked now, its project read two seconds later: the pick's own time counts.
+    vi.setSystemTime(NOW);
     const reading = held.hold('projects.read');
     const pick = store.chooseThread(tests[0]!.id);
     vi.setSystemTime(NOW.getTime() + 2000);
@@ -1833,6 +1840,29 @@ describe('a joined thread never changes: a question for it starts a thread that 
     const landed = kept().at(-1)!;
     expect(landed).toMatchObject({ text: 'and who signs them?', thread: landed.id, continues: [shown] });
     expect([store.continuesNote()?.undo, store.getState().ask?.placed]).toEqual([false, null]);
+  });
+
+  it('offers Undo when ECHO sends a question to a conversation that was not on screen when it was asked, though Ask has it open underneath', async () => {
+    const pilot = threadIn(GLOBAL, ['When does the pilot start?', 10 * DAY]);
+    const billing = threadIn(GLOBAL, ['Who owns billing?', 9 * DAY]);
+    seed(...pilot, ...billing);
+    const store = await startStore();
+    await store.returnToAsk();
+    await flush();
+    expect(store.threadShown()?.id).toBe(billing[0]!.id);
+    // A question that could be either: "Which one?" shows alone, and billing's conversation is no longer on screen.
+    script = params => (params.threads ? elsewhere(params, [0, 1]) : null);
+    await store.ask('what changed?');
+    await flush();
+    expect([store.threadShown(), store.getState().ask?.thread?.id]).toEqual([undefined, billing[0]!.id]);
+    // Another question typed then, which ECHO sends to billing's: that is somewhere else than what showed.
+    script = params => (params.threads ? elsewhere(params, [placeOf(params, 'Who owns billing?')]) : null);
+    await store.ask('who approves the invoices?');
+    await flush();
+    const landed = kept().at(-1)!;
+    expect(landed).toMatchObject({ text: 'who approves the invoices?', thread: landed.id, continues: [billing[0]!.id] });
+    expect(store.continuesNote()).toMatchObject({ thread: billing[0]!.id, undo: true });
+    expect(store.getState().ask?.placed).toMatchObject({ kind: 'continued', turn: landed.id, words: 'who approves the invoices?' });
   });
 
   it('names the older part by what was asked where it lives: a label or words on a turn a file keeps there from another place never show on the line', async () => {

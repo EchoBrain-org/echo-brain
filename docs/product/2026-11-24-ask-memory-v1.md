@@ -91,9 +91,9 @@ they are needed. None is stored.
 
 1. **One chat and the bar.** The thread's name line is gone. The shown
    thread's turns read as a conversation (see "The look"). What shows of each
-   is as before: in full, the turn that was the latest when Ask opened and
-   every question asked since; short, the three before those; older ones
-   behind "N earlier questions".
+   is as before: in full, the latest turn, the one that was the latest when
+   Ask opened, and every question asked since; short, the three before
+   those; older ones behind "N earlier questions".
 2. **They ask.** Most of the time nothing else happens. The answer lands under
    the chat they are in, or a new chat starts for a new subject. When ECHO
    sees that two conversations are about the same thing it links them, and
@@ -202,8 +202,9 @@ rules are added.
   turn, until it reaches turns that followed nothing. The check fails, and
   the typed words go, on a turn no longer kept, one saved before what a turn
   followed was recorded, one that names its thread without recording what it
-  carried, or one that names a turn kept after it (a history that comes back
-  on itself).
+  carried, or a history that comes back on itself (a turn that names itself
+  through what it followed and carried). The order the file keeps turns in
+  does not matter.
 - **R11. A thread is active for 7 days after its newest turn.** Each new turn
   starts the 7 days again. Nothing is stored: a thread is active or joined by
   the age of its newest turn. Exactly 7 days is joined. The time that counts
@@ -234,7 +235,9 @@ rules are added.
   only while it is still the newest turn of its thread and no other turn
   names it. Only ECHO naming a conversation is a placement. Where a rule
   lands a question the person asked in a conversation (R13, R14), nothing was
-  placed for them, so there is no Undo.
+  placed for them, so there is no Undo. What the person was looking at is
+  what showed when they asked: a question waiting alone, under "Which one do
+  you mean?" or after a failure, hides the conversation behind it.
 - **R16. ECHO joins conversations by linking, never by moving.** When an
   answer names another conversation as plainly the same thing, the turn that
   lands names that conversation's newest thread in `continues`. From then on
@@ -256,12 +259,15 @@ decide when ECHO asks instead of acting.
   for a conversation when it is one line of 1 to 80 characters with at least
   one word, and each of its words, ignoring case, is a word of a question the
   person typed in that conversation. Words are used as typed: "owns" does not
-  allow "owner". It holds no character that shows as nothing or changes how
-  the text around it reads (a control or format character): one between two
-  typed words would show them as one word, or their letters in another
-  order. The one exception is a joiner inside a word, which Persian and the
-  Indic scripts need, and it counts as part of that word. One function holds
-  the rule for the API, the kernel and the desktop
+  allow "owner". Words are read as the text shows them. A character that
+  shows as nothing (a soft hyphen, a zero-width space, a mark that sets the
+  direction of text) splits no typed word, and a label holds none: between
+  two typed words it would show them as one word, or their letters in
+  another order. A joiner inside a word, which Persian and the Indic scripts
+  need, is part of that word. Between its words a label may hold spaces and
+  punctuation. Any other character, such as a symbol or an emoji, must be
+  one the person typed, because a symbol can say a word too. One function
+  holds the rule for the API, the kernel and the desktop
   (`personAnswerLabelFitsV1`).
 - **Who checks.** The desktop holds the person's typed words, so its check
   decides: before it keeps a label, and each time it shows or sends one. The

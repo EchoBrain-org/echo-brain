@@ -115,9 +115,10 @@ Adopt option 1, with the founder's decisions above.
   label with a word in no question it was shown; the desktop, which alone
   holds the typed words, checks before it keeps, shows or sends one. A label
   that fails is dropped and never fails an Ask. 80 characters keeps a label
-  to one line of a "Which one?" button (ADR-0055). A label holds no control
-  or format character, which could show typed words as a word nobody typed;
-  a joiner inside a word is part of that word.
+  to one line of a "Which one?" button (ADR-0055). A label holds no
+  character that shows as nothing outside a word, and no symbol the person
+  did not type, since either could show a word nobody typed; a joiner inside
+  a word is part of that word.
 - **The page is one conversation.** The thread's name line and the list
   under it are gone (this updates ADR-0049's page and ADR-0056's). Questions
   are messages on the right and replies on the left. The page title is a

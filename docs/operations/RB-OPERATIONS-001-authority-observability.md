@@ -779,7 +779,7 @@ Ask's follow-up resolver (`agentic-follow-up-resolver-v1.ts`) and the renderers 
 | Name | What code did |
 | --- | --- |
 | `resolver_fallback` | Answered a follow-up as asked after its resolver gave no usable reply (ADR-0047); with threads or older turns on the Ask (ADR-0056), answered it where it was asked: the open thread, or a new one when none was open |
-| `resolver_label_dropped` | Dropped a label the thread resolver wrote for the open thread (ADR-0057): not one line of 1 to 80 characters, a word in none of that thread's questions nor the new question, or beside a reply that carries none; the placement stands and the answer goes without a label |
+| `resolver_label_dropped` | Dropped a label the thread resolver wrote for the open thread (ADR-0057): not one line of 1 to 80 characters, a word or symbol in none of that thread's questions nor the new question, a character that shows as nothing, or beside a reply that carries none; the placement stands and the answer goes without a label |
 | `writer_repeat_dropped` | Dropped an Ask statement that exactly repeats an earlier one (the temporary exact-repeat guard, ADR-0041) |
 | `writer_unknown_id_dropped` | Dropped an id the writer was not shown from a sentence, a list use or a list's members |
 | `writer_uncited_sentence_dropped` | Left out a writer sentence that cites no evidence text it read |

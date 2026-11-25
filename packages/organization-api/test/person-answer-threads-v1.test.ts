@@ -131,6 +131,16 @@ describe('a conversation\'s label (ADR-0057)', () => {
     expect(personAnswerLabelFitsV1(persian, [`${persian} \u0628\u062F\u0627\u0646\u0645`])).toBe(true);
     expect(personAnswerLabelFitsV1(persian.replace('\u200C', ''), [persian])).toBe(false);
     expect([isPersonAnswerLabelV1('pay\u200Croll'), personAnswerLabelFitsV1('pay\u200Croll', ['pay roll'])]).toEqual([true, false]);
+    // A code point with no character yet that shows as nothing is refused as one; a sign that shows, typed, is not.
+    expect(isPersonAnswerLabelV1('pay\u2065roll')).toBe(false);
+    expect([isPersonAnswerLabelV1('\u06DD\u0661'), personAnswerLabelFitsV1('\u06DD\u0661', ['\u06DD\u0661'])]).toEqual([true, true]);
+    // Words are read as the text shows them: a soft hyphen splits no word, so "inactive" never allows "active".
+    expect(personAnswerLabelWordsV1('in\u00ADactive pay\u200Broll')).toEqual(['inactive', 'payroll']);
+    expect([personAnswerLabelFitsV1('active', ['in\u00ADactive']), personAnswerLabelFitsV1('inactive', ['in\u00ADactive'])]).toEqual([false, true]);
+    // Between words only spaces and punctuation need no typing: a symbol or an emoji can say a word too, so it is typed or it fails.
+    expect(personAnswerLabelFitsV1('pilot: start / owns (annual plans)', typed)).toBe(true);
+    for (const label of ['pilot \u{1F193}', 'pilot + start', 'pilot \u2192 start', 'pilot\u2122']) expect(personAnswerLabelFitsV1(label, typed), label).toBe(false);
+    expect(personAnswerLabelFitsV1('pilot + start \u{1F193}', [...typed, 'is it \u{1F193} + what?'])).toBe(true);
     expect(personAnswerLabelFitsV1('PILOT: start, owns, annual plans', typed)).toBe(true);
     // Words are used as typed: a different form of a typed word is not that word.
     for (const label of ['pilot owner', 'pilot starts', 'the pilots', 'billing']) expect(personAnswerLabelFitsV1(label, typed), label).toBe(false);
