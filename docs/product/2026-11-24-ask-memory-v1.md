@@ -104,9 +104,9 @@ they are needed. None is stored.
    person was already looking at, nothing moved, so there is no line.
 4. **The question is about a joined thread.** A new chat starts. One faint
    line at its top says "Continues (label) from (date)". The label opens the
-   older chat. When ECHO named that conversation for the question, the line
-   also carries "Undo" right after. A question the person asked there
-   themselves has the line and no Undo.
+   older chat. When ECHO sent the question there from another conversation,
+   the line also carries "Undo" right after. A question the person asked
+   there themselves has the line and no Undo.
 5. **ECHO cannot tell.** It asks, as a reply: "Which one do you mean?", with
    a quick reply for each conversation it could be and "New question" last.
    A quick reply shows the label, and the project's name when the
@@ -231,9 +231,9 @@ rules are added.
 - **R15. ECHO acts, and the person can undo.** After ECHO puts a question
   in a conversation other than the one the person was looking at (in its
   active thread, or in a new thread that continues its joined one), the page
-  says so in one line and offers Undo. Undo removes only the turn ECHO just placed, and
-  only while it is still the newest turn of its thread and no other turn
-  names it. Only ECHO naming a conversation is a placement. Where a rule
+  says so in one line and offers Undo. Undo removes only the turn ECHO just
+  placed, and only while it is still the newest turn of its thread and no
+  other turn names it. Only ECHO naming a conversation is a placement. Where a rule
   lands a question the person asked in a conversation (R13, R14), nothing was
   placed for them, so there is no Undo. What the person was looking at is
   what showed when they asked: a question waiting alone, under "Which one do
