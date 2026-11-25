@@ -194,7 +194,7 @@ export async function runThreadTrial(caseDefinition, trial, structuredOutput, ge
     case_id: caseDefinition.id, group: caseDefinition.group, trial,
     ...placementKept(placement),
     ...kept(gradeThreadTrial(caseDefinition, placement, resolved?.fallback === true)),
-    ...threadTrialLabel(caseDefinition, placement, resolved?.fallback === true),
+    ...threadTrialLabel(placement, resolved?.fallback === true),
   });
 }
 
