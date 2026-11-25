@@ -439,17 +439,21 @@ test('the line that says ECHO moved a question going away, when its Undo is refu
   await expect(page.getByTestId('moved-note')).toBeVisible();
   const bottom = () => page.getByTestId('ask-view').evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(bottom).toBeLessThan(1);
-  // The person reads the answer's second sentence, 240 pixels down the view, with the line and its Undo in view above it.
+  // The person reads the answer's second sentence with the line and its Undo wholly in view above it. The line is held 24
+  // pixels down the view and the sentence's place is read from there: how far apart the two sit differs by platform, and
+  // a click on a link the view clips would scroll it in, which is the test moving the page, not the page.
   const sentence = page.getByTestId('turn').last().getByTestId('statement-text').nth(1);
-  await sentence.evaluate((element) => {
-    const view = element.closest('.ask')!;
-    view.scrollTop += element.getBoundingClientRect().top - view.getBoundingClientRect().top - 240;
+  await page.getByTestId('moved-note').evaluate((note) => {
+    const view = note.closest('.ask')!;
+    view.scrollTop += note.getBoundingClientRect().top - view.getBoundingClientRect().top - 24;
   });
   await settled(page);
-  await expect(page.getByTestId('placed-undo')).toBeInViewport();
+  await expect(page.getByTestId('placed-undo')).toBeInViewport({ ratio: 1 });
+  await expect(sentence).toBeInViewport({ ratio: 1 });
+  const read = await offset(sentence);
   const stays = async () => {
     await settled(page);
-    await expect.poll(async () => Math.abs(await offset(sentence) - 240)).toBeLessThanOrEqual(1);
+    await expect.poll(async () => Math.abs(await offset(sentence) - read)).toBeLessThanOrEqual(1);
   };
   await stays();
   // An Undo this computer cannot write (its timeline folder made a link) removes nothing and keeps its line: the sentence stays.

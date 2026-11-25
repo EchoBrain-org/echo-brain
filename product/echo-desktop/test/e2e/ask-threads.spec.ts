@@ -633,20 +633,25 @@ test('Capture opened by its shortcut over the door closes it and keeps its own E
   await door.getByTestId('door-find').fill('billing');
   await expect(door.getByTestId('door-row').locator('.name')).toHaveText(['Who owns billing?']);
   // A Return, then an Escape, as Capture comes up over Ask, as if pressed before Capture takes the keyboard: sent from the
-  // find field if it is still there, and from wherever the keyboard is otherwise (the platforms differ in which).
-  const pressed = page.evaluate(() => new Promise<void>((resolve) => {
-    const observer = new MutationObserver(() => {
-      if (!document.querySelector('[data-testid="compose"]')) return;
-      observer.disconnect();
-      const target = document.querySelector('[data-testid="door-find"]') ?? document.activeElement ?? document.body;
-      for (const key of ['Enter', 'Escape']) target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-      resolve();
+  // find field if it is still there, and from wherever the keyboard is otherwise (the platforms differ in which). The page
+  // is watching before main is asked for Capture: main's message can otherwise open it first on a slow runner, and then
+  // nothing is ever pressed.
+  type Watching = { pressed: Promise<void> };
+  await page.evaluate(() => {
+    (window as unknown as Watching).pressed = new Promise<void>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (!document.querySelector('[data-testid="compose"]')) return;
+        observer.disconnect();
+        const target = document.querySelector('[data-testid="door-find"]') ?? document.activeElement ?? document.body;
+        for (const key of ['Enter', 'Escape']) target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+        resolve();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
     });
-    observer.observe(document.body, { childList: true, subtree: true });
-  }));
+  });
   // What ⌘⇧E has main send the page.
   await run.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.send('event', { name: 'capture.open', payload: {} }); });
-  await pressed;
+  await page.evaluate(() => (window as unknown as Watching).pressed);
   // Neither key was the door's: it closed as Capture came up. The Escape was Capture's, which closed, leaving Ask as it was.
   await expect(page.getByTestId('compose')).toHaveCount(0);
   await expect(page.getByTestId('door')).toHaveCount(0);
