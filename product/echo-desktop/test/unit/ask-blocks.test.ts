@@ -113,16 +113,17 @@ describe('an arranged part reads as its blocks', () => {
   it('draws each block in the writer\'s order under its title: the answer, a table, a timeline, a card, numbered steps, text and a quote', async () => {
     const { thread } = await answered(therm());
     const answer = byTestId(thread(), 'answer')[0]!;
-    const [layout] = byClass(answer, 'answer-layout');
-    expect(drawn(layout)).toEqual(['p.answer-lead', 'div.answer-table', 'h3.answer-heading', 'ol.answer-timeline', 'div.answer-card', 'h3.answer-heading',
+    // The answer's first statement is its own short message (ADR-0057); the rest follows as the next, without it.
+    const [lead, rest] = byClass(answer, 'msg');
+    expect(words(lead!)).toBe('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
+    expect(text(rest)).not.toContain('Yes, PVT can start');
+    const [layout] = byClass(rest, 'answer-layout');
+    expect(drawn(layout)).toEqual(['div.answer-table', 'h3.answer-heading', 'ol.answer-timeline', 'div.answer-card', 'h3.answer-heading',
       'ol.answer-bullets', 'h3.answer-heading', 'p.answer-paragraph', 'figure.answer-quote']);
     expect(byType(layout, 'h3').map(text)).toEqual(['Soak test', 'Before PVT', 'Open risk']);
-    // The answer reads as the lead, in the answer's own size.
-    expect(byClass(layout, 'answer-lead').map(node => words(node))).toEqual(['Yes, PVT can start: the 72-hour soak passed on Oct 23.']);
-    expect(byTestId(byClass(layout, 'answer-lead')[0], 'statement').map(classes)).toEqual([['claim']]);
     expect(byClass(layout, 'answer-paragraph').map(node => words(node))).toEqual(['Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list.']);
-    // Every sentence is one item: the answer, two events, two facts, two steps, the text and the quote; the list statement is its table's rows.
-    expect(byTestId(layout, 'statement')).toHaveLength(9);
+    // Every other sentence is one item: two events, two facts, two steps, the text and the quote; the list statement is its table's rows.
+    expect(byTestId(layout, 'statement')).toHaveLength(8);
     expect(byTestId(layout, 'answer-row')).toHaveLength(2);
   });
 
@@ -234,7 +235,7 @@ describe('an arranged part reads as its blocks', () => {
     const titled = changed(blocks => blocks.map(block => block.kind === 'table' ? { kind: 'table', title: 'Open tickets', statements: block.statements, columns: block.columns,
       rows: block.rows } : block));
     const later = await shownAnswer(titled);
-    expect(drawn(byClass(later, 'answer-layout')[0]).slice(0, 3)).toEqual(['p.answer-lead', 'h3.answer-heading', 'div.answer-table']);
+    expect(drawn(byClass(later, 'answer-layout')[0]).slice(0, 2)).toEqual(['h3.answer-heading', 'div.answer-table']);
     expect(byType(later, 'h3')[0]!.props.children).toBe('Open tickets');
     expect(byClass(later, 'answer-table')[0]!.props['aria-label']).toBe('Open tickets');
     // Opening the answer, its caption says what the rows are, in the lead's type.
@@ -303,7 +304,7 @@ describe('a check of an arranged answer (ADR-0047)', () => {
     // The readiness review and THERM-48 are no longer yours to read: the steps, the quote and the card cite nothing else.
     const { thread } = await reopened({ 31022: 'unreadable', 20048: 'unreadable' }, kept('2', therm()));
     const answer = byTestId(thread(), 'answer')[0]!;
-    expect(drawn(byClass(answer, 'answer-layout')[0])).toEqual(['p.answer-lead', 'div.answer-table', 'h3.answer-heading', 'ol.answer-timeline', 'h3.answer-heading',
+    expect(drawn(byClass(answer, 'answer-layout')[0])).toEqual(['div.answer-table', 'h3.answer-heading', 'ol.answer-timeline', 'h3.answer-heading',
       'p.answer-paragraph']);
     expect(byType(answer, 'h3').map(text)).toEqual(['Soak test', 'Open risk']);
     expect(text(answer)).not.toContain('THERM-48');

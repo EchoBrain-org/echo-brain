@@ -43,7 +43,9 @@ flowchart LR
   the previous turn ([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). An Ask may also carry
   the list of the asker's other threads, which may be empty and asks for the question to be
   placed among them, and a follow-up the older turns of its thread
-  ([ADR-0056](../decisions/ADR-0056-ask-threads.md)).
+  ([ADR-0056](../decisions/ADR-0056-ask-threads.md)). A client that reads labels says so
+  (`labels: true`), and the answer may then name the conversation's label: one line in the
+  asker's own words ([ADR-0057](../decisions/ADR-0057-ask-memory.md)).
 - **Scopes:** the whole organization, or one project. The `mine` scope is
   retired; a request that names it is refused.
 - **Contracts:** `packages/organization-api` (`person-answer-v8.ts` and the
@@ -80,7 +82,7 @@ The engine lives in `packages/organization-authority-kernel/src/answer-compositi
 | `agentic-research-loop-v1.ts` | Rounds of search, list and open, steered by the model |
 | `agentic-ask-v1-model-protocol.ts` | Prompts and JSON schemas for the model |
 | `agentic-model-gate-v1.ts` | The access check before every model call |
-| `agentic-follow-up-resolver-v1.ts` | One call before research: what a follow-up refers to, and which thread the question belongs to |
+| `agentic-follow-up-resolver-v1.ts` | One call before research: what a follow-up refers to, which thread the question belongs to, and the open thread's label |
 | `agentic-list-evidence-v1.ts` | Complete lists as evidence |
 | `renderers/ask-renderer-v1.ts`, `ask-layout-v2.ts` | The written answer and its blocks |
 | `agentic-ask-progress-recorder-v1.ts` | Progress steps and the receipt of what was looked through ([ADR-0043](../decisions/ADR-0043-ask-receipt-counts-what-research-looked-through.md)) |

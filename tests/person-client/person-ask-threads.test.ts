@@ -174,3 +174,56 @@ describe('person ask --threads (ADR-0056)', () => {
     expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
   });
 });
+
+describe('person ask --labels (ADR-0057)', () => {
+  const LABELLED = [{ ...THREADS[0]!, label: 'billing migration: owns, due' }, THREADS[1]!];
+  const LABEL = 'DVT gate: blocking, change';
+
+  it('sends labels: true, with the labels inside --threads and --previous as given, and prints the label it gets', async () => {
+    const previous = { ...PREVIOUS, label: 'DVT gate: blocking' };
+    const answer = answered({ question: QUESTION, label: LABEL });
+    const fetch = replying(answer);
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, `--previous=${JSON.stringify(previous)}`, `--threads=${JSON.stringify(LABELLED)}`, '--labels'])).toBe(0);
+    expect(lines(run.output.stdout).at(-1)).toMatchObject({ ok: true, result: answer });
+    expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, previous, threads: LABELLED, labels: true });
+    // Without the flag nothing is said of labels.
+    const plain = replying(answered({ question: QUESTION }));
+    expect(await cli(plain).run(['ask', `--question=${QUESTION}`, `--previous=${JSON.stringify(PREVIOUS)}`])).toBe(0);
+    expect(bodyOf(plain.mock.calls[0]![1])).not.toHaveProperty('labels');
+  });
+
+  it.each([
+    // A thread's label says nothing its questions do not (R2): "owner" is not a word typed there ("Who owns").
+    ['a thread label with a word its questions do not have', [`--threads=${JSON.stringify([{ ...THREADS[0], label: 'billing migration: owner' }])}`], /^Ask threads is invalid: .*Ask thread label uses a word its questions do not$/u],
+    ['a thread label out of form', [`--threads=${JSON.stringify([{ ...THREADS[0], label: ' billing ' }])}`], /^Ask threads is invalid: .*Ask thread label is invalid$/u],
+    ['a previous label out of form', [`--previous=${JSON.stringify({ ...PREVIOUS, label: 'x'.repeat(81) })}`], /^Ask previous is invalid: .*Ask previous label is invalid$/u],
+    ['a previous label beside an Ask again', [`--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again', label: 'DVT gate' })}`], /^Ask previous is invalid: .*Ask again carries no label$/u],
+    ['--labels beside an Ask again', [`--previous=${JSON.stringify({ ...PREVIOUS, purpose: 'ask_again' })}`, '--labels'], /^Ask labels is invalid: .*Ask again reads no labels$/u],
+  ] as const)('refuses %s before anything is sent, as invalid_request', async (_name, argv, error) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const run = cli(fetch);
+    const question = argv.some(arg => arg.includes('ask_again')) ? PREVIOUS.question : QUESTION;
+    expect(await run.run(['ask', `--question=${question}`, ...argv])).toBe(2);
+    expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_request', error: expect.stringMatching(error) });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // A label comes only to an Ask that asked for labels and carried a previous turn.
+    ['to an Ask that did not ask for labels', [`--previous=${JSON.stringify(PREVIOUS)}`, `--threads=${JSON.stringify(THREADS)}`], answered({ question: QUESTION, label: LABEL }), false],
+    ['to an Ask that asked for labels but sent no previous turn', ['--labels'], answered({ question: QUESTION, label: LABEL }), false],
+    ['to an Ask that asked for labels with a previous turn', ['--progress', `--previous=${JSON.stringify(PREVIOUS)}`, '--labels'], answered({ question: QUESTION, label: LABEL }), true],
+  ] as const)('takes a returned label %s only as the Ask asked for it', async (_name, argv, answer, fits) => {
+    const run = cli(replying(answer));
+    expect(await run.run(['ask', `--question=${QUESTION}`, ...argv])).toBe(fits ? 0 : 1);
+    if (!fits) expect(lines(run.output.stderr).at(-1)).toMatchObject({ ok: false, action: 'ask', code: 'invalid_response' });
+  });
+
+  it('refuses a label the Ask did not ask for with its own message', async () => {
+    await expect(client(replying(answered({ question: QUESTION, label: LABEL }))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, THREADS))
+      .rejects.toMatchObject({ code: 'invalid_response', message: 'Person Authority labelled a conversation the Ask did not ask it to' });
+    await expect(client(replying(answered({ question: QUESTION, label: LABEL }))).askWithLiveSources(QUESTION, undefined, undefined, PREVIOUS, THREADS, true))
+      .resolves.toMatchObject({ label: LABEL });
+  });
+});

@@ -14,7 +14,7 @@ import {
   unreadableAfter, visibleTurns,
 } from '../../src/renderer/timeline.js';
 import { suggestedQuestions } from '../../src/renderer/bar.js';
-import { askedWhen } from '../../src/renderer/format.js';
+import { askedWhen, stamped } from '../../src/renderer/format.js';
 import { paragraphs } from '../fixtures/authority.js';
 import {
   ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
@@ -141,6 +141,16 @@ async function view() {
   const screens = await import('../../src/renderer/screens/ask.js');
   return (store: { getState(): unknown }) => render(screens.AskView({ state: store.getState() as never }));
 }
+/**
+ * What an earlier turn opened from its line says (ADR-0057): its whole reply, the first message once, in place of the
+ * line, which folds it again from "Show less".
+ */
+const openedSays = (tree: unknown) => {
+  const folded = elements(tree).find(node => node.props.class === 'folded-turn' && byTestId(node, 'opened-turn').length > 0)!;
+  expect(byTestId(folded, 'timeline-row')).toEqual([]);
+  expect(byTestId(folded, 'timeline-fold').map(node => node.props['aria-expanded'])).toEqual(['true']);
+  return byTestId(byTestId(folded, 'opened-turn')[0], 'statement-text').map(text);
+};
 
 describe('the timeline\'s rules', () => {
   it('shows the latest turn and those asked since Ask opened in full, and folds every other', () => {
@@ -371,10 +381,9 @@ describe('Ask on the timeline', () => {
     const thread = await view();
     expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['Two days ago?']);
     expect(byTestId(thread(store), 'question').map(text)).toEqual(['Yesterday?', 'What now?']);
-    // Today's line sits above the first of today's turns, under earlier days.
-    const shown = elements(thread(store)).filter(node => node.props['data-testid'] === 'today' || node.props['data-testid'] === 'turn'
-      || node.props['data-testid'] === 'timeline-row');
-    expect(shown.map(node => node.props['data-testid'])).toEqual(['timeline-row', 'turn', 'today', 'turn']);
+    // A day apart, each says its time above it, in the middle between messages.
+    const shown = elements(thread(store)).filter(node => ['stamp', 'turn', 'timeline-row'].includes(String(node.props['data-testid'])));
+    expect(shown.map(node => node.props['data-testid'])).toEqual(['stamp', 'timeline-row', 'stamp', 'turn', 'stamp', 'turn']);
     expect(kept().map(each => each.text)).toEqual(['Two days ago?', 'Yesterday?', 'What now?']);
     // Navigation closes Ask, and keeps the timeline: the thread opened again folds what this Ask asked but the latest.
     await store.openProject(apollo);
@@ -414,7 +423,7 @@ describe('Ask on the timeline', () => {
     expect(store.getState().timeline.turns.map(each => each.question)).toEqual(shown);
   });
 
-  it('keeps what the person typed for a turn in full, and the full question its answer answers for its line and Ask again', async () => {
+  it('keeps what the person typed for a turn in full, and shows it on its line too; the full question its answer answers is kept for Ask again', async () => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.run': params => ok({ ...answerOf('Who owns THERM-482?', [ticket('THERM-482', '20482')], [['Dev owns THERM-482, since Oct 21.', [0]]]),
         ...(params.previous && params.question === 'who owns it?' ? { question: 'Who owns THERM-482?' } : {}) }),
@@ -440,7 +449,8 @@ describe('Ask on the timeline', () => {
     await reopen(store);
     await store.ask('Another?');
     await flush();
-    expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['What is open on THERM?', 'What else?', 'Who owns THERM-482?']);
+    expect(byTestId(thread(store), 'timeline-question').map(text)).toEqual(['What is open on THERM?', 'What else?', 'who owns it?']);
+    expect(kept()[2]!.question).toBe('Who owns THERM-482?');
   });
 
   it('checks every turn\'s sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
@@ -461,13 +471,16 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'timeline-row')).toHaveLength(10);
     store.toggleTurn(turns[3]!.id);
     const opened = byTestId(thread(store), 'opened-turn')[0]!;
-    const statements = byTestId(opened, 'statement');
     // The follow-up is no longer yours to read: its sentence is left out. The changed DVT plan reads as any other.
-    expect(statements.map(node => text(byTestId(node, 'statement-text')))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
-    expect(statements.map(node => classes(node))).toEqual([['claim'], ['claim']]);
+    expect(openedSays(thread(store))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
+    expect(byTestId(opened, 'statement').map(node => classes(node))).toEqual([['answer-statement', 'selectable'], ['claim']]);
     expect(classes(byTestId(opened, 'answer')[0])).toContain('dimmed');
     expect(byTestId(opened, 'changed-since')).toEqual([]);
     expect(byTestId(opened, 'ask-again')).toHaveLength(1);
+    // "Show less" folds it again: the question and its first message, nothing more.
+    click(byTestId(opened, 'timeline-fold')[0]);
+    expect(byTestId(thread(store), 'opened-turn')).toEqual([]);
+    expect(byTestId(thread(store), 'timeline-row')).toHaveLength(10);
     // Within five minutes the thread opens on what that check said; after, it checks again.
     const opening = () => calls('ask.check');
     store.closeAsk();
@@ -663,7 +676,7 @@ describe('Ask on the timeline', () => {
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
     const thread = await view();
-    const said = () => byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement-text').map(text);
+    const said = () => openedSays(thread(store));
     const readable = ['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.'];
     expect(said()).toEqual(readable);
     // Five minutes on, Ask still open: the follow-up the check could not read stays out.
@@ -719,9 +732,7 @@ describe('Ask on the timeline', () => {
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
     const thread = await view();
-    const opened = byTestId(thread(store), 'opened-turn')[0]!;
-    expect(byTestId(opened, 'statement').map(text).some(line => line.includes('Confirm the trace'))).toBe(false);
-    expect(byTestId(opened, 'statement')).toHaveLength(2);
+    expect(openedSays(thread(store))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
     // Nothing it carries into a follow-up cites the source either.
     expect(store.checksOf(one)).toEqual({ 2: 'unreadable' });
   });
@@ -992,8 +1003,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect((calls('ask.run').at(-1)!.previous as AskPrevious).statements.map(statement => statement.text))
       .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
     // Opened, it leaves out what you can no longer read.
-    expect(byTestId(byTestId(thread(store), 'opened-turn')[0], 'statement-text').map(text))
-      .toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
+    expect(openedSays(thread(store))).toEqual(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);
   });
 
   it('opens a suggestion\'s turn checked first, in the one check Ask opening makes', async () => {
@@ -1008,8 +1018,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect((opening!.items as { asked_at: string }[]).slice(0, 3).map(item => item.asked_at)).toEqual(Array(3).fill(turns[0]!.asked_at));
     // Then every other turn: twelve turns, three sources each.
     expect((opening!.items as unknown[]).length).toBe(36);
-    const opened = byTestId((await view())(store), 'opened-turn')[0]!;
-    expect(byTestId(opened, 'statement-text').map(text)).toEqual(status().parts[0]!.statements.map(statement => statement.text));
+    expect(openedSays((await view())(store))).toEqual(status().parts[0]!.statements.map(statement => statement.text));
   });
 
   it('carries no sentence of a turn whose sources no check could read now, only its question', async () => {
@@ -1123,7 +1132,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       };
       const store = await startStore();
       let failNow = failing();
-      store.askAgain(earlier.id);
+      store.askEverywhere(other.id);
       await flush();
       await failNow();
       expect(sent(0).question).toBe(resolved);
@@ -1131,18 +1140,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       checks = someGone;
       store.retryAsk();
       await flush();
-      expect(sent(1)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
-      // Ask everywhere, the same.
+      expect(sent(1).question).toBe(typed);
+      // Ask again, the same. It comes second: its answer lands in the turn's thread, whose turns are then checked as when
+      // a thread is opened (C5), and a turn with a source found unreadable offers no Ask everywhere.
       checks = allSame;
       failNow = failing();
-      store.askEverywhere(other.id);
+      store.askAgain(earlier.id);
       await flush();
       await failNow();
       expect(sent(2).question).toBe(resolved);
       checks = someGone;
       store.retryAsk();
       await flush();
-      expect(sent(3).question).toBe(typed);
+      expect(sent(3)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
     });
 
     it('needs the turn, every turn back along what it followed, and every turn each of those recorded carrying to have sources, all readable; with no typed words, nothing goes', async () => {
@@ -1224,7 +1234,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(kept()).toHaveLength(2);
     const thread = await view();
     const clarify = byTestId(thread(store), 'clarify')[0]!;
-    expect(text(clarify)).toContain('Which one?');
+    expect(text(clarify)).toContain('Which one do you mean?');
     expect(byTestId(clarify, 'choice').map(text)).toEqual(['THERM-482 · Sensor drift', 'THERM-490 · DVT retest']);
     const previous = calls('ask.run')[1]!.previous;
     click(byTestId(clarify, 'choice')[0]);
@@ -1550,23 +1560,22 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(lines(thread(store))).toEqual(['Turn 1?', 'Turn 2?', 'Turn 3?']);
   });
 
-  it('folds Today\'s line away with the first of today\'s questions, and shows it there once the line opens', async () => {
-    // Six questions on earlier days, then six this morning, by this computer's own day.
-    const midnight = new Date(NOW);
-    midnight.setHours(0, 0, 0, 0);
-    const ago = (time: number) => NOW.getTime() - time;
-    seed(...Array.from({ length: 12 }, (_, at) => turn(`Turn ${at}?`, ago(at < 6 ? midnight.getTime() - (6 - at) * DAY : midnight.getTime() + (at - 5) * HOUR), status())));
-    vi.setSystemTime(midnight.getTime() + 12 * HOUR);
+  it('says the time between messages as a texting app does: above the first shown, the first of its day, and one asked an hour or more after the one before', async () => {
+    const at = (iso: string) => NOW.getTime() - Date.parse(iso);
+    seed(turn('Friday?', at('2026-10-23T10:00:00.000Z'), status()), turn('and then?', at('2026-10-23T10:59:00.000Z'), status()),
+      turn('This morning?', at('2026-10-25T09:00:00.000Z'), status()), turn('and after?', at('2026-10-25T10:00:00.000Z'), status()));
     const store = await startStore();
     await reopen(store);
     await store.ask('What now?');
     await flush();
     const thread = await view();
-    const shown = () => elements(thread(store)).filter(node => node.props['data-testid'] === 'today' || node.props['data-testid'] === 'timeline-row')
-      .map(node => (node.props['data-testid'] === 'today' ? 'Today' : text(byTestId(node, 'timeline-question')[0])));
-    expect(shown()).toEqual(['Turn 8?', 'Turn 9?', 'Turn 10?']);
-    click(line(thread(store)));
-    expect(shown()).toEqual(['Turn 0?', 'Turn 1?', 'Turn 2?', 'Turn 3?', 'Turn 4?', 'Turn 5?', 'Today', 'Turn 6?', 'Turn 7?', 'Turn 8?', 'Turn 9?', 'Turn 10?']);
+    const shown = elements(thread(store)).filter(node => ['stamp', 'timeline-question', 'question'].includes(String(node.props['data-testid']))).map(text);
+    expect(shown).toEqual(['Oct 23, 10:00 AM', 'Friday?', 'and then?', 'Today 9:00 AM', 'This morning?', 'Today 10:00 AM', 'and after?', 'Today 3:00 PM', 'What now?']);
+    // The rule itself: a minute short of the hour says nothing, the hour does, and so does a minute past midnight.
+    expect(stamped('2026-10-25T10:59:00.000Z', '2026-10-25T10:00:00.000Z')).toBe(false);
+    expect(stamped('2026-10-25T11:00:00.000Z', '2026-10-25T10:00:00.000Z')).toBe(true);
+    expect(stamped('2026-10-25T00:01:00.000Z', '2026-10-24T23:59:00.000Z')).toBe(true);
+    expect(stamped('2026-10-25T00:01:00.000Z', undefined)).toBe(true);
   });
 
   it('opens the line when a suggestion opens a question folded into it, so that question shows where it is', async () => {

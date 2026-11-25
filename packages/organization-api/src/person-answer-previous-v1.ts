@@ -52,16 +52,71 @@ export interface PersonAnswerPreviousV1 {
   readonly citations: readonly PersonAnswerCitationV8[];
   /** Only on a follow-up (ADR-0056): the older turns of the thread it continues, oldest first, under the previous turn's rules. */
   readonly earlier?: readonly PersonAnswerEarlierTurnV1[];
+  /** Only on a follow-up (ADR-0057): the label of the conversation it continues, in form (isPersonAnswerLabelV1). */
+  readonly label?: string;
 }
 
 /** One older turn of the thread a follow-up continues (ADR-0056). */
-export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier'>;
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label'>;
 
 /** One of the asker's other threads (ADR-0056): their typed questions, oldest first, only their own words (R2), never stored. */
 export interface PersonAnswerThreadV1 {
   readonly questions: readonly string[];
   /** ISO-8601 UTC with milliseconds. */
   readonly asked_at: string;
+  /** Its label (ADR-0057): every word of it is a word of `questions` (personAnswerLabelFitsV1). */
+  readonly label?: string;
+}
+
+/**
+ * A conversation's label (ADR-0057, R2): one line that says what it is about, in the asker's own words. Product choice:
+ * 80 characters keeps it to one line of a "Which one?" button.
+ */
+export const PERSON_ANSWER_LABEL_MAX_CHARS_V1 = 80;
+
+/** A word's characters: letters, marks and digits, and a joiner (U+200C, U+200D), which shapes how the word it sits in reads (Persian, the Indic scripts). */
+const WORD = String.raw`\p{L}\p{M}\p{N}‌‍`;
+/** A character that shows as nothing and is no part of a word: a soft hyphen, a zero-width space, a mark that sets the direction of text. */
+const HIDDEN = String.raw`(?![${WORD}])\p{Default_Ignorable_Code_Point}`;
+const EVERY_HIDDEN = new RegExp(HIDDEN, 'gu');
+const EVERY_WORD = new RegExp(`[${WORD}]+`, 'gu');
+/** Words, and what stands between them and needs no typing: spaces and punctuation. */
+const WORDS_AND_BETWEEN = new RegExp(String.raw`[${WORD}\p{Zs}\p{P}]+`, 'gu');
+/** What no label holds: a control or a line break, or a character that shows as nothing outside a word. */
+const NOT_IN_A_LABEL = new RegExp(String.raw`[\p{Cc}\p{Zl}\p{Zp}￹-￻]|${HIDDEN}`, 'u');
+
+/**
+ * The words of a text, as the label rule compares them: each run of a word's characters, in NFC and lower case, read as
+ * the text shows. A character that shows as nothing splits no word: "in", a soft hyphen, "active" is "inactive".
+ */
+export function personAnswerLabelWordsV1(text: string): string[] {
+  return (text.normalize('NFC').replace(EVERY_HIDDEN, '').match(EVERY_WORD) ?? []).map(word => word.toLowerCase());
+}
+
+/** The characters of a text that are neither a word's nor the spaces and punctuation between words: symbols, emoji and the like. */
+function symbolsOf(text: string): string[] {
+  return [...text.normalize('NFC').replace(WORDS_AND_BETWEEN, '')];
+}
+
+/**
+ * Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds a letter, mark or digit. It
+ * holds no control, and no character that shows as nothing outside a word: one between two typed words shows them as one
+ * word, or their letters in another order, which nobody typed.
+ */
+export function isPersonAnswerLabelV1(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !NOT_IN_A_LABEL.test(value)
+    && [...value].length <= PERSON_ANSWER_LABEL_MAX_CHARS_V1 && /[\p{L}\p{M}\p{N}]/u.test(value);
+}
+
+/**
+ * The label rule (R2): every word of `label` is a word of one of `questions`, as typed ("owns" does not allow "owner"),
+ * and so is every other character of it but the spaces and punctuation between words, as a symbol or an emoji can say
+ * a word too. The one place the rule lives: the API's validators, the kernel's resolver and the desktop all ask it.
+ */
+export function personAnswerLabelFitsV1(label: string, questions: readonly string[]): boolean {
+  const typed = new Set(questions.flatMap(personAnswerLabelWordsV1));
+  const symbols = new Set(questions.flatMap(symbolsOf));
+  return personAnswerLabelWordsV1(label).every(word => typed.has(word)) && symbolsOf(label).every(symbol => symbols.has(symbol));
 }
 
 /** Where a question belongs when not in the open thread (ADR-0056); several `other` indexes mean it could be any of them. */

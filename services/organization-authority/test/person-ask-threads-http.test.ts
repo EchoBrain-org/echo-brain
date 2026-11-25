@@ -370,6 +370,53 @@ describe('the turns of a thread as the Authority lets its model read them (ADR-0
   });
 });
 
+describe('labels on /v7 (ADR-0057)', () => {
+  // Every word is one the person typed in the open thread or the new question.
+  const THREAD_LABEL = 'launch: blocking, tasks';
+  const TASKS_QUESTION = 'And what are my open tasks?';
+
+  it.each([true, false])('answers with the open thread\'s label only to a request that reads labels (labels: %s), and keeps none of it', async labels => {
+    const f = await sentFixture();
+    const tasks = myOpenTasksPlanner();
+    const { model, resolver } = withThreadResolver([{ thread: 'open', resolution: 'same', label: THREAD_LABEL }], tasks.model);
+    const previous = { ...following(latestLaunchTurn, [launchTurn]), label: 'launch: blocking' };
+    const request = { ...body({ previous, threads: [{ ...THREADS[0]!, label: 'Halvorsen quote: expire' }, ...THREADS.slice(1)], question: TASKS_QUESTION }), ...(labels ? { labels: true } : {}) };
+    const answer = await streamedAnswer(await ask(await v7(f, model), { body: request }));
+    expect(answer).toMatchObject({ outcome: 'answered', question: TASKS_QUESTION });
+    if (labels) expect(answer).toMatchObject({ label: THREAD_LABEL });
+    else expect(answer).not.toHaveProperty('label');
+    // The checked previous turn keeps its label: the resolver reads both labels the request carried.
+    const shown = JSON.parse(resolver[0]!.user_prompt) as { readonly open: { readonly label?: string }; readonly threads: readonly { readonly label?: string }[] };
+    expect([shown.open.label, shown.threads[0]!.label]).toEqual(['launch: blocking', 'Halvorsen quote: expire']);
+    // Nothing new is stored, logged or audited (T4).
+    const written = auditText(f);
+    for (const text of [THREAD_LABEL, 'launch: blocking', 'Halvorsen quote: expire', '"label"', '"labels"']) expect(written, text).not.toContain(text);
+  });
+
+  it('refuses labels that are not valid at the door, before the Ask runs', async () => {
+    const f = await sentFixture();
+    const generate = vi.fn(async () => { throw new Error('no model call expected'); });
+    const base = await v7(f, { generate });
+    const again = { ...following(launchTurn, undefined), purpose: 'ask_again' };
+    const invalid = [
+      // A thread's label says nothing its questions do not (R2): "owner" was never typed there.
+      body({ threads: [{ ...THREADS[0]!, label: 'Halvorsen quote: owner' }] }),
+      body({ threads: [{ ...THREADS[0]!, label: 'Halvorsen\nquote' }] }),
+      body({ previous: { ...following(launchTurn, undefined), label: 'x'.repeat(81) } }),
+      { ...body({ previous: following(launchTurn, undefined) }), labels: false },
+      // An Ask again is labelled by nothing, and reads no label.
+      body({ question: LAUNCH_QUESTION, previous: { ...again, label: 'launch' } }),
+      { ...body({ question: LAUNCH_QUESTION, previous: again }), labels: true },
+    ];
+    for (const request of invalid) {
+      const response = await ask(base, { body: request });
+      expect(response.status, JSON.stringify(request)).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error: { code: 'invalid_request' } });
+    }
+    expect(generate).not.toHaveBeenCalled();
+  });
+});
+
 describe('the asker\'s threads at the HTTP boundary (ADR-0056)', () => {
   it('reach the Ask as sent', async () => {
     const asked: unknown[] = [];

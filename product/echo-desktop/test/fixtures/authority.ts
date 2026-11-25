@@ -320,6 +320,15 @@ function timelineCheck(items: readonly { citation: Record<string, unknown> }[]):
   return { schema_version: 1, kind: 'echo-person-ask-check-v1', items: items.map(({ citation }) => ({ state: citation.kind === 'follow_up' ? 'unreadable' : 'same' })) };
 }
 
+/** `ask-scroll`'s answer: twelve long sentences in one block, enough to scroll; "Quick status" gets one. */
+function longReadout(question: string): Record<string, unknown> {
+  const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
+    text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
+    citation_indexes: [0], private: false,
+  }));
+  return { citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements, blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }] }] };
+}
+
 // ---- Ask threads (ADR-0056) --------------------------------------------------------
 
 /** The subjects `ask-threads` knows a question, and a thread, to be about. */
@@ -336,12 +345,23 @@ const THREAD_SUBJECTS = ['billing', 'pilot', 'tests', 'ledger'] as const;
  * The list may be empty: the question can still be a new subject. An answer to a request with threads names its
  * question. A follow-up's names one no one typed ("Resolved: …"), which must never come back as a thread's question.
  * A request without threads is never placed, and is answered as any other.
+ *
+ * A follow-up answered in the open thread by the thread resolver (the request carried threads or older turns) also
+ * names that thread's label when the request reads labels (ADR-0057): the label it was sent, or else the thread's
+ * first question, then the new question's words, all of them typed. A question that says "mislabel" gets a label no
+ * one typed, which the desktop must drop.
  */
-function threadsAnswer(request: { readonly question: string; readonly previous?: { readonly purpose: string; readonly question: string }; readonly threads?: readonly { readonly questions: readonly string[] }[] },
-  plain: Record<string, unknown>): Record<string, unknown> {
+function threadsAnswer(request: {
+  readonly question: string; readonly labels?: true; readonly threads?: readonly { readonly questions: readonly string[] }[];
+  readonly previous?: { readonly purpose: string; readonly question: string; readonly label?: string; readonly earlier?: readonly { readonly question: string }[] };
+}, plain: Record<string, unknown>): Record<string, unknown> {
   const { question, previous, threads } = request;
   const full = previous?.purpose === 'follow_up' ? `Resolved: ${question} (after "${previous.question}")` : question;
-  if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full };
+  const bare = (text: string) => text.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/gu, ' ').trim();
+  const named = `${previous?.label ?? bare(previous?.earlier?.[0]?.question ?? previous?.question ?? '')}, ${bare(question)}`;
+  const labelled = request.labels === true && previous?.purpose === 'follow_up' && (threads !== undefined || previous.earlier !== undefined)
+    ? { label: /\bmislabel\b/iu.test(question) ? 'Invented by the model' : [...named].length <= 80 ? named : [...bare(question)].slice(0, 80).join('').trim() } : {};
+  if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full, ...labelled };
   const on = (subject: string) => threads.flatMap((thread, at) => (thread.questions.some(typed => typed.toLowerCase().includes(subject)) ? [at] : []));
   const words = question.toLowerCase();
   const same = /same as (\w+)/u.exec(words)?.[1];
@@ -353,7 +373,7 @@ function threadsAnswer(request: { readonly question: string; readonly previous?:
       thread: { kind: 'other', threads: belongs }, ...(belongs.length === 1 && merge.length > 0 ? { merge } : {}) };
   }
   if (previous === undefined || /\bunrelated\b/u.test(words)) return { ...plain, question, thread: { kind: 'new' } };
-  return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}) };
+  return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}), ...labelled };
 }
 
 /** Project activity (C2): every project you are in, with its newest arrival from someone else, or null. */
@@ -1792,7 +1812,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const [part] = desktop.answer.parts as Record<string, unknown>[];
         const plain = mode === 'ask-threads-checked' && /\bdrafted\b/iu.test(question)
           ? timelineV8(question, scope, [TRACE_FOLLOW_UP], [cites([TRACE_FOLLOW_UP], 'Confirm the trace is still open.', [0])])
-          : { ...answer, scope, parts: [{ ...part, question }] };
+          // A "long readout" is an answer long enough to scroll, as `ask-scroll` answers.
+          : /\blong readout\b/iu.test(question) ? { ...answer, scope, ...longReadout(question) } : { ...answer, scope, parts: [{ ...part, question }] };
         return answered(threadsAnswer(request, plain));
       }
       // `ask-threads-unplaced` answers as an Authority that does not hold T2 would: to a question asked with the threads
@@ -1833,15 +1854,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         });
         return placed({ ...answer, scope, parts: [{ ...part, question }], follow_ups: [item_id] });
       }
-      if (mode === 'ask-scroll') {
-        const statements = question === 'Quick status' ? [{ text: 'The release remains scheduled for Friday, and the team has confirmed the owner and the remaining checks.', citation_indexes: [0], private: false }] : Array.from({ length: 12 }, (_, index) => ({
-          text: `${question} Item ${index + 1}: The team reviewed the supplier report, the manufacturing checklist, and the latest test results. The next review will compare those results with the release requirements before confirming the schedule and assigning the remaining follow-ups.`,
-          citation_indexes: [0], private: false,
-        }));
-        return placed({ ...answer, scope, citations: THERM_BLOCK_CITATIONS.slice(0, 1), parts: [{ question, status: 'answered', statements,
-          blocks: [{ kind: 'text', statements: statements.map((_, index) => index) }],
-        }] });
-      }
+      if (mode === 'ask-scroll') return placed({ ...answer, scope, ...longReadout(question) });
       // The Agentic Ask answer: one part, the question itself, citing the fixture's two sources.
       const [part] = desktop.answer.parts as Record<string, unknown>[];
       return placed({ ...answer, scope, parts: [{ ...part, question }] });

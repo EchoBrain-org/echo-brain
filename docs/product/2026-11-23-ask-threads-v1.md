@@ -6,6 +6,9 @@ Decision record: [ADR-0056](../decisions/ADR-0056-ask-threads.md). It builds
 on [Ask timeline v1](2026-10-25-ask-timeline-v1.md) and replaces "one thread
 per place" in
 [Quieter Ask](2026-10-26-quieter-ask-and-only-me-v1.md).
+[Ask memory v1](2026-11-24-ask-memory-v1.md) (ADR-0057) changes this
+version's page, its rule R2, how long a thread lives and how two threads are
+joined: read it for those.
 
 ## Why
 

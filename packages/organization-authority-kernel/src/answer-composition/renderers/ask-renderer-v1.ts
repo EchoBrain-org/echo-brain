@@ -189,8 +189,11 @@ export interface CreateAskRendererV1Options {
    * Without it the response names none.
    */
   readonly answers?: string;
-  /** For an Ask that carried threads (ADR-0056): what the response says of them, as resolved; the writer never sees it. */
-  readonly placed?: Pick<PersonAnswerResponseV8, "thread" | "merge">;
+  /**
+   * For an Ask that carried threads (ADR-0056): what the response says of them, as resolved, and the open thread's label
+   * for an Ask that reads labels (ADR-0057); the writer never sees it.
+   */
+  readonly placed?: Pick<PersonAnswerResponseV8, "thread" | "merge" | "label">;
   /** For an Ask again (ADR-0047): the earlier answer; the writer also says what is different since, and the response carries it. */
   readonly earlier?: AskEarlierAnswerV1;
   /**

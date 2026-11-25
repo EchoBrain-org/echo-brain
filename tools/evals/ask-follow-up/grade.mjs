@@ -229,6 +229,22 @@ export function gradeThreadTrial(caseDefinition, placement, fallback = false) {
   return Object.freeze({ passed, named_all: namedAll, merged: merge.length > 0 });
 }
 
+/**
+ * A thread trial's label (ADR-0057), reported only and never graded. For an answer in the open thread (`same` or
+ * `resolved`, from a reply, not the fallback): whether a label came back past the kernel's own check, which drops one
+ * with a word the case's questions do not hold. Nothing for any other trial.
+ */
+export function threadTrialLabel(placement, fallback = false) {
+  if (fallback || placement?.thread !== "open" || placement.resolution.resolution === "clarify") return Object.freeze({});
+  return Object.freeze({ labellable: true, labelled: placement.label !== undefined });
+}
+
+/** The labels of a thread run, counted beside its rules and never part of them: no label result gates a release. */
+export function summarizeThreadLabels(trials) {
+  const open = trials.filter((trial) => trial.labellable === true);
+  return Object.freeze({ reported_only: true, open_trials: open.length, labelled: count(open, (trial) => trial.labelled === true) });
+}
+
 /** Whether graded trials are the whole registered run, which alone decides: every registered case, trials 1 to 3, once. */
 export function threadRunIsComplete(trials, cases) {
   const registered = new Map(cases.map((entry) => [entry.id, entry.group]));

@@ -114,7 +114,8 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
  * Ask's answer, as its audit binds it: the direct statement and parts, and, on an answer to a request that carried the
  * previous turn (ADR-0047), the question it answers, what is different since and the choices it offers. An answer that
  * drafted follow-ups (ADR-0053) binds them too: `drafts`, what is saved, when the caller has them, else their ids. An
- * answer to a request that carried threads (ADR-0056) binds `thread` and `merge`. With none of these, it hashes as before.
+ * answer to a request that carried threads (ADR-0056) binds `thread` and `merge`, and one that carries a label (ADR-0057)
+ * binds it. With none of these, it hashes as before.
  */
 export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8, drafts?: readonly AskFollowUpDraftV1[]): Sha256Digest {
   const previous = {
@@ -122,6 +123,7 @@ export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8, draft
     ...(response.choices === undefined ? {} : { choices: response.choices }),
   };
   const followUps = response.follow_ups === undefined ? {} : { follow_ups: drafts ?? response.follow_ups };
-  const placed = { ...(response.thread === undefined ? {} : { thread: response.thread }), ...(response.merge === undefined ? {} : { merge: response.merge }) };
+  // A label (ADR-0057) is covered only when present, so an answer without one hashes as before.
+  const placed = { ...(response.thread === undefined ? {} : { thread: response.thread }), ...(response.merge === undefined ? {} : { merge: response.merge }), ...(response.label === undefined ? {} : { label: response.label }) };
   return canonicalSha256({ direct: response.direct ?? null, parts: response.parts, ...previous, ...followUps, ...placed });
 }

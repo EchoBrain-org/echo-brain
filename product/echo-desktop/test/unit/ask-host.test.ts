@@ -15,8 +15,14 @@ describe('the command an Ask runs', () => {
   it('asks every Ask, global or in a project, on /v7 with its progress (the host pins every call to the page\'s account)', () => {
     const project = 'prj_00000000-1111-4111-8111-111111111111';
     const asked = ['ask', '--question=What did we agree?', '--progress'];
-    expect(askArgv('What did we agree?', { kind: 'global' })).toEqual(asked);
-    expect(askArgv('What did we agree?', { kind: 'project', project_id: project })).toEqual([...asked, `--project=${project}`]);
+    expect(askArgv('What did we agree?', { kind: 'global' })).toEqual([...asked, '--labels']);
+    expect(askArgv('What did we agree?', { kind: 'project', project_id: project })).toEqual([...asked, `--project=${project}`, '--labels']);
+  });
+
+  it('reads labels on every Ask but an Ask again, beside which the request refuses them (ADR-0057)', () => {
+    const previous = (purpose: 'follow_up' | 'ask_again') => ({ purpose, question: 'When?', asked_at: '2026-10-25T15:00:00.000Z', statements: [], citations: [] });
+    expect(askArgv('and then?', { kind: 'global' }, previous('follow_up'))).toContain('--labels');
+    expect(askArgv('When?', { kind: 'global' }, previous('ask_again'))).not.toContain('--labels');
   });
 
   it('reads what it cites: a meeting by its record, as Ask cites it, a passage where it was asked', () => {

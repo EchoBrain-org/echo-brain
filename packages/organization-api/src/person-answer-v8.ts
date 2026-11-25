@@ -94,6 +94,11 @@ export interface PersonAnswerResponseV8 {
   readonly thread?: PersonAnswerThreadPlacementV1;
   /** Only for a request that carried `threads` (ADR-0056): indexes of threads plainly on the subject of the one it belongs to. */
   readonly merge?: readonly number[];
+  /**
+   * Only on an ordinary answer to a request that carried `previous` and `labels: true` (ADR-0057): the label of the
+   * conversation the question continues. In form here; only the client, which holds the typed words, can check its words.
+   */
+  readonly label?: string;
 }
 
 /** A workspace ref, exactly: `project:` and a project id, or `tool:` and a tool id. */

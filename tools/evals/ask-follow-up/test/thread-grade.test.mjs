@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gradeThreadTrial, loadThreadCases, summarizeThreadRules, THREAD_GROUPS, THREAD_THRESHOLDS, threadRunIsComplete } from "../grade.mjs";
+import { gradeThreadTrial, loadThreadCases, summarizeThreadLabels, summarizeThreadRules, THREAD_GROUPS, THREAD_THRESHOLDS, threadRunIsComplete, threadTrialLabel } from "../grade.mjs";
 
 // Cases name threads from 1, as the resolver is shown them; the kernel's placement counts from 0.
 const continues = { group: "continues_open", expect: { thread: "open" } };
@@ -60,6 +60,29 @@ test("a fallback fails its trial in every group: answering where the question wa
   // The same placements, when the model gave them, pass the groups that expect them.
   assert.equal(gradeThreadTrial(continues, open(), false).passed, true);
   assert.equal(gradeThreadTrial(fresh, NEW).passed, true);
+});
+
+test("reports a label only for an answer in the open thread: whether one came back past the kernel's check", () => {
+  const labelled = (label, resolution = { resolution: "same" }) => ({ ...open([], resolution), label });
+  assert.deepEqual(threadTrialLabel(labelled("drop test: owns, retest")), { labellable: true, labelled: true });
+  assert.deepEqual(threadTrialLabel(labelled("FCC pre-scan: retest", { resolution: "resolved", question: "Who owns the MECH-214 retest?", about: [] })), { labellable: true, labelled: true });
+  assert.deepEqual(threadTrialLabel(open()), { labellable: true, labelled: false });
+  // Nothing for a clarify, another thread, a new one, a fallback or a trial that threw.
+  assert.deepEqual(threadTrialLabel(open([], { resolution: "clarify", choices: [] })), {});
+  for (const placement of [other([0]), NEW, null]) assert.deepEqual(threadTrialLabel(placement), {});
+  assert.deepEqual(threadTrialLabel(labelled("drop test"), true), {});
+  // Never graded: the grade is the same with a label or without.
+  assert.deepEqual(gradeThreadTrial(continues, labelled("drop test")), gradeThreadTrial(continues, open()));
+});
+
+test("counts labels beside the rules, and no label result changes them or the gate", () => {
+  const trials = [{ labellable: true, labelled: true }, { labellable: true, labelled: true }, { labellable: true, labelled: false }, {}, {}];
+  assert.deepEqual(summarizeThreadLabels(trials), { reported_only: true, open_trials: 3, labelled: 2 });
+  assert.deepEqual(summarizeThreadLabels([]), { reported_only: true, open_trials: 0, labelled: 0 });
+  const run = wholeRun();
+  const unlabelled = decide(run);
+  assert.deepEqual(decide(run.map((trial) => ({ ...trial, labellable: true, labelled: true }))), unlabelled);
+  assert.ok(!("labels" in unlabelled), "the rules' summary is the registered one");
 });
 
 test("refuses a placement or a group it does not know, rather than grading it as a miss", () => {

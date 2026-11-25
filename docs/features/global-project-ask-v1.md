@@ -46,9 +46,10 @@ Invalid input remains editable. A second submission must not silently replace
 a running request. The desktop keeps every question and answer in a
 device-only timeline that says when an old answer's sources changed, and a
 question can follow from the answer before it
-([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Ask shows the thread of
-its place: from Home every question, from a project only that project's
-([ADR-0049](../decisions/ADR-0049-only-me-is-a-lock.md)).
+([ADR-0047](../decisions/ADR-0047-ask-timeline.md)). Ask shows one
+conversation at a time, with the threads underneath it kept on the device
+([ADR-0056](../decisions/ADR-0056-ask-threads.md),
+[ADR-0057](../decisions/ADR-0057-ask-memory.md)).
 
 In the desktop app, Escape steps back one level: a sheet, then Capture, then
 the answer with the source beside it, then the reader, then the project, Only
@@ -173,7 +174,10 @@ CLI's and the desktop's, asks
 `POST /v7/person/ask`, the only Ask route since
 [ADR-0047](../decisions/ADR-0047-ask-timeline.md) retired the ones before it,
 and the scope rules here apply to it. The CLI accepts
-`person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>]`.
+`person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>] [--labels]`.
+`--labels` asks for the label of the conversation a follow-up continues, and a
+thread or a follow-up's previous turn may carry its `label`
+([ADR-0057](../decisions/ADR-0057-ask-memory.md)).
 The client does not silently downgrade a project request to global Ask.
 
 The

@@ -1,12 +1,14 @@
 // The Ask timeline (ADR-0047), as rules the store and the page share: which
 // turns show in full, which sentences a check of their sources leaves out,
 // the earlier turn a follow-up or Ask again carries, what the empty bar
-// suggests from it, and its threads (ADR-0056). Pure, for the store and its
-// tests; the store keeps the state and makes the calls.
+// suggests from it, its threads (ADR-0056) and the conversations they make
+// (ADR-0057). Pure, for the store and its tests; the store keeps the state
+// and makes the calls.
+import { isPersonAnswerLabelV1, personAnswerLabelFitsV1 } from '@echo-brain/organization-api/person-answer-previous-v1';
 import type {
   Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, AskThread, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_REQUEST_BYTES } from '../shared/protocol.js';
+import { checkOf, MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
@@ -214,9 +216,10 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
 
 const jsonBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
-/** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes. */
+/** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes; every Ask but an Ask again reads labels (askLabels). */
 function bodyBytes(question: string, scope: AskScope, previous: AskPrevious | null): number {
-  return jsonBytes({ schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), ...(previous === null ? {} : { previous }) });
+  return jsonBytes({ schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), ...(previous === null ? {} : { previous }),
+    ...(previous?.purpose === 'ask_again' ? {} : { labels: true }) });
 }
 
 /** The most an Ask's body may take: a little short of the bound, for how the client writes the same body. */
@@ -246,15 +249,16 @@ export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined):
  * older desktop saved (no `citations_complete`) carries its question only: a
  * sentence of it may rest on a row it no longer cites. Sentences go from the
  * end until the request, asking `question` in `scope`, fits the Ask body's
- * bound.
+ * bound. `label`: its conversation's label, on a follow-up only (ADR-0057).
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
-  earlier: string = askText(turn.question)): AskPrevious {
+  earlier: string = askText(turn.question), label?: string): AskPrevious {
   const chosen = readableStatements(turn, known);
-  let previous: AskPrevious = { purpose, ...carried(turn, earlier, chosen) };
+  const labelled = purpose === 'follow_up' && label !== undefined ? { label } : {};
+  let previous: AskPrevious = { purpose, ...carried(turn, earlier, chosen), ...labelled };
   while (chosen.length > 0 && bodyBytes(question, scope, previous) > BODY_ROOM) {
     chosen.pop();
-    previous = { purpose, ...carried(turn, earlier, chosen) };
+    previous = { purpose, ...carried(turn, earlier, chosen), ...labelled };
   }
   return previous;
 }
@@ -384,10 +388,10 @@ export interface Thread {
   readonly turns: readonly TimelineTurn[];
   /** Where it lives: its first turn's scope, or its oldest's once that is gone; every turn is asked there (R9). */
   readonly home: AskScope;
-  /** The question typed for its first turn, or the first typed in it (R2); with none, its first turn's heading, never sent. */
+  /** The question typed for its first turn, or the first typed in it where it lives (R2); undefined when nothing asked there kept the person's words. */
+  readonly own?: string;
+  /** What the door lists it by: `own`, or with none its first turn's heading as that turn shows it, never sent and shown nowhere else. */
   readonly name: string;
-  /** Its typed questions, oldest first, each once: all an Ask ever sends of it (R2). */
-  readonly questions: readonly string[];
   /** When it was last asked in. */
   readonly asked_at: string;
 }
@@ -402,13 +406,13 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
     if (own) own.push(turn); else grouped.set(id, [turn]);
   }
   return [...grouped].map(([id, own]) => {
-    // Its first turn, the one it is named after, then the others oldest first: turns a merge brought in may be older.
+    // The turn it is named after is its first; once that is gone, its oldest kept stands in.
     const first = own.find(turn => turn.id === id) ?? own[0]!;
-    const worded = [first, ...own].find(turn => ownWords(turn)?.trim());
     const home = first.scope;
-    // Only what was typed in its home is ever sent of it.
-    const questions = visibleTurns(homeTurns({ home, turns: own }, home)).flatMap(turn => sentWords(turn) ?? []);
-    return { id, turns: own, home, name: (worded ? ownWords(worded)! : first.text).trim(), questions, asked_at: own.at(-1)!.asked_at };
+    // Only what was asked in its home names it: a turn an older file keeps here from another place never does.
+    const worded = [first, ...own].find(turn => sameScope(turn.scope, home) && ownWords(turn)?.trim());
+    const typed = worded && ownWords(worded)!.trim();
+    return { id, turns: own, home, ...(typed === undefined ? {} : { own: typed }), name: typed ?? first.text.trim(), asked_at: own.at(-1)!.asked_at };
   });
 }
 
@@ -420,29 +424,125 @@ export function homeTurns(thread: Pick<Thread, 'home' | 'turns'> | undefined, sc
   return thread !== undefined && sameScope(thread.home, scope) ? thread.turns.filter(turn => sameScope(turn.scope, scope)) : [];
 }
 
-/**
- * Whether `thread` may merge into `into` (R9): another thread of the same home, every turn asked there, so a mixed older
- * thread never carries a turn across. The one rule for every merge, by hand or ECHO's, and for the row that offers it.
- */
-export function mergeable(thread: Thread, into: Thread | undefined): boolean {
-  return into !== undefined && thread.id !== into.id && sameScope(thread.home, into.home) && thread.turns.every(turn => sameScope(turn.scope, into.home));
+/** Most recently asked in first; of two asked in at the same moment, the one started later. */
+function newestFirst<T extends { readonly asked_at: string }>(all: readonly T[]): T[] {
+  return all.map((each, at) => ({ each, at })).sort((left, right) => Date.parse(right.each.asked_at) - Date.parse(left.each.asked_at) || right.at - left.at)
+    .map(({ each }) => each);
 }
 
-function newestFirst(threads: readonly Thread[]): Thread[] {
-  return [...threads].sort((left, right) => Date.parse(right.asked_at) - Date.parse(left.asked_at));
+// ---- conversations (ADR-0057) --------------------------------------------------------
+
+/** Whether a thread is active at `now` (R11): its newest turn was asked less than a week before. Any other is joined: part of memory. */
+export function threadActive(thread: Pick<Thread, 'asked_at'>, now: number): boolean {
+  return now - Date.parse(thread.asked_at) < THREAD_ACTIVE_MS;
 }
 
 /**
- * The other threads an Ask in `scope` carries, most recent first: all but the one it continues, and in a project only that
- * project's (R3). One with no typed question has nothing to send.
+ * One conversation (R14): a thread with every thread it continues or is linked to, and theirs. Worked out from the
+ * turns each time it is needed; nothing stores it, and a link only ever makes one larger.
  */
-export function otherThreads(threads: readonly Thread[], scope: AskScope, continued: string | null): Thread[] {
-  return newestFirst(threads.filter(thread => thread.id !== continued && thread.questions.length > 0 && (scope.kind === 'global' || sameScope(thread.home, scope))));
+export interface Chain {
+  /** Its newest thread's id: a thread id, so it names this conversation only while that thread is its newest. */
+  readonly id: string;
+  /** Its threads, in the order they were started. */
+  readonly threads: readonly Thread[];
+  /** The thread last asked in: the one a question in this conversation continues (R14). */
+  readonly newest: Thread;
+  /** Its turns across its threads, oldest first, as the timeline keeps them. */
+  readonly turns: readonly TimelineTurn[];
+  /** Where it lives: every thread of it lives there (R9). */
+  readonly home: AskScope;
+  /** Its typed questions, oldest first, each asked question once: all an Ask ever sends of it (R2). */
+  readonly questions: readonly string[];
+  /** Its label, when it has one that may be sent (R2). */
+  readonly sent?: string;
+  /**
+   * What the page may call it anywhere (R2): its label, or else the own words that name the thread of it last asked in
+   * that has any; undefined when nothing in it kept the person's words.
+   */
+  readonly own?: string;
+  /** What the door lists it by: `own`, or with none its newest thread's first heading, shown nowhere else. */
+  readonly label: string;
+  /** When it was last asked in. */
+  readonly asked_at: string;
+}
+
+/**
+ * The label among `turns` that still stands (R2): the newest in form whose every word is a word of `questions`, the
+ * words typed in its conversation. One that fails is passed over wherever it is found, never repaired.
+ */
+export function labelOf(turns: readonly Pick<TimelineTurn, 'label'>[], questions: readonly string[]): string | undefined {
+  return turns.findLast(turn => isPersonAnswerLabelV1(turn.label) && personAnswerLabelFitsV1(turn.label, questions))?.label;
+}
+
+/**
+ * The timeline's conversations, in the order their first threads were started: threads joined by `continues`, followed
+ * both ways. A turn that names a thread no longer kept, its own, or one living elsewhere (R9) joins nothing, and neither
+ * does a turn an older file keeps in a thread from another place: only what was asked in a thread's home speaks for it.
+ */
+export function chainsOf(turns: readonly TimelineTurn[], threads: readonly Thread[] = threadsOf(turns)): Chain[] {
+  const byId = new Map(threads.map(thread => [thread.id, thread]));
+  // Each thread's group: joining two moves the later-started group's threads into the earlier's.
+  const group = new Map(threads.map(thread => [thread.id, [thread]]));
+  for (const thread of threads) {
+    for (const id of homeTurns(thread, thread.home).flatMap(turn => turn.continues ?? [])) {
+      const other = byId.get(id);
+      if (other === undefined || !sameScope(other.home, thread.home)) continue;
+      const [mine, theirs] = [group.get(thread.id)!, group.get(other.id)!];
+      if (mine === theirs) continue;
+      const [into, from] = threads.indexOf(mine[0]!) < threads.indexOf(theirs[0]!) ? [mine, theirs] : [theirs, mine];
+      into.push(...from);
+      for (const moved of from) group.set(moved.id, into);
+    }
+  }
+  const place = new Map(turns.map((turn, at) => [turn.id, at]));
+  return [...new Set(group.values())].map((members) => {
+    const own = [...members].sort((left, right) => threads.indexOf(left) - threads.indexOf(right));
+    const newest = newestFirst(own)[0]!;
+    const all = own.flatMap(thread => thread.turns).sort((left, right) => place.get(left.id)! - place.get(right.id)!);
+    const home = newest.home;
+    // Only what was asked in its home is ever sent of it, or labels it.
+    const here = all.filter(turn => sameScope(turn.scope, home));
+    const questions = visibleTurns(here).flatMap(turn => sentWords(turn) ?? []);
+    const sent = labelOf(here, questions);
+    const named = sent ?? newestFirst(own).find(thread => thread.own !== undefined)?.own;
+    return {
+      id: newest.id, threads: own, newest, turns: all, home, questions, ...(sent === undefined ? {} : { sent }), ...(named === undefined ? {} : { own: named }),
+      label: named ?? newest.name, asked_at: newest.asked_at,
+    };
+  });
+}
+
+/**
+ * The thread a thread continues (R13), which its "Continues" line opens: the first one its own first turn names, as
+ * that turn is written (the joined thread first, then any links), while that thread is kept in the same home. A link
+ * (R16) on a later turn names none here, so linking never adds a line.
+ */
+export function continuedThread(thread: Thread, threads: readonly Thread[]): Thread | undefined {
+  const named = thread.turns.find(turn => turn.id === thread.id)?.continues?.[0];
+  const other = threads.find(each => each.id === named);
+  return other !== undefined && other.id !== thread.id && sameScope(other.home, thread.home) ? other : undefined;
+}
+
+/**
+ * The other conversations an Ask in `scope` carries, most recent first: all but the one it continues (`continued`, a
+ * thread of it), and in a project only that project's (R3). One with no typed question has nothing to send, so ECHO
+ * never places a question in it.
+ */
+export function otherChains(chains: readonly Chain[], scope: AskScope, continued: string | null): Chain[] {
+  return newestFirst(chains.filter(chain => !chain.threads.some(thread => thread.id === continued) && chain.questions.length > 0
+    && (scope.kind === 'global' || sameScope(chain.home, scope))));
+}
+
+/** The door's rows: conversations whose label or a typed question holds `find`, the one asked in most recently first. */
+export function doorChains(chains: readonly Chain[], find: string): Chain[] {
+  const wanted = find.trim().toLowerCase();
+  return newestFirst(chains).filter(chain => wanted === '' || [chain.label, ...chain.questions].some(text => text.toLowerCase().includes(wanted)));
 }
 
 /**
  * The older turns a follow-up carries (R6), oldest first, each question once as Ask shows them: folded with `before`
- * among them, then without it, and found among all turns kept, so a later repeat (a merge's) never hides `before`.
+ * among them, then without it, and found among all turns kept, so a repeat asked later in the conversation never hides `before`.
  */
 export function earlierTurns(turns: readonly TimelineTurn[], before: TimelineTurn): TimelineTurn[] {
   const at = turns.findIndex(turn => turn.id === before.id);
@@ -454,12 +554,12 @@ export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, 
   return earlierTurns(turns, before).map(turn => carried(turn, sentWords(turn)!, readableStatements(turn, found?.[turn.id] ?? null)));
 }
 
-/** What an Ask carries beside its question, with which threads were sent. */
+/** What an Ask carries beside its question, with which conversations were sent. */
 export interface AskCarries {
   readonly previous?: AskPrevious;
-  /** Present, though it may be empty, on a question to be placed. */
+  /** Present, though it may be empty, on a question to be placed: one entry for each conversation (R14). */
   readonly threads?: AskThread[];
-  /** The threads sent, by id, in the order sent: an answer names one by its place here. */
+  /** The conversations sent, each by its newest thread's id then, in the order sent: an answer names one by its place here. */
   readonly sent: readonly string[];
 }
 
@@ -468,8 +568,8 @@ export interface AskCarries {
  * least recently asked first, then older turns from the oldest. `others` null: not to be placed, no list; to be placed,
  * a list goes even when empty, so the answer can say the question starts a thread.
  */
-export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Thread[] | null): AskCarries {
-  const threads = (others ?? []).map(({ questions, asked_at }): AskThread => ({ questions, asked_at }));
+export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Chain[] | null): AskCarries {
+  const threads = (others ?? []).map(({ questions, asked_at, sent }): AskThread => ({ questions, asked_at, ...(sent === undefined ? {} : { label: sent }) }));
   // Each entry with the comma before the next, and each list that goes with its key and brackets.
   const sizes = (entries: readonly unknown[]) => entries.map(entry => jsonBytes(entry) + 1);
   const total = (bytes: readonly number[]) => bytes.reduce((sum, size) => sum + size, 0);
@@ -483,37 +583,6 @@ export function askCarries(question: string, scope: AskScope, previous: AskPrevi
   return {
     ...(previous === null ? {} : { previous: older.length > 0 ? { ...previous, earlier: older } : previous }),
     ...(others === null ? {} : { threads: threads.slice(0, kept) }),
-    sent: (others ?? []).slice(0, kept).map(thread => thread.id),
+    sent: (others ?? []).slice(0, kept).map(chain => chain.id),
   };
-}
-
-/** A turn a merge moved, and the thread it was in. */
-export interface MovedTurn {
-  readonly turn: string;
-  readonly from: string;
-}
-
-/** Whether a merge into `into` can still be undone: every turn it moved is still kept, and still there. */
-export function undoable(moved: readonly MovedTurn[], into: string, ids: ReadonlyMap<string, string>): boolean {
-  return moved.length > 0 && moved.every(({ turn }) => ids.get(turn) === into);
-}
-
-/** The threads of one home, as the thread list groups them. */
-export interface ThreadGroup {
-  readonly home: AskScope;
-  readonly threads: readonly Thread[];
-}
-
-/** The thread list (ADR-0056): threads whose name or a typed question holds `find`, by home, the open thread's first. */
-export function threadGroups(threads: readonly Thread[], open: Thread | undefined, find: string): ThreadGroup[] {
-  const wanted = find.trim().toLowerCase();
-  const found = newestFirst(threads).filter(thread => wanted === '' || [thread.name, ...thread.questions].some(question => question.toLowerCase().includes(wanted)));
-  const groups: { home: AskScope; threads: Thread[] }[] = [];
-  for (const thread of found) {
-    const group = groups.find(each => sameScope(each.home, thread.home));
-    if (group) group.threads.push(thread); else groups.push({ home: thread.home, threads: [thread] });
-  }
-  // Stable: projects stay in the order of their newest thread.
-  const rank = (group: ThreadGroup) => (open !== undefined && sameScope(group.home, open.home) ? 0 : group.home.kind === 'global' ? 1 : 2);
-  return groups.sort((left, right) => rank(left) - rank(right));
 }

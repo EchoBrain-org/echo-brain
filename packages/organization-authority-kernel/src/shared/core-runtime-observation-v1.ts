@@ -67,8 +67,8 @@ export const CORE_RUNTIME_MODEL_CORRECTIONS_V1 = Object.freeze([
   "model_json_fence_stripped", "model_json_outer_text_dropped",
   "model_text_truncated", "model_items_capped", "model_entry_dropped", "model_repeat_dropped", "model_id_respelled", "model_enum_respelled", "model_bare_string",
   "model_inline_ids_stripped",
-  // Ask's follow-up resolver (ADR-0047).
-  "resolver_fallback",
+  // Ask's follow-up resolver (ADR-0047), and the label its thread resolver drops (ADR-0057).
+  "resolver_fallback", "resolver_label_dropped",
   // Renderers: Ask's writer and the impact card.
   "writer_repeat_dropped", "writer_unknown_id_dropped", "writer_uncited_sentence_dropped", "writer_fallback",
   "writer_quote_unquoted", "writer_event_undated",

@@ -16,10 +16,10 @@ import {
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
 import { askText } from '../shared/query.js';
-import { askArgv, askCheckArgv, askCheckRequest, askContext, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
+import { askArgv, askCheckArgv, askCheckRequest, askContext, askLabels, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
-import { deleteOtherTimelines, deleteTimeline, moveTimeline, putTimeline, readTimeline, TimelineWriteUnsure, timelineMoves, timelineTurn } from './timeline.js';
+import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, removeTimeline, TimelineWriteUnsure, timelineTurn } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
@@ -94,7 +94,7 @@ const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
-const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put', 'timeline.move']);
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put', 'timeline.remove']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
@@ -621,7 +621,7 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
       const progress = (line: string) => { alive(); steps?.(line); };
-      return forAccount(method, expect, askArgv(text, scope, previous, threads), stdout => answerView(lastJson(stdout), scope, threads?.length, previous !== undefined), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, previous, threads), stdout => answerView(lastJson(stdout), scope, threads?.length, previous !== undefined, askLabels(previous)), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
       const { expect } = params as Params<'timeline.read'>;
@@ -632,17 +632,16 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       });
     }
     case 'timeline.put': {
-      const { expect, turn: given } = params as Params<'timeline.put'>;
+      const { expect, turn: given, known } = params as Params<'timeline.put'>;
       const turn = timelineTurn(given);
-      if (turn === null) return code('invalid_request');
+      if (turn === null || (known !== undefined && known !== true)) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
-      return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn, known === true); return {}; });
     }
-    case 'timeline.move': {
-      const { expect, moves: given } = params as Params<'timeline.move'>;
-      const moves = timelineMoves(given);
-      if (moves === null) return code('invalid_request');
-      return onDevice(expect, directory => moveTimeline(directory, expect, moves));
+    case 'timeline.remove': {
+      const { expect, turn } = params as Params<'timeline.remove'>;
+      if (typeof turn !== 'string' || !ASK_CANCEL_ID.test(turn)) return code('invalid_request');
+      return onDevice(expect, directory => removeTimeline(directory, expect, turn));
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

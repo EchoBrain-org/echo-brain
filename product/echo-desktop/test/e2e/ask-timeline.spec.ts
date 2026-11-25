@@ -41,10 +41,11 @@ test('the timeline stays through navigation, on this computer only, Ask shows on
   await page.getByTestId('sidebar-project').nth(0).click();
   await expect(page.getByTestId('title')).toHaveText('Apollo');
   await ask(page, 'What is left in Apollo?');
-  // One thread on the page (ADR-0056): a question asked from a page starts its own, and the others are not on it.
+  // One conversation on the page (ADR-0056, ADR-0057): a question asked from a page starts its own, the others are not
+  // on it, and nothing names or lists them.
   await expect(page.getByTestId('question')).toHaveText(['What is left in Apollo?']);
   await expect(page.getByTestId('timeline-row')).toHaveCount(0);
-  await expect(page.getByTestId('thread-name')).toHaveText('What is left in Apollo?');
+  await expect(page.getByTestId('door')).toHaveCount(0);
   // From a page a question carries no earlier turn; typed after an answer, in its thread, it carried the turn before it.
   // Each carried the list of threads it could be placed in, empty here: nothing from outside a project rides on its Ask.
   expect(asks().map(body => 'previous' in body)).toEqual([false, true, false]);
@@ -69,34 +70,37 @@ test('the timeline stays through navigation, on this computer only, Ask shows on
   await expect(suggestions.last()).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('ask-field')).toHaveAttribute('aria-activedescendant', 'ask-suggestion-2');
   await page.getByTestId('ask-field').press('Enter');
-  // Its thread: the latest question in full, and the one chosen as a line, opened on its answer as it was, with no scope line
-  // or date under any question.
-  await expect(page.getByTestId('thread-name')).toHaveText('What did we agree?');
+  // Its conversation: the latest question in full, and the one chosen as typed, opened on its answer as it was, with
+  // no scope line or date under any question.
   await expect(page.getByTestId('question')).toHaveText(['Who approved it?']);
-  const rows = page.getByTestId('timeline-row');
-  await expect(rows).toHaveCount(1);
-  await expect(rows.getByTestId('timeline-question')).toHaveText('What did we agree?');
-  await expect(rows).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('timeline-question')).toHaveText(['What did we agree?']);
   await expect(page.getByTestId('opened-turn')).toContainText('We agreed to ship Apollo with annual plans first.');
   await expect(page.getByTestId('opened-turn').getByTestId('ask-again')).toBeVisible();
-  // The line folds it again.
-  await rows.click();
-  await expect(rows).toHaveAttribute('aria-expanded', 'false');
+  // Show less folds it to its reply's first message, which opens it again.
+  const row = page.getByTestId('timeline-row');
+  await expect(row).toHaveCount(0);
+  await page.getByTestId('timeline-fold').click();
+  await expect(page.getByTestId('opened-turn')).toHaveCount(0);
+  await expect(row).toHaveText('We agreed to ship Apollo with annual plans first.');
+  await expect(row).toHaveAttribute('aria-expanded', 'false');
   expect(asks()).toHaveLength(3);
 });
 
-test('a line opens as its heading, with what you can no longer read left out', async () => {
+test('an earlier turn opens from its reply\'s first message, with what you can no longer read left out', async () => {
   run = await launch('ask-timeline-unreadable');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'What is open on THERM?');
   await ask(page, 'and who has it?');
   await back(page);
-  // The sidebar's Ask opens the thread again: its latest turn in full, the one before as a line.
+  // The sidebar's Ask opens the conversation again: its latest turn in full, the one before short, as typed with its
+  // reply's first message.
   await page.getByTestId('sidebar-ask').click();
   await expect(page.getByTestId('question')).toHaveText(['and who has it?']);
-  // Opening the thread checked its turns' sources in one read: the follow-up is no longer yours.
-  const row = page.getByTestId('timeline-row').filter({ hasText: 'What is open on THERM?' });
+  await expect(page.getByTestId('timeline-question')).toHaveText(['What is open on THERM?']);
+  // Opening the conversation checked its turns' sources in one read: the follow-up is no longer yours.
+  const row = page.getByTestId('timeline-row');
+  await expect(row).toHaveText('THERM-482, Sensor drift, is open.');
   await row.click();
   const opened = page.getByTestId('opened-turn');
   await expect(opened.getByTestId('statement-text')).toHaveText(['THERM-482, Sensor drift, is open.', 'The DVT plan moved the retest to Oct 30.']);

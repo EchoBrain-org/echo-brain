@@ -334,6 +334,36 @@ export function answerSays(answer: TimelineAnswer, shows: Shows): boolean {
   return (answer.direct !== undefined && shows(answer.direct.citation_indexes)) || answer.parts.some(part => partShows(part, shows));
 }
 
+/** The answer's first statement, by the id the pane knows it by, and whether the answer shows anything after it. */
+export interface AnswerLead {
+  readonly id: string;
+  readonly statement: AnswerStatement;
+  readonly more: boolean;
+}
+
+/**
+ * The statement an answer opens with, which the page shows as its own short message (ADR-0057): its direct answer, or
+ * the first sentence it shows of a one-part answer whose first block reads as a sentence (the answer, or untitled
+ * text). Null when it opens with anything else (a table, points, a card, a part under its own label) or shows nothing.
+ */
+export function answerLead(answer: TimelineAnswer, shows: Shows): AnswerLead | null {
+  const lead = openingStatement(answer, shows);
+  if (lead === null) return null;
+  const more = answerSentences(answer).some(([id, sentence]) => id !== lead.id && shows(sentence.citation_indexes)) || answerGaps(answer, shows).length > 0;
+  return { ...lead, more };
+}
+
+function openingStatement(answer: TimelineAnswer, shows: Shows): Omit<AnswerLead, 'more'> | null {
+  if (answer.direct !== undefined) return shows(answer.direct.citation_indexes) ? { id: 'direct', statement: answer.direct } : null;
+  const [part] = answer.parts;
+  if (answer.parts.length !== 1 || part?.blocks === undefined) return null;
+  const blocks = drawnBlocks(part.blocks);
+  const block = blocks[shownArranged(part, blocks, shows).indexOf(true)];
+  if (block === undefined || !(block.kind === 'answer' || (block.kind === 'text' && block.title === undefined))) return null;
+  const place = block.statements.find(each => shows(part.statements[each]!.citation_indexes));
+  return place === undefined ? null : { id: `0.${place}`, statement: part.statements[place]! };
+}
+
 /** What Copy answer writes after what an answer says, as the page shows it: its explanations, or `nothing` when it has neither. */
 function answerEnd(answer: TimelineAnswer, shows: Shows, nothing: string): string[] {
   const gaps = answerGaps(answer, shows);

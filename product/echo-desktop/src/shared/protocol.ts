@@ -367,15 +367,17 @@ export interface Answer {
   readonly thread?: PersonAnswerThreadPlacementV1;
   /** Only for an Ask that carried `threads`: places, among those sent, of threads on the subject of the one it belongs to. */
   readonly merge?: readonly number[];
+  /** Only for a follow-up (ADR-0057): the label of the conversation it continues, in form; the page checks its words before keeping it. */
+  readonly label?: string;
 }
 
 /**
  * An answer as the timeline keeps it: what the page reads back of a turn.
  * What only the Ask that brought it reads (what it looked through, "Which
  * one?"'s choices, where it belongs) and what the turn keeps itself (the full
- * question, Ask again's "since") are not kept twice.
+ * question, Ask again's "since", the label) are not kept twice.
  */
-export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge'>;
+export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge' | 'label'>;
 
 /**
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
@@ -437,27 +439,30 @@ export interface TimelineTurn {
    * may have been written from (R10, questionOf). `[]` marks a turn saved before threads once it is named.
    */
   readonly carried?: readonly string[];
+  /**
+   * The label that came back with this turn's answer (ADR-0057): one line that says what its conversation is about, kept
+   * only when every word of it was typed in that conversation (R2). The newest that still passes labels the conversation.
+   */
+  readonly label?: string;
+  /**
+   * Threads, by id, this turn's thread continues (R13) or is linked to (R16), each once: all of them are one
+   * conversation with it (R14). Written with the turn and never changed; nothing else records a link.
+   */
+  readonly continues?: readonly string[];
 }
 
-/** One group of a move (ADR-0056): turns the page believes are in thread `from` (null: none), all going to `to`. */
-export interface TimelineMove {
-  readonly from: string | null;
-  readonly to: string;
-  readonly turns: readonly string[];
-}
-
-/** A turn's thread as the file holds it: null for none. */
-export interface TimelineLabel {
-  readonly turn: string;
-  readonly thread: string | null;
-}
+/**
+ * How long a thread stays active after its newest turn (ADR-0057, R11): the founder's rule, a week. Nothing is stored:
+ * the page and the host both work it out from the turns' own times. A literal, as the sandboxed renderer imports this file.
+ */
+export const THREAD_ACTIVE_MS = 7 * 24 * 60 * 60_000;
 
 /**
  * Transport: the most a put may send, one turn, whose answer is at most the
  * API's PERSON_ANSWER_RESPONSE_MAX_BYTES_V4 (1 MiB) with its sources' citations
- * kept beside them, so four times the answer's bound; a move takes the same.
- * Every other call keeps the broker's MAX_REQUEST_BYTES. A literal, as the
- * sandboxed renderer imports this file; a test holds it above the API's bound.
+ * kept beside them, so four times the answer's bound. Every other call keeps
+ * the broker's MAX_REQUEST_BYTES. A literal, as the sandboxed renderer imports
+ * this file; a test holds it above the API's bound.
  */
 export const MAX_TIMELINE_PUT_BYTES = 4 * 1024 * 1024;
 
@@ -769,10 +774,16 @@ export interface HostMethods {
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
-  /** Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go. */
-  'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
-  /** Moves turns between threads in one compare-and-set write (ADR-0056); answers whether it did, and where they are. */
-  'timeline.move': { params: { expect: Expect; moves: TimelineMove[] }; result: { moved: boolean; turns: TimelineLabel[] } };
+  /**
+   * Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go.
+   * `known`: a change to a turn already kept, so only in its place: one Undo took out meanwhile stays out (ADR-0057, R15).
+   */
+  'timeline.put': { params: { expect: Expect; turn: TimelineTurn; known?: true }; result: Record<string, never> };
+  /**
+   * Undo of a placement (ADR-0057, R15): takes one turn out of the file in a compare-and-set write, only while it is the
+   * newest turn of an active thread and no kept turn names it. `removed`: the file does not hold it now.
+   */
+  'timeline.remove': { params: { expect: Expect; turn: string }; result: { removed: boolean } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -880,7 +891,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.move': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.remove': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -906,7 +917,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** A call that may change what is kept, the Authority's or this computer's timeline: one no host took is known not made. */
 export function mayChange(method: string, params: unknown): boolean {
-  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.move';
+  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.remove';
 }
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(
@@ -1079,11 +1090,11 @@ export function changesLogLine(params: unknown): string | null {
 
 /**
  * The most a call's parameters may take at the broker: a timeline put and
- * Copy answer each carry one whole answer, as does a timeline move; every other
- * call (an Ask, a note) the Person request bound, MAX_REQUEST_BYTES.
+ * Copy answer each carry one whole answer; every other call (an Ask, a note)
+ * the Person request bound, MAX_REQUEST_BYTES.
  */
 export function paramsLimit(method: string): number {
-  return method === 'timeline.put' || method === 'timeline.move' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
+  return method === 'timeline.put' || method === 'clipboard.writeText' ? MAX_TIMELINE_PUT_BYTES : MAX_REQUEST_BYTES;
 }
 /** Deeper than any request's parameters: it bounds the walk, and ends a cycle a structured clone can carry. */
 const MAX_PARAMS_DEPTH = 32;
