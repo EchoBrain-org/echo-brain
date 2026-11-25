@@ -47,6 +47,8 @@ export interface AgenticAskProgressInputV3 {
   readonly previous?: PersonAnswerPreviousV1;
   /** Context for placing the question, never evidence. */
   readonly threads?: readonly PersonAnswerThreadV1[];
+  /** The client reads labels (ADR-0057). */
+  readonly labels?: true;
   readonly follow_up?: AgenticFollowUpCarryV1;
 }
 

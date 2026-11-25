@@ -207,6 +207,53 @@ describe("where the question belongs decides its one path (ADR-0056)", () => {
   });
 });
 
+describe("the open thread's label on the answer (ADR-0057)", () => {
+  // Every word is one the person typed in the open thread or the new question.
+  const LABEL = "DVT gate: blocking, approved, details";
+
+  it.each([
+    ["resolved", { thread: "open", resolution: "resolved", question: RESOLVED, about: [1], label: LABEL }, RESOLVED],
+    ["same", { thread: "open", resolution: "same", label: LABEL }, QUESTION],
+  ] as const)("carries the label of a %s answer in the open thread only to an Ask that reads labels, and its hash covers it", async (_name, reply, answers) => {
+    const asked = async (labels: boolean) => {
+      const run = scripted({ resolver: [reply], ...researched(answers) });
+      const { ask, audits } = askV8(desk(), run);
+      const response = await ask.answer({ ...sent({ ...PREVIOUS, label: "DVT gate: blocking" }, THREADS), ...(labels ? { labels: true as const } : {}) });
+      return { response, audits, run };
+    };
+    const reading = await asked(true);
+    expect(validatePersonAnswerResponseV8(reading.response)).toEqual(reading.response);
+    expect(reading.response).toMatchObject({ outcome: "answered", question: answers, label: LABEL });
+    // The current label reached the resolver, and no label reaches research or the writer.
+    expect(JSON.parse(reading.run.of("resolver")[0]!.user_prompt).open.label).toBe("DVT gate: blocking");
+    for (const input of [...reading.run.of("step"), ...reading.run.of("writer")]) expect(`${input.system_prompt}\n${input.user_prompt}`).not.toContain("DVT gate: blocking");
+    expect(reading.audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(reading.response));
+    const { label: _label, ...unlabelled } = reading.response;
+    expect(agenticAskAnswerSha256V1(unlabelled as PersonAnswerResponseV8)).not.toBe(reading.audits[0]!.answer_sha256);
+    // An older client never meets the key: the same reply, to an Ask that did not ask for labels, carries none.
+    const older = await asked(false);
+    expect(older.response).not.toHaveProperty("label");
+    expect(older.response).toEqual(unlabelled);
+  });
+
+  it.each([
+    ["a label in words the person did not type", [{ thread: "open", resolution: "same", label: "THERM-482: details" }], PREVIOUS, THREADS, { outcome: "answered" }, 1],
+    ["a label beside a clarify", [{ thread: "open", resolution: "clarify", choices: CHOICES, label: LABEL }], PREVIOUS, THREADS, { outcome: "clarify", choices: CHOICES }, 1],
+    ["a label beside other threads", [{ ...ELSEWHERE, label: LABEL }], PREVIOUS, THREADS, { outcome: "clarify", thread: { kind: "other", threads: [1, 0] } }, 1],
+    ["a label beside a new subject", [{ thread: "new", label: LABEL }], PREVIOUS, THREADS, { outcome: "answered", thread: { kind: "new" } }, 1],
+    // The follow-up resolver's path is today's, byte for byte: it makes no label.
+    ["a label on the follow-up resolver's path", [{ resolution: "same", label: LABEL }], SINGLE, undefined, { outcome: "answered" }, 0],
+  ] as const)("answers with no label after %s, to an Ask that reads labels", async (_name, resolver, previous, threads, shape, dropped) => {
+    const run = scripted({ resolver, ...researched(QUESTION) });
+    const { ask } = askV8(desk(), run);
+    const { value: response, corrections } = await observed(() => ask.answer({ ...sent(previous, threads), labels: true }));
+    expect(validatePersonAnswerResponseV8(response)).toEqual(response);
+    expect(response).toMatchObject(shape);
+    expect(response).not.toHaveProperty("label");
+    expect(corrections.resolver_label_dropped ?? 0).toBe(dropped);
+  });
+});
+
 describe("an Ask without threads or older turns is today's (ADR-0056)", () => {
   it("resolves a follow-up with the follow-up resolver's own prompt and schema, and answers with no thread or merge", async () => {
     const run = scripted({ resolver: [{ resolution: "same" }], ...researched(QUESTION) });

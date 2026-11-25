@@ -3,6 +3,8 @@ import {
   PersonQueryInputError,
   personAnswerCitationKeyV8,
   validatePersonAnswerResponseV8,
+  isPersonAnswerLabelV1,
+  personAnswerLabelFitsV1,
   validatePersonQuestionText,
   type PersonAnswerChoiceV1,
   type PersonAnswerCitationV8,
@@ -69,10 +71,11 @@ const SAME: AgenticFollowUpResolutionV1 = Object.freeze({ resolution: "same" });
 /**
  * Where a question belongs (ADR-0056): the open thread, a `new` subject (only for a request that carried `threads`), or
  * `other` threads by index (several: it could be any). `merge` joins threads plainly on the subject of the one it belongs
- * to, so it is empty beside several `other`s or a `clarify`.
+ * to, so it is empty beside several `other`s or a `clarify`. `label` (ADR-0057) says what the open thread is about, only
+ * beside `same` or `resolved`.
  */
 export type AgenticThreadPlacementV1 =
-  | { readonly thread: "open"; readonly resolution: AgenticFollowUpResolutionV1; readonly merge: readonly number[] }
+  | { readonly thread: "open"; readonly resolution: AgenticFollowUpResolutionV1; readonly merge: readonly number[]; readonly label?: string }
   | { readonly thread: "new" }
   | { readonly thread: "other"; readonly threads: readonly number[]; readonly merge: readonly number[] };
 
@@ -85,8 +88,8 @@ export interface AgenticThreadResolvedV1 {
 const NO_MERGE: readonly number[] = Object.freeze([]);
 const NEW_THREAD: AgenticThreadPlacementV1 = Object.freeze({ thread: "new" });
 /** Every `open` placement is built here. */
-function inOpenThread(resolution: AgenticFollowUpResolutionV1, merge: readonly number[] = NO_MERGE): AgenticThreadPlacementV1 {
-  return Object.freeze({ thread: "open", resolution, merge });
+function inOpenThread(resolution: AgenticFollowUpResolutionV1, merge: readonly number[] = NO_MERGE, label?: string): AgenticThreadPlacementV1 {
+  return Object.freeze({ thread: "open", resolution, merge, ...(label === undefined ? {} : { label }) });
 }
 
 /** No usable reply (ADR-0056): the question as asked, where it was asked; only a reply can name another thread or a merge. */
@@ -169,8 +172,8 @@ export const THREAD_RESOLVER_PROMPT = [
   "",
   "You are given:",
   "- today: today's date.",
-  "- open: the thread the person has open, when they have one. Its \"turns\" are its questions, oldest first, each with the day it was asked (asked_on) and its answer's sentences; the last turn is the one the person has just read. Sentences are numbered across the whole thread, each with the numbers of the sources it cited. Its \"sources\" are numbered as one list for the whole thread, each with its kind and label.",
-  "- threads: the person's other threads, which may be none, numbered from 1, each with the questions the person asked in it, oldest first, and the day it was last asked in (last_asked_on). Their answers are not shown.",
+  "- open: the thread the person has open, when they have one. Its \"turns\" are its questions, oldest first, each with the day it was asked (asked_on) and its answer's sentences; the last turn is the one the person has just read. Sentences are numbered across the whole thread, each with the numbers of the sources it cited. Its \"sources\" are numbered as one list for the whole thread, each with its kind and label. Its \"label\", when it has one, is the one line that says what the thread is about.",
+  "- threads: the person's other threads, which may be none, numbered from 1, each with the questions the person asked in it, oldest first, the day it was last asked in (last_asked_on) and, when it has one, its \"label\". Their answers are not shown.",
   "- question: the person's new question, as they typed it.",
   "",
   "Return \"thread\", the one place the question belongs:",
@@ -185,6 +188,8 @@ export const THREAD_RESOLVER_PROMPT = [
   "",
   "With an \"open\" reply whose resolution is \"same\" or \"resolved\", or with \"other\" naming one thread, you may also return \"merge\": the numbers of other threads that are plainly about the same thing as the thread the question belongs to.",
   "",
+  "With an \"open\" reply whose resolution is \"same\" or \"resolved\", also return \"label\": one line of at most 80 characters that says what the open thread is about now that the new question is part of it. Name the thing it is about, then what was asked about it, as in \"pilot: start, owns, annual plans\". Use only words the person wrote in the open thread's questions or in the new question, spelled as they wrote them; never a word from an answer or a source, and never a word of your own.",
+  "",
   "Rules:",
   "- Say one thing. \"resolution\", \"question\", \"about\" and \"choices\" belong only to an \"open\" reply, and \"threads\" only to an \"other\" reply. A reply that names one place and adds what belongs to another has not said where the question belongs.",
   "- Never guess a thread. When the question could belong to more than one of the other threads, name every one of them in \"threads\", and never pick the one that seems likelier: the person is then asked which one.",
@@ -198,15 +203,16 @@ export const THREAD_RESOLVER_PROMPT = [
   "- A thing fits when it is of the kind the question names and the question's words can mean it: \"that ticket\" fits only tickets, \"that meeting\" only meetings, \"that person\" only people; \"it\" or \"that\" can fit anything the thread names.",
   "- Each question you write is one line, in the person's words and language, that a person could ask without having seen the thread.",
   "- Never answer the question, and never add facts or names the threads do not give.",
+  "- Keep the open thread's \"label\" exactly as it is unless the new question asks about something the label does not say. Leave \"label\" out with \"clarify\", \"other\" and \"new\", and when you cannot say it in the person's own words.",
   "",
   "Reply with ONLY a JSON object in one of these shapes:",
-  "{\"thread\":\"open\",\"resolution\":\"same\"}",
-  "{\"thread\":\"open\",\"resolution\":\"resolved\",\"question\":\"<the full question>\",\"about\":[1]}",
+  "{\"thread\":\"open\",\"resolution\":\"same\",\"label\":\"<what the thread is about>\"}",
+  "{\"thread\":\"open\",\"resolution\":\"resolved\",\"question\":\"<the full question>\",\"about\":[1],\"label\":\"<what the thread is about>\"}",
   "{\"thread\":\"open\",\"resolution\":\"clarify\",\"choices\":[{\"label\":\"<the first thing>\",\"question\":\"<the full question about it>\"},{\"label\":\"<the second thing>\",\"question\":\"<the full question about it>\"}]}",
   "{\"thread\":\"other\",\"threads\":[2]}",
   "{\"thread\":\"other\",\"threads\":[1,3]}",
   "{\"thread\":\"new\"}",
-  "Only an \"open\" reply that is \"same\" or \"resolved\", or an \"other\" reply that names one thread, may add \"merge\", as in {\"thread\":\"open\",\"resolution\":\"same\",\"merge\":[3]} or {\"thread\":\"other\",\"threads\":[2],\"merge\":[4]}.",
+  "Only an \"open\" reply that is \"same\" or \"resolved\", or an \"other\" reply that names one thread, may add \"merge\", as in {\"thread\":\"open\",\"resolution\":\"same\",\"merge\":[3],\"label\":\"<what the thread is about>\"} or {\"thread\":\"other\",\"threads\":[2],\"merge\":[4]}.",
 ].join("\n");
 
 /** The thread resolver's reply, in only the keywords the other Ask schemas send; the parser checks the rest. */
@@ -215,6 +221,7 @@ export const threadPlacementSchema: StructuredGenerationJsonSchema = Object.free
     thread: { type: "string", enum: [...PLACES] },
     threads: { type: "array", items: { type: "integer" } },
     merge: { type: "array", items: { type: "integer" } },
+    label: { type: "string" },
     ...(followUpResolutionSchema.properties as Readonly<Record<string, unknown>>),
   },
 });
@@ -305,6 +312,8 @@ interface ThreadShownV1 {
   readonly open: boolean;
   readonly sources: number;
   readonly others: number | undefined;
+  /** The open thread's questions, oldest first, and the new question: the only words a label may use (ADR-0057). */
+  readonly questions: readonly string[];
 }
 
 /** Fields only an `open` reply may have. */
@@ -314,8 +323,21 @@ function says(value: unknown): boolean {
 }
 
 /**
+ * The open thread's label (ADR-0057): an extra, as `merge` is, so one out of form, with a word in none of `questions`,
+ * or beside a reply that may have none (`questions` undefined) is dropped and counted, never sent back.
+ */
+function labelOf(value: unknown, questions: readonly string[] | undefined): string | undefined {
+  if (!says(value)) return undefined;
+  const label = cleanModelLine(value);
+  if (questions !== undefined && isPersonAnswerLabelV1(label) && personAnswerLabelFitsV1(label, questions)) return label;
+  observeCoreModelCorrectionV1("resolver_label_dropped");
+  return undefined;
+}
+
+/**
  * The thread resolver's reply (ADR-0056), read strictly. One that names a place and also says what belongs to another
- * has not said where the question belongs: it goes back for the one repair, as does anything unusable but `merge`.
+ * has not said where the question belongs: it goes back for the one repair, as does anything unusable but `merge` and
+ * `label`.
  */
 export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): AgenticThreadPlacementV1 {
   const body = object(value);
@@ -338,12 +360,15 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
     case "open": {
       if (!shown.open) throw new AgenticAskOutputErrorV1("the person has no thread open, so the thread is \"new\" or \"other\"");
       const resolution = parseFollowUpResolutionV1(body, shown.sources);
-      // Beside choices no merge: the chosen question's answer names it.
-      return inOpenThread(resolution, mergeOf(body.merge, resolution.resolution === "clarify" ? 0 : count));
+      // Beside choices no merge and no label: the chosen question's answer names them.
+      const clarify = resolution.resolution === "clarify";
+      const merge = mergeOf(body.merge, clarify ? 0 : count);
+      return inOpenThread(resolution, merge, labelOf(body.label, clarify ? undefined : shown.questions));
     }
     case "new":
-      // Nothing merges into a new subject; its entries are only counted.
+      // Nothing merges into a new subject, and only the open thread is labelled; their entries are only counted.
       mergeOf(body.merge, 0);
+      labelOf(body.label, undefined);
       // Only a request that carried `threads` is placed; older turns alone stay in their thread (`same`).
       return shown.open && shown.others === undefined ? inOpenThread(SAME) : NEW_THREAD;
     case "other": {
@@ -351,6 +376,7 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
       const none = `the person has no other thread, so the thread is ${elsewhere}`;
       const threads = shownIndexes(Array.isArray(body.threads) ? body.threads : [], count, count === 0 ? none : `"threads" holds thread numbers from 1 to ${count}`);
       if (threads.length === 0) throw new AgenticAskOutputErrorV1(count === 0 ? none : "\"other\" needs \"threads\": the number of every thread the question could belong to");
+      labelOf(body.label, undefined);
       // Only one thread named can have others merged into it.
       return Object.freeze({ thread, threads, merge: threads.length === 1 ? mergeOf(body.merge, count, threads[0]) : mergeOf(body.merge, 0) });
     }
@@ -433,8 +459,12 @@ function threadResolverInput(input: Pick<AgenticThreadResolverInputV1, "previous
         statements: turn.statements.map(statement => ({ n: ++sentences, text: statement.text, sources: statement.citation_indexes.map(index => open.places[at]![index]! + 1) })),
       })),
       sources: open.citations.map(shownSource),
+      // The current label (ADR-0057), so a reply keeps it unless the new question adds something.
+      ...(previous.label === undefined ? {} : { label: previous.label }),
     } }),
-    threads: (input.threads ?? []).map((thread, index) => ({ n: index + 1, questions: thread.questions, last_asked_on: agenticPreviousAskedOnV1(thread, input.time_zone) })),
+    threads: (input.threads ?? []).map((thread, index) => ({
+      n: index + 1, questions: thread.questions, last_asked_on: agenticPreviousAskedOnV1(thread, input.time_zone), ...(thread.label === undefined ? {} : { label: thread.label }),
+    })),
     question: input.question,
   };
 }
@@ -476,7 +506,10 @@ export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1
   // No thread open and none other: a new thread with no model call, so a first question waits for none.
   if (previous === undefined && threads !== undefined && threads.length === 0) return Object.freeze({ placement: NEW_THREAD, fallback: false });
   const open = previous === undefined ? undefined : threadCitations(previous);
-  const shown: ThreadShownV1 = { open: open !== undefined, sources: open?.citations.length ?? 0, others: threads?.length };
+  const shown: ThreadShownV1 = {
+    open: open !== undefined, sources: open?.citations.length ?? 0, others: threads?.length,
+    questions: [...(previous === undefined ? [] : [...(previous.earlier ?? []).map(turn => turn.question), previous.question]), input.question],
+  };
   return orFallback<AgenticThreadResolvedV1>(input, fallbackPlacement(previous), async () => Object.freeze({
     placement: await input.gate.withRepair(RESOLVE_CALL, THREAD_RESOLVER_PROMPT, threadResolverInput(input, open), threadPlacementSchema,
       value => parseThreadPlacementV1(value, shown)),
@@ -497,10 +530,16 @@ export function agenticFollowUpStartingV1(previous: PersonAnswerPreviousV1, abou
   }));
 }
 
-/** The one mapping from a placement to the response's `thread` and `merge` (ADR-0056); an empty merge is left out. */
-export function agenticThreadFieldsV1(placement: AgenticThreadPlacementV1): Pick<PersonAnswerResponseV8, "thread" | "merge"> {
+/**
+ * The one mapping from a placement to the response's `thread`, `merge` and `label` (ADR-0056, ADR-0057); an empty merge is
+ * left out, and a label goes only to an Ask that reads labels (`labels`).
+ */
+export function agenticThreadFieldsV1(placement: AgenticThreadPlacementV1, labels: boolean): Pick<PersonAnswerResponseV8, "thread" | "merge" | "label"> {
   switch (placement.thread) {
-    case "open": return placement.merge.length === 0 ? {} : { merge: placement.merge };
+    case "open": return {
+      ...(placement.merge.length === 0 ? {} : { merge: placement.merge }),
+      ...(labels && placement.label !== undefined ? { label: placement.label } : {}),
+    };
     case "new": return { thread: { kind: "new" } };
     case "other": return { thread: { kind: "other", threads: placement.threads }, ...(placement.merge.length === 0 ? {} : { merge: placement.merge }) };
     default: return unhandledCaseV1(placement);
@@ -514,7 +553,7 @@ export function agenticClarifyResponseV1(scope: PersonAnswerScopeV3, question: s
 
 /** The answer to a question that belongs to other threads (ADR-0056): not answered here, only the threads named. */
 export function agenticElsewhereResponseV1(scope: PersonAnswerScopeV3, question: string, placement: Extract<AgenticThreadPlacementV1, { readonly thread: "other" }>): PersonAnswerResponseV8 {
-  return validatePersonAnswerResponseV8({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope, outcome: "clarify", citations: [], parts: [], question, ...agenticThreadFieldsV1(placement) });
+  return validatePersonAnswerResponseV8({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope, outcome: "clarify", citations: [], parts: [], question, ...agenticThreadFieldsV1(placement, false) });
 }
 
 /** What an eval hands a resolver it runs on its own. */

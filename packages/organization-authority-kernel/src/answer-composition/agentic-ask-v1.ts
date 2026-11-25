@@ -148,8 +148,8 @@ function askerName(value: { readonly display_name: string } | undefined): string
   return name.length === 0 || name.length > 200 || /[\p{Cc}\p{Cf}]/u.test(name) ? undefined : name;
 }
 
-/** What only an Ask carries: its previous turn, other threads, and their resolution kept between attempts. */
-type AskedWithV1 = Pick<AgenticAskProgressInputV3, "previous" | "threads" | "follow_up">;
+/** What only an Ask carries: its previous turn, other threads, whether it reads labels, and their resolution kept between attempts. */
+type AskedWithV1 = Pick<AgenticAskProgressInputV3, "previous" | "threads" | "labels" | "follow_up">;
 
 /** Ask's question as the API takes it (validatePersonQuestionText), checked by that one rule, or null. */
 function questionText(value: unknown): string | null {
@@ -403,7 +403,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         // ---- and, with threads or older turns (ADR-0056), where the question belongs ----
         let researchBrief = brief;
         let resolvedQuestion: string | undefined;
-        let placed: Pick<PersonAnswerResponseV8, "thread" | "merge"> = {};
+        let placed: Pick<PersonAnswerResponseV8, "thread" | "merge" | "label"> = {};
         // An Ask again asks one earlier question again where it was asked: nothing resolves or places it.
         if (goal.kind === "question" && (previous?.purpose === "follow_up" || (previous === undefined && threads !== undefined))) {
           // A resolution an earlier attempt already paid for is reused only when made from exactly this (agenticResolutionKeyV1).
@@ -416,7 +416,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           const resolved = kept ?? await resolveAgenticThreadV1({ gate, signal: activeSignal, ...asking });
           if (kept === undefined) followUp?.on_resolved?.(Object.freeze({ key, value: resolved }));
           const { placement } = resolved;
-          placed = agenticThreadFieldsV1(placement);
+          placed = agenticThreadFieldsV1(placement, asked.labels === true);
           /** An answer that asks instead of answering: released as every answer is, with no research. */
           const ask = async (response: PersonAnswerResponseV8): Promise<RequestOutput> => {
             phase = "final";

@@ -64,7 +64,7 @@ const QUESTION = "what are the details on that ticket?";
  * What the parser is told the resolver was shown: whether a thread is open, its sources, and the other threads the
  * request carried. `threads` is how many, which may be 0; `undefined` is a request that carried no `threads` at all.
  */
-const shownAs = (open: boolean, sources: number, threads: number | undefined) => ({ open, sources, others: threads });
+const shownAs = (open: boolean, sources: number, threads: number | undefined, questions: readonly string[] = []) => ({ open, sources, others: threads, questions });
 const SHOWN = shownAs(true, 3, 3);
 const CHOICES = [{ label: "THERM-482", question: "What are the details on THERM-482?" }, { label: "MECH-214", question: "What are the details on MECH-214?" }];
 const OPEN_RESOLVED = { thread: "open", resolution: "resolved", question: "What are the details on THERM-482?", about: [1] };
@@ -191,7 +191,8 @@ describe("thread resolution: the prompt and schema (ADR-0056)", () => {
     expect(THREAD_RESOLVER_PROMPT).not.toBe(FOLLOW_UP_RESOLVER_PROMPT);
     expect(threadPlacementSchema).toMatchObject({ type: "object", additionalProperties: false, required: ["thread"] });
     const properties = threadPlacementSchema.properties as Readonly<Record<string, unknown>>;
-    expect(Object.keys(properties).sort()).toEqual(["about", "choices", "merge", "question", "resolution", "thread", "threads"]);
+    expect(Object.keys(properties).sort()).toEqual(["about", "choices", "label", "merge", "question", "resolution", "thread", "threads"]);
+    expect(properties.label).toEqual({ type: "string" });
     expect(properties.thread).toEqual({ type: "string", enum: ["open", "new", "other"] });
     for (const [name, value] of Object.entries(followUpResolutionSchema.properties as Readonly<Record<string, unknown>>)) expect(properties[name]).toBe(value);
     expect(Object.keys(followUpResolutionSchema.properties as object)).toEqual(["resolution", "question", "about", "choices"]);
@@ -226,7 +227,7 @@ describe("thread resolution: the prompt and schema (ADR-0056)", () => {
     }
     // The two merge examples on its last line are read as they stand, and neither is beside choices.
     const examples = [...THREAD_RESOLVER_PROMPT.split("\n").at(-1)!.matchAll(/\{[^{}]*\}/gu)].map(match => JSON.parse(match[0]) as Record<string, unknown>);
-    expect(examples).toEqual([{ thread: "open", resolution: "same", merge: [3] }, { thread: "other", threads: [2], merge: [4] }]);
+    expect(examples).toEqual([{ thread: "open", resolution: "same", merge: [3], label: "<what the thread is about>" }, { thread: "other", threads: [2], merge: [4] }]);
     expect(examples.map(read)).toEqual([{ ...SAME, merge: [2] }, { thread: "other", threads: [1], merge: [3] }]);
   });
 });
@@ -331,7 +332,7 @@ describe("thread resolution: the call (ADR-0056)", () => {
     expect(run.gate.stats()).toMatchObject({ calls: 2, repairs: 1 });
     expect(run.inputs).toHaveLength(2);
     for (const rule of heard) expect(JSON.parse(run.inputs[1]!.user_prompt).validation_error).toContain(rule);
-    if (fallback) expect([corrections, agenticThreadFieldsV1(value.placement)]).toEqual([{ model_repair_rejected: 1, resolver_fallback: 1 }, value.placement.thread === "new" ? { thread: { kind: "new" } } : {}]);
+    if (fallback) expect([corrections, agenticThreadFieldsV1(value.placement, true)]).toEqual([{ model_repair_rejected: 1, resolver_fallback: 1 }, value.placement.thread === "new" ? { thread: { kind: "new" } } : {}]);
   });
 
   it("makes no call, and falls back, once a permanent provider failure has stopped the gate", async () => {
@@ -400,13 +401,13 @@ describe("the open thread's citations as one list, and what an answer says of th
 
   it("maps each placement to the response's thread and merge, and a question that belongs elsewhere to a clarify with no part, citation or choice", () => {
     const same = { resolution: "same" } as const;
-    expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [] })).toEqual({});
-    expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [2] })).toEqual({ merge: [2] });
-    expect(agenticThreadFieldsV1({ thread: "new" })).toEqual({ thread: { kind: "new" } });
-    expect(agenticThreadFieldsV1({ thread: "other", threads: [0, 1], merge: [] })).toEqual({ thread: { kind: "other", threads: [0, 1] } });
-    expect(agenticThreadFieldsV1({ thread: "other", threads: [1], merge: [2] })).toEqual({ thread: { kind: "other", threads: [1] }, merge: [2] });
+    expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [] }, true)).toEqual({});
+    expect(agenticThreadFieldsV1({ thread: "open", resolution: same, merge: [2] }, true)).toEqual({ merge: [2] });
+    expect(agenticThreadFieldsV1({ thread: "new" }, true)).toEqual({ thread: { kind: "new" } });
+    expect(agenticThreadFieldsV1({ thread: "other", threads: [0, 1], merge: [] }, true)).toEqual({ thread: { kind: "other", threads: [0, 1] } });
+    expect(agenticThreadFieldsV1({ thread: "other", threads: [1], merge: [2] }, true)).toEqual({ thread: { kind: "other", threads: [1] }, merge: [2] });
     // A reply that asks which thing is meant says nothing of the threads, whatever merge it gave.
-    expect(agenticThreadFieldsV1(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES, merge: [3, 1] }, SHOWN))).toEqual({});
+    expect(agenticThreadFieldsV1(parseThreadPlacementV1({ thread: "open", resolution: "clarify", choices: CHOICES, merge: [3, 1] }, SHOWN), true)).toEqual({});
     const response = agenticElsewhereResponseV1({ kind: "global" }, QUESTION, { thread: "other", threads: [1], merge: [2] });
     expect(response).toEqual({ schema_version: 8, kind: "echo-clean-person-answer-v8", scope: { kind: "global" }, outcome: "clarify", citations: [], parts: [], question: QUESTION, thread: { kind: "other", threads: [1] }, merge: [2] });
     expect(validatePersonAnswerResponseV8(response)).toEqual(response);
@@ -439,5 +440,97 @@ describe("the open thread's citations as one list, and what an answer says of th
     ];
     for (const other of changed) expect(other).not.toBe(key);
     expect(new Set(changed).size).toBe(changed.length);
+  });
+});
+
+describe("the open thread's label (ADR-0057)", () => {
+  /** The words a label may use here: the open thread's questions, oldest first, and the new question. */
+  const ASKED = [...PREVIOUS.earlier!.map(turn => turn.question), PREVIOUS.question, QUESTION];
+  const LABELLING = shownAs(true, 3, 3, ASKED);
+  const LABEL = "DVT gate: blocking, review, details";
+  const RESOLVED = { thread: "open", resolution: { resolution: "resolved", question: "What are the details on THERM-482?", about: [0] }, merge: [] } as const;
+
+  it.each([
+    ["beside same", { thread: "open", resolution: "same", label: LABEL }, { ...SAME, label: LABEL }],
+    ["beside resolved, with a merge", { ...OPEN_RESOLVED, merge: [2], label: LABEL }, { ...RESOLVED, merge: [1], label: LABEL }],
+    // A word of the new question alone is the person's too; case is ignored, spelling is not.
+    ["with a word only the new question has", { thread: "open", resolution: "same", label: "dvt GATE: Details" }, { ...SAME, label: "dvt GATE: Details" }],
+    // Read with the line cleaner every model line goes through.
+    ["over two lines", { thread: "open", resolution: "same", label: "DVT gate:\n review " }, { ...SAME, label: "DVT gate: review" }],
+  ] as const)("keeps a label in the person's words %s", async (_name, reply, placement) => {
+    const { value, corrections } = await observed(() => parseThreadPlacementV1(reply, LABELLING));
+    expect([value, corrections]).toEqual([placement, {}]);
+  });
+
+  it.each([
+    // R2: a word only an answer or a source gives, or only another thread's questions, is not the open thread's.
+    ["with a word only an answer gives", { thread: "open", resolution: "same", label: "THERM-482: details" }, SAME],
+    ["with a word only another thread's questions give", { ...OPEN_RESOLVED, label: "Kestrel quote: details" }, RESOLVED],
+    // As typed: "block" is not "blocking".
+    ["with a word not spelled as typed", { thread: "open", resolution: "same", label: "DVT gate: block" }, SAME],
+    ["longer than 80 characters", { thread: "open", resolution: "same", label: Array.from({ length: 12 }, () => "review").join(" ") }, SAME],
+    ["with no word", { thread: "open", resolution: "same", label: ": -" }, SAME],
+    ["that is not text", { thread: "open", resolution: "same", label: 42 }, SAME],
+    // Only beside same or resolved.
+    ["beside clarify", { thread: "open", resolution: "clarify", choices: CHOICES, label: LABEL }, { thread: "open", resolution: { resolution: "clarify", choices: CHOICES }, merge: [] }],
+    ["beside new", { thread: "new", label: LABEL }, { thread: "new" }],
+    ["beside other", { thread: "other", threads: [2], label: LABEL }, { thread: "other", threads: [1], merge: [] }],
+  ] as const)("drops and counts a label %s, and the placement stands", async (_name, reply, placement) => {
+    const { value, corrections } = await observed(() => parseThreadPlacementV1(reply, LABELLING));
+    expect([value, corrections]).toEqual([placement, { resolver_label_dropped: 1 }]);
+  });
+
+  it("leaves out, uncounted, a label that says nothing", async () => {
+    for (const label of [undefined, null, "", "  "]) {
+      const { value, corrections } = await observed(() => parseThreadPlacementV1({ thread: "open", resolution: "same", label }, LABELLING));
+      expect([value, corrections]).toEqual([SAME, {}]);
+    }
+  });
+
+  it("asks for the label in plain words, and shows the current labels of the open thread and the other threads", async () => {
+    for (const rule of [
+      "Its \"label\", when it has one, is the one line that says what the thread is about.",
+      "and, when it has one, its \"label\". Their answers are not shown.",
+      "also return \"label\": one line of at most 80 characters",
+      "Use only words the person wrote in the open thread's questions or in the new question, spelled as they wrote them; never a word from an answer or a source, and never a word of your own.",
+      "Keep the open thread's \"label\" exactly as it is unless the new question asks about something the label does not say.",
+      "Leave \"label\" out with \"clarify\", \"other\" and \"new\"",
+    ]) expect(THREAD_RESOLVER_PROMPT, rule).toContain(rule);
+    expect(THREAD_RESOLVER_PROMPT).not.toMatch(/—/u);
+    const shapes = THREAD_RESOLVER_PROMPT.split("\n").filter(line => line.startsWith("{")).map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(shapes.filter(shape => "label" in shape).map(shape => shape.resolution)).toEqual(["same", "resolved"]);
+    // The resolver sees each current label beside what it labels; a thread with none shows none.
+    const threads = [{ ...THREADS[0]!, label: "Kestrel quote: expire" }, THREADS[1]!, THREADS[2]!];
+    const run = resolver([{ thread: "open", resolution: "same", label: "DVT gate: blocking" }], { previous: { ...PREVIOUS, label: "DVT gate: blocking" }, threads });
+    expect(await run.run()).toEqual({ placement: { ...SAME, label: "DVT gate: blocking" }, fallback: false });
+    expect(run.gate.stats()).toMatchObject({ calls: 1, repairs: 0 });
+    const prompt = JSON.parse(run.inputs[0]!.user_prompt);
+    expect(prompt.open.label).toBe("DVT gate: blocking");
+    expect(prompt.threads.map((thread: Record<string, unknown>) => thread.label)).toEqual(["Kestrel quote: expire", undefined, undefined]);
+    expect(Object.keys(prompt.threads[1])).toEqual(["n", "questions", "last_asked_on"]);
+  });
+
+  it("never sends a reply back for its label: the call that places the question checks it against the thread's own questions", async () => {
+    const run = resolver([{ ...OPEN_RESOLVED, label: "Kestrel quote" }]);
+    const { value, corrections } = await observed(run.run);
+    expect([value, corrections]).toEqual([{ placement: RESOLVED, fallback: false }, { resolver_label_dropped: 1 }]);
+    expect(run.gate.stats()).toMatchObject({ calls: 1, repairs: 0 });
+    const kept = resolver([{ ...OPEN_RESOLVED, label: LABEL }]);
+    expect(await kept.run()).toEqual({ placement: { ...RESOLVED, label: LABEL }, fallback: false });
+  });
+
+  it("goes to the response only for an Ask that reads labels, and only from an open placement", () => {
+    const placed = { ...SAME, merge: [1], label: LABEL } as const;
+    expect(agenticThreadFieldsV1(placed, true)).toEqual({ merge: [1], label: LABEL });
+    expect(agenticThreadFieldsV1(placed, false)).toEqual({ merge: [1] });
+    expect(agenticThreadFieldsV1(SAME, true)).toEqual({});
+  });
+
+  it("is never made on the follow-up resolver's path: an Ask with neither other threads nor older turns", async () => {
+    const run = resolver([{ resolution: "same", label: "DVT gate" }], { previous: { ...SINGLE, label: "DVT gate" } });
+    const { value, corrections } = await observed(run.run);
+    expect([value, corrections]).toEqual([{ placement: SAME, fallback: false }, {}]);
+    expect(run.inputs[0]!.system_prompt).toBe(FOLLOW_UP_RESOLVER_PROMPT);
+    expect(JSON.parse(run.inputs[0]!.user_prompt).previous).not.toHaveProperty("label");
   });
 });
