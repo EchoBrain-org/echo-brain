@@ -13,6 +13,8 @@ import { validatePersonAnswerScopeV3, validatePersonSourceRevisionCitationV1, ty
 import { validatePersonItemRefV1, type PersonItemRefV1 } from './person-list-v1.js';
 import { validatePersonAnswerBlocksV2, type PersonAnswerBlockV2 } from './person-answer-layout-v2.js';
 import {
+  isPersonAnswerLabelV1,
+  personAnswerLabelFitsV1,
   type PersonAnswerChoiceV1,
   type PersonAnswerEarlierTurnV1,
   type PersonAnswerPreviousStatementV1,
@@ -83,6 +85,8 @@ export interface PersonAnswerRequestV3 {
   readonly previous?: PersonAnswerPreviousV1;
   /** The asker's other threads (ADR-0056), most recently asked first, possibly none: sent on every question to be placed. */
   readonly threads?: readonly PersonAnswerThreadV1[];
+  /** The client reads labels (ADR-0057): only then may the answer carry one, so an older client never meets a key it refuses. */
+  readonly labels?: true;
 }
 
 export interface PersonAnswerStatementV4 {
@@ -325,23 +329,34 @@ function boundedRequest<T>(result: T, label: string, maximumBytes = MAX_ORGANIZA
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...(Object.hasOwn(input, 'project_id') ? ['project_id'] : []), ...(Object.hasOwn(input, 'previous') ? ['previous'] : []), ...(Object.hasOwn(input, 'threads') ? ['threads'] : [])], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...['project_id', 'previous', 'threads', 'labels'].filter(key => Object.hasOwn(input, key))], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
+  if (Object.hasOwn(input, 'labels') && input.labels !== true) fail('Ask request labels must be true');
   const question = validatePersonQuestionText(input.question);
-  const request = { schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}), ...(Object.hasOwn(input, 'threads') ? { threads: validatePersonAnswerThreadsV1(input.threads) } : {}) };
-  // An Ask again asks one earlier question again where it was asked: nothing places it.
+  const request = { schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}), ...(Object.hasOwn(input, 'threads') ? { threads: validatePersonAnswerThreadsV1(input.threads) } : {}),
+    ...(input.labels === true ? { labels: true as const } : {}) };
+  // An Ask again asks one earlier question again where it was asked: nothing places it, and nothing labels it (ADR-0057).
   if (request.threads !== undefined && request.previous?.purpose === 'ask_again') fail('Ask again carries no threads');
+  if (request.labels !== undefined && request.previous?.purpose === 'ask_again') fail('Ask again reads no labels');
   return boundedRequest(request, 'Ask request', PERSON_ANSWER_REQUEST_MAX_BYTES_V3);
+}
+
+/** A label in form (ADR-0057), refused as this contract's own failure; whose words it may use is each caller's to check. */
+function answerLabel(value: unknown, label: string): string {
+  return isPersonAnswerLabelV1(value) ? value : fail(`${label} is invalid`);
 }
 
 /** The asker's other threads (ADR-0056), none counted (R7); empty is allowed, so an answer can still say the subject is new. */
 export function validatePersonAnswerThreadsV1(value: unknown): readonly PersonAnswerThreadV1[] {
   return Object.freeze(boundedList(value, 'Ask threads', Number.MAX_SAFE_INTEGER).map((raw): PersonAnswerThreadV1 => {
     const input = object(raw, 'Ask thread');
-    assertExactKeys(input, ['questions', 'asked_at'], 'Ask thread');
+    const labelled = Object.hasOwn(input, 'label');
+    assertExactKeys(input, ['questions', 'asked_at', ...(labelled ? ['label'] : [])], 'Ask thread');
     const questions = Object.freeze(boundedList(input.questions, 'Ask thread questions', Number.MAX_SAFE_INTEGER, 1).map(item => fullQuestion(item, 'Ask thread question')));
     assertTimestamp(input.asked_at, 'Ask thread asked_at');
-    return Object.freeze({ questions, asked_at: input.asked_at as string });
+    // Only the asker's own words describe a thread (R2): a label says nothing its questions do not.
+    if (labelled && !personAnswerLabelFitsV1(answerLabel(input.label, 'Ask thread label'), questions)) fail('Ask thread label uses a word its questions do not');
+    return Object.freeze({ questions, asked_at: input.asked_at as string, ...(labelled ? { label: input.label as string } : {}) });
   }));
 }
 
@@ -379,16 +394,21 @@ function citationIndexes(value: unknown, label: string, bound: number): readonly
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
   const older = Object.hasOwn(input, 'earlier');
-  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : [])], 'Ask previous');
+  const labelled = Object.hasOwn(input, 'label');
+  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : []), ...(labelled ? ['label'] : [])], 'Ask previous');
   const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   // Only a follow-up continues a thread (ADR-0056): an Ask again compares with the one earlier answer.
   if (older && purpose !== 'follow_up') fail('Ask again carries no earlier turns');
+  if (labelled && purpose !== 'follow_up') fail('Ask again carries no label');
   const earlier = older ? Object.freeze(boundedList(input.earlier, 'Ask previous earlier', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
     const turn = object(raw, 'Ask earlier turn');
     assertExactKeys(turn, ['question', 'asked_at', 'statements', 'citations'], 'Ask earlier turn');
     return Object.freeze(earlierTurn(turn, 'Ask earlier turn'));
   })) : undefined;
-  return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(earlier === undefined ? {} : { earlier }) });
+  // Its label (ADR-0057) is checked in form only: a turn's question here may be a model's rewrite, so only the client,
+  // which holds the typed words, can check the label's words.
+  return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(earlier === undefined ? {} : { earlier }),
+    ...(labelled ? { label: answerLabel(input.label, 'Ask previous label') } : {}) });
 }
 
 /** Shared by the previous turn and its thread's older turns (ADR-0056); `label` names which. */
@@ -474,7 +494,9 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   const drafted = Object.hasOwn(input, 'follow_ups');
   // Only an answer to a request that carried the asker's threads (ADR-0056) places the question or names a merge.
   const placed = ['thread', 'merge'].filter(key => Object.hasOwn(input, key));
-  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous, ...(drafted ? ['follow_ups'] : []), ...placed], 'Ask response');
+  // Only an answer to a request that asked for labels (ADR-0057) names the conversation it continues.
+  const labelled = Object.hasOwn(input, 'label');
+  assertExactKeys(input, ['schema_version', 'kind', 'scope', 'outcome', 'citations', 'parts', ...(Object.hasOwn(input, 'direct') ? ['direct'] : []), ...(Object.hasOwn(input, 'notice') ? ['notice'] : []), ...previous, ...(drafted ? ['follow_ups'] : []), ...placed, ...(labelled ? ['label'] : [])], 'Ask response');
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
@@ -494,9 +516,12 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
     ...(drafted ? { follow_ups: answerFollowUps(input.follow_ups) } : {}),
     ...(placed.includes('thread') ? { thread: answerThread(input.thread) } : {}),
     ...(placed.includes('merge') ? { merge: threadIndexes(input.merge, 'Ask response merge') } : {}),
+    ...(labelled ? { label: answerLabel(input.label, 'Ask response label') } : {}),
   };
   // A clarify outcome only asks which one: it drafts nothing.
   if (clarify && drafted) fail('Clarify outcome is inconsistent');
+  // A label names the conversation an ordinary answer continues: never beside a clarify, a placement elsewhere or an Ask again's "since".
+  if (labelled && (clarify || result.thread !== undefined || !previous.includes('question') || previous.includes('since'))) fail('Ask response label is inconsistent');
   // Other threads (ADR-0056) are exactly a clarify without choices; a new subject is an ordinary answer.
   const elsewhere = result.thread?.kind === 'other' ? result.thread.threads : undefined;
   if ((elsewhere !== undefined) !== (clarify && !previous.includes('choices')) || (result.thread?.kind === 'new' && clarify)) fail('Ask response thread is inconsistent');
@@ -523,15 +548,17 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
 }
 
 /**
- * T2 (ADR-0056): what an answer may say of the threads its Ask sent (`threads`: how many; undefined, not empty, for no
- * list). `unsent`: it names a thread not sent. `unplaced`: it omits its question or, with no `previous` to continue,
- * where the question belongs.
+ * T2 (ADR-0056, ADR-0057): what an answer may say of the threads its Ask sent (`threads`: how many; undefined, not empty,
+ * for no list). `unsent`: it names a thread not sent. `unplaced`: it omits its question or, with no `previous` to
+ * continue, where the question belongs. `unasked`: it carries a label its Ask did not ask for (`labels`), or had no
+ * `previous` conversation to label.
  */
-export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge'>, threads: number | undefined,
-  previous: boolean): 'unsent' | 'unplaced' | null {
+export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge' | 'label'>, threads: number | undefined,
+  previous: boolean, labels = false): 'unsent' | 'unplaced' | 'unasked' | null {
   const named = [...(answer.thread?.kind === 'other' ? answer.thread.threads : []), ...(answer.merge ?? [])];
   if (threads === undefined ? answer.thread !== undefined || answer.merge !== undefined : named.some(index => index >= threads)) return 'unsent';
   if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined))) return 'unplaced';
+  if (answer.label !== undefined && !(labels && previous)) return 'unasked';
   return null;
 }
 

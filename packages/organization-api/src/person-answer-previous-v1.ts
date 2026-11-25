@@ -52,16 +52,46 @@ export interface PersonAnswerPreviousV1 {
   readonly citations: readonly PersonAnswerCitationV8[];
   /** Only on a follow-up (ADR-0056): the older turns of the thread it continues, oldest first, under the previous turn's rules. */
   readonly earlier?: readonly PersonAnswerEarlierTurnV1[];
+  /** Only on a follow-up (ADR-0057): the label of the conversation it continues, in form (isPersonAnswerLabelV1). */
+  readonly label?: string;
 }
 
 /** One older turn of the thread a follow-up continues (ADR-0056). */
-export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier'>;
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label'>;
 
 /** One of the asker's other threads (ADR-0056): their typed questions, oldest first, only their own words (R2), never stored. */
 export interface PersonAnswerThreadV1 {
   readonly questions: readonly string[];
   /** ISO-8601 UTC with milliseconds. */
   readonly asked_at: string;
+  /** Its label (ADR-0057): every word of it is a word of `questions` (personAnswerLabelFitsV1). */
+  readonly label?: string;
+}
+
+/**
+ * A conversation's label (ADR-0057, R2): one line that says what it is about, in the asker's own words. Product choice:
+ * 80 characters keeps it to one line of a "Which one?" button.
+ */
+export const PERSON_ANSWER_LABEL_MAX_CHARS_V1 = 80;
+
+/** The words of a text, as the label rule compares them: each run of letters, marks or digits, in NFC and lower case. */
+export function personAnswerLabelWordsV1(text: string): string[] {
+  return (text.normalize('NFC').match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).map(word => word.toLowerCase());
+}
+
+/** Whether `value` is a label in form: one trimmed NFC line of 1 to 80 characters that holds at least one word. */
+export function isPersonAnswerLabelV1(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && value === value.normalize('NFC') && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(value)
+    && [...value].length <= PERSON_ANSWER_LABEL_MAX_CHARS_V1 && personAnswerLabelWordsV1(value).length > 0;
+}
+
+/**
+ * The label rule (R2): every word of `label` is a word of one of `questions`, as typed ("owns" does not allow "owner").
+ * The one place the rule lives: the API's validators, the kernel's resolver and the desktop all ask it.
+ */
+export function personAnswerLabelFitsV1(label: string, questions: readonly string[]): boolean {
+  const typed = new Set(questions.flatMap(personAnswerLabelWordsV1));
+  return personAnswerLabelWordsV1(label).every(word => typed.has(word));
 }
 
 /** Where a question belongs when not in the open thread (ADR-0056); several `other` indexes mean it could be any of them. */
