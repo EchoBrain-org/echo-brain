@@ -89,7 +89,7 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
 
 /**
  * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
- * turns (in place, or at the end; one the file has in a thread stays in it),
+ * turns (in place, or at the end, a `known` one only in place; one the file has in a thread stays in it),
  * `timeline.remove` takes back the one ECHO just placed (ADR-0057) and
  * `timeline.read` reads them. A test reads or seeds them, or deletes one as the host's own
  * sign-out does.
@@ -118,7 +118,7 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         const at = kept.findIndex(other => other.id === turn.id);
         const thread = kept[at]?.thread;
         const put = thread === undefined ? turn : { ...turn, thread };
-        timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
+        if (at >= 0 || params.known !== true) timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
         return ok({});
       }
       case 'timeline.remove': {

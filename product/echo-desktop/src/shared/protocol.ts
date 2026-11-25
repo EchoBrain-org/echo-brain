@@ -774,8 +774,11 @@ export interface HostMethods {
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
-  /** Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go. */
-  'timeline.put': { params: { expect: Expect; turn: TimelineTurn }; result: Record<string, never> };
+  /**
+   * Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go.
+   * `known`: a change to a turn already kept, so only in its place: one Undo took out meanwhile stays out (ADR-0057, R15).
+   */
+  'timeline.put': { params: { expect: Expect; turn: TimelineTurn; known?: true }; result: Record<string, never> };
   /**
    * Undo of a placement (ADR-0057, R15): takes one turn out of the file in a compare-and-set write, only while it is the
    * newest turn of an active thread and no kept turn names it. `removed`: the file does not hold it now.

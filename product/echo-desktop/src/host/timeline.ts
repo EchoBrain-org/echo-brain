@@ -1,7 +1,8 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
-// keeps one turn (a new one at the end, an old one in its place); a remove
-// takes back the one turn ECHO just placed (ADR-0057). Every other turn stays,
+// keeps one turn (a new one at the end, an old one in its place; a change to a
+// kept turn only in its place); a remove takes back the one turn ECHO just
+// placed (ADR-0057). Every other turn stays,
 // however old and however many, until the file would pass what this computer
 // can read back as one file; only then do the oldest go. Each write puts a
 // private temporary file in place of the old one, so a reader never meets half
@@ -97,10 +98,13 @@ function storedTurns(personDirectory: string, account: Expect, strict = false): 
 
 /**
  * The account's turns the page can show, oldest first. One it cannot is
- * skipped, never the others; a missing or unreadable file is empty.
+ * skipped, never the others; a missing or unreadable file is empty. A label
+ * not in form is left out and its turn shows: a label that fails is dropped
+ * wherever it is found (R2), never the answer it came with.
  */
 export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
-  return storedTurns(personDirectory, account).map(timelineTurn).filter((turn): turn is TimelineTurn => turn !== null);
+  return storedTurns(personDirectory, account).map(({ label, ...turn }) => timelineTurn(isPersonAnswerLabelV1(label) ? { ...turn, label } : turn))
+    .filter((turn): turn is TimelineTurn => turn !== null);
 }
 
 /**
@@ -118,14 +122,17 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
 
 /**
  * Keeps `turn` in the account's file: in place of the turn with its id, or at
- * the end. A kept turn stays in the thread the file has it in, whatever the
- * page sends: no write moves a turn between threads (ADR-0057, R12).
+ * the end. `known`: a change to a turn already kept, so only in its place: one
+ * the file no longer holds was taken back (removeTimeline), and a change still
+ * on its way then never brings it back. A kept turn stays in the thread the
+ * file has it in, whatever the page sends: no write moves a turn between
+ * threads (ADR-0057, R12).
  */
-export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn): void {
+export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, known = false): void {
   rewriteTimeline(personDirectory, account, (turns) => {
     const put = turn as unknown as StoredTurn;
     const at = turns.findIndex(kept => kept.id === turn.id);
-    if (at < 0) return [...turns, put];
+    if (at < 0) return known ? null : [...turns, put];
     const { thread } = turns[at]!;
     turns[at] = typeof thread === 'string' && ID.test(thread) ? { ...put, thread } : put;
     return turns;

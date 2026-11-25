@@ -57,13 +57,16 @@ describe('an answer\'s first statement is its own short message (ADR-0057)', () 
     // With all a check left hidden there is nothing to lead with.
     expect(answerLead(one([{ kind: 'answer', statements: [0, 1] }]), citations => citations.length === 0)).toBeNull();
   });
-  it('has no separate lead for an answer that opens with a table, points or a titled block, or that has several parts', () => {
+  it('has no separate lead for an answer that opens with a table, points or a titled block, or that has several parts and no direct answer', () => {
     const table: ArrangedBlock = { kind: 'table', statements: [0], columns: ['Item'], rows: [{ cells: ['A'], citation_indexes: [0] }] } as ArrangedBlock;
     for (const first of [table, { kind: 'points', ordered: false, statements: [0] }, { kind: 'text', title: 'Dates', statements: [0] }] as ArrangedBlock[]) {
       expect(answerLead(one([first, { kind: 'text', statements: [1] }]), () => true)).toBeNull();
     }
     const two = one(paragraphs([0, 1]));
-    expect(answerLead({ ...two, parts: [two.parts[0]!, { ...two.parts[0]!, question: 'Who?' }] }, () => true)).toBeNull();
+    const parts = [two.parts[0]!, { ...two.parts[0]!, question: 'Who?' }];
+    expect(answerLead({ ...two, parts }, () => true)).toBeNull();
+    // A direct answer is what the answer opens with, however many parts follow it.
+    expect(answerLead({ ...two, parts, direct: said('Yes.') }, () => true)).toMatchObject({ id: 'direct', more: true });
   });
 });
 

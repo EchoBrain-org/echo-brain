@@ -388,10 +388,10 @@ export interface Thread {
   readonly turns: readonly TimelineTurn[];
   /** Where it lives: its first turn's scope, or its oldest's once that is gone; every turn is asked there (R9). */
   readonly home: AskScope;
-  /** The question typed for its first turn, or the first typed in it (R2); with none, its first turn's heading, never sent. */
+  /** The question typed for its first turn, or the first typed in it (R2); undefined when nothing in it kept the person's words. */
+  readonly own?: string;
+  /** What the door lists it by: `own`, or with none its first turn's heading as that turn shows it, never sent and shown nowhere else. */
   readonly name: string;
-  /** Its typed questions, oldest first, each once: all an Ask ever sends of it (R2). */
-  readonly questions: readonly string[];
   /** When it was last asked in. */
   readonly asked_at: string;
 }
@@ -409,10 +409,8 @@ export function threadsOf(turns: readonly TimelineTurn[]): Thread[] {
     // The turn it is named after is its first; once that is gone, its oldest kept stands in.
     const first = own.find(turn => turn.id === id) ?? own[0]!;
     const worded = [first, ...own].find(turn => ownWords(turn)?.trim());
-    const home = first.scope;
-    // Only what was typed in its home is ever sent of it.
-    const questions = visibleTurns(homeTurns({ home, turns: own }, home)).flatMap(turn => sentWords(turn) ?? []);
-    return { id, turns: own, home, name: (worded ? ownWords(worded)! : first.text).trim(), questions, asked_at: own.at(-1)!.asked_at };
+    const typed = worded && ownWords(worded)!.trim();
+    return { id, turns: own, home: first.scope, ...(typed === undefined ? {} : { own: typed }), name: typed ?? first.text.trim(), asked_at: own.at(-1)!.asked_at };
   });
 }
 
@@ -454,10 +452,15 @@ export interface Chain {
   readonly home: AskScope;
   /** Its typed questions, oldest first, each asked question once: all an Ask ever sends of it (R2). */
   readonly questions: readonly string[];
-  /** What the page calls it: its label, or else its newest thread's name. */
-  readonly label: string;
   /** Its label, when it has one that may be sent (R2). */
   readonly sent?: string;
+  /**
+   * What the page may call it anywhere (R2): its label, or else the own words that name the thread of it last asked in
+   * that has any; undefined when nothing in it kept the person's words.
+   */
+  readonly own?: string;
+  /** What the door lists it by: `own`, or with none its newest thread's first heading, shown nowhere else. */
+  readonly label: string;
   /** When it was last asked in. */
   readonly asked_at: string;
 }
@@ -472,14 +475,15 @@ export function labelOf(turns: readonly Pick<TimelineTurn, 'label'>[], questions
 
 /**
  * The timeline's conversations, in the order their first threads were started: threads joined by `continues`, followed
- * both ways. A turn that names a thread no longer kept, its own, or one living elsewhere (R9) joins nothing.
+ * both ways. A turn that names a thread no longer kept, its own, or one living elsewhere (R9) joins nothing, and neither
+ * does a turn an older file keeps in a thread from another place: only what was asked in a thread's home speaks for it.
  */
 export function chainsOf(turns: readonly TimelineTurn[], threads: readonly Thread[] = threadsOf(turns)): Chain[] {
   const byId = new Map(threads.map(thread => [thread.id, thread]));
   // Each thread's group: joining two moves the later-started group's threads into the earlier's.
   const group = new Map(threads.map(thread => [thread.id, [thread]]));
   for (const thread of threads) {
-    for (const id of thread.turns.flatMap(turn => turn.continues ?? [])) {
+    for (const id of homeTurns(thread, thread.home).flatMap(turn => turn.continues ?? [])) {
       const other = byId.get(id);
       if (other === undefined || !sameScope(other.home, thread.home)) continue;
       const [mine, theirs] = [group.get(thread.id)!, group.get(other.id)!];
@@ -495,10 +499,15 @@ export function chainsOf(turns: readonly TimelineTurn[], threads: readonly Threa
     const newest = newestFirst(own)[0]!;
     const all = own.flatMap(thread => thread.turns).sort((left, right) => place.get(left.id)! - place.get(right.id)!);
     const home = newest.home;
-    // Only what was typed in its home is ever sent of it.
-    const questions = visibleTurns(all.filter(turn => sameScope(turn.scope, home))).flatMap(turn => sentWords(turn) ?? []);
-    const sent = labelOf(all, questions);
-    return { id: newest.id, threads: own, newest, turns: all, home, questions, label: sent ?? newest.name, ...(sent === undefined ? {} : { sent }), asked_at: newest.asked_at };
+    // Only what was asked in its home is ever sent of it, or labels it.
+    const here = all.filter(turn => sameScope(turn.scope, home));
+    const questions = visibleTurns(here).flatMap(turn => sentWords(turn) ?? []);
+    const sent = labelOf(here, questions);
+    const named = sent ?? newestFirst(own).find(thread => thread.own !== undefined)?.own;
+    return {
+      id: newest.id, threads: own, newest, turns: all, home, questions, ...(sent === undefined ? {} : { sent }), ...(named === undefined ? {} : { own: named }),
+      label: named ?? newest.name, asked_at: newest.asked_at,
+    };
   });
 }
 

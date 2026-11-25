@@ -352,11 +352,12 @@ test('a week of quiet ends a thread: a question in it starts a new chat that con
   await door.getByTestId('door-row').click();
   await expect(page.getByTestId('question')).toHaveText([pilot]);
   await expect(page.getByTestId('continues-note')).toHaveCount(0);
-  // A question in it: a joined thread never changes (R12), so a new chat starts, with one line at its top (R13).
+  // A question in it: a joined thread never changes (R12), so a new chat starts, with one line at its top (R13). The
+  // person asked it there themselves, so the line offers no Undo (R15).
   await ask(page, 'who decided that?');
   await expect(page.getByTestId('question')).toHaveText(['who decided that?']);
   const note = page.getByTestId('continues-note');
-  await expect(note).toHaveText(/^Continues\s*When does the pilot start\?\s*from \w{3} \d{1,2}(, \d{4})?\s*·\s*Undo$/u);
+  await expect(note).toHaveText(/^Continues\s*When does the pilot start\?\s*from \w{3} \d{1,2}(, \d{4})?$/u);
   await picture(page, 'ask-continues');
   // It was asked as a follow-up of the old turn, and its own turn names the old thread; the old turn is as it was.
   expect(asks().at(-1)).toMatchObject({ question: 'who decided that?', previous: { purpose: 'follow_up', question: pilot }, threads: [], labels: true });
@@ -366,12 +367,14 @@ test('a week of quiet ends a thread: a question in it starts a new chat that con
   await openDoor(page);
   await expect(door.getByTestId('door-row').locator('.name')).toHaveText(['When does the pilot start, who decided that']);
   await page.keyboard.press('Escape');
-  // The line's label opens the older part. A question typed there goes on in the newest thread (R14): the chat swaps back.
+  // The line's label opens the older part. A question typed there goes on in the newest thread (R14): once answered the
+  // chat shows that thread, with no line about it, as the person asked it in this conversation themselves.
   await note.getByTestId('continues-open').click();
   await expect(page.getByTestId('question')).toHaveText([pilot]);
   await ask(page, 'and when does it end?');
   await expect(page.getByTestId('question')).toHaveText(['who decided that?', 'and when does it end?']);
-  await expect(page.getByTestId('moved-note')).toBeVisible();
+  await expect(page.getByTestId('moved-note')).toHaveCount(0);
+  await expect(page.getByTestId('placed-undo')).toHaveCount(0);
   // It carried the whole conversation, oldest first, under its label.
   expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: 'who decided that?', earlier: [{ question: pilot }],
     label: 'When does the pilot start, who decided that' } });
@@ -619,32 +622,36 @@ test('the door stays shut while a question is on its way, and opens after with n
   await expect(door.getByTestId('door-row')).toHaveCount(2);
 });
 
-test('Capture opened by its shortcut over the door keeps its own Escape and the keyboard', async () => {
+test('Capture opened by its shortcut over the door closes it and keeps its own Escape and the keyboard: a Return then never picks a conversation behind it', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'Who owns billing?');
-  await openDoor(page);
-  // An Escape from the find field as Capture comes up over Ask, as if pressed before Capture takes the keyboard. Whether
-  // Capture has already taken it depends on the platform (Linux moves it before this observer runs, macOS after), so the
-  // Escape is sent from the find field while the field is still there, and from wherever the keyboard is otherwise.
-  const landed = page.evaluate(() => new Promise<string | null>((resolve) => {
+  await ask(page, 'unrelated, what is for lunch?');
+  // Find holds the other conversation, so a Return in it would jump there.
+  const door = await openDoor(page);
+  await door.getByTestId('door-find').fill('billing');
+  await expect(door.getByTestId('door-row').locator('.name')).toHaveText(['Who owns billing?']);
+  // A Return, then an Escape, as Capture comes up over Ask, as if pressed before Capture takes the keyboard: sent from the
+  // find field if it is still there, and from wherever the keyboard is otherwise (the platforms differ in which).
+  const pressed = page.evaluate(() => new Promise<void>((resolve) => {
     const observer = new MutationObserver(() => {
       if (!document.querySelector('[data-testid="compose"]')) return;
       observer.disconnect();
-      const target = (document.querySelector('[data-testid="door-find"]') ?? document.activeElement) as HTMLElement | null;
-      target?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      resolve(target?.getAttribute('data-testid') ?? null);
+      const target = document.querySelector('[data-testid="door-find"]') ?? document.activeElement ?? document.body;
+      for (const key of ['Enter', 'Escape']) target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      resolve();
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }));
   // What ⌘⇧E has main send the page.
   await run.app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]!.webContents.send('event', { name: 'capture.open', payload: {} }); });
-  expect(['door-find', 'compose-body']).toContain(await landed);
-  // The door did not take it: it was Capture's, which closed, leaving Ask as it was.
+  await pressed;
+  // Neither key was the door's: it closed as Capture came up. The Escape was Capture's, which closed, leaving Ask as it was.
   await expect(page.getByTestId('compose')).toHaveCount(0);
+  await expect(page.getByTestId('door')).toHaveCount(0);
   await expect(page.getByTestId('ask-view')).toBeVisible();
-  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?']);
+  await expect(page.getByTestId('question')).toHaveText(['unrelated, what is for lunch?']);
 });
 
 test('an answer that does not say where a question asked with the conversations belongs is refused, and nothing of it is kept', async () => {

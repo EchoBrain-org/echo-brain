@@ -632,11 +632,11 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       });
     }
     case 'timeline.put': {
-      const { expect, turn: given } = params as Params<'timeline.put'>;
+      const { expect, turn: given, known } = params as Params<'timeline.put'>;
       const turn = timelineTurn(given);
-      if (turn === null) return code('invalid_request');
+      if (turn === null || (known !== undefined && known !== true)) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
-      return onDevice(expect, directory => { putTimeline(directory, expect, turn); return {}; });
+      return onDevice(expect, directory => { putTimeline(directory, expect, turn, known === true); return {}; });
     }
     case 'timeline.remove': {
       const { expect, turn } = params as Params<'timeline.remove'>;

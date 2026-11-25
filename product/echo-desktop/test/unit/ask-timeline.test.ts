@@ -1132,7 +1132,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       };
       const store = await startStore();
       let failNow = failing();
-      store.askAgain(earlier.id);
+      store.askEverywhere(other.id);
       await flush();
       await failNow();
       expect(sent(0).question).toBe(resolved);
@@ -1140,18 +1140,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       checks = someGone;
       store.retryAsk();
       await flush();
-      expect(sent(1)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
-      // Ask everywhere, the same.
+      expect(sent(1).question).toBe(typed);
+      // Ask again, the same. It comes second: its answer lands in the turn's thread, whose turns are then checked as when
+      // a thread is opened (C5), and a turn with a source found unreadable offers no Ask everywhere.
       checks = allSame;
       failNow = failing();
-      store.askEverywhere(other.id);
+      store.askAgain(earlier.id);
       await flush();
       await failNow();
       expect(sent(2).question).toBe(resolved);
       checks = someGone;
       store.retryAsk();
       await flush();
-      expect(sent(3).question).toBe(typed);
+      expect(sent(3)).toMatchObject({ question: typed, previous: { purpose: 'ask_again', question: typed } });
     });
 
     it('needs the turn, every turn back along what it followed, and every turn each of those recorded carrying to have sources, all readable; with no typed words, nothing goes', async () => {

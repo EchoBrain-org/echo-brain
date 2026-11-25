@@ -157,6 +157,31 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
   });
 
+  it('makes a change to a kept turn only in its place: one Undo took out meanwhile is not brought back, and nothing is written (R15)', () => {
+    const [first, placed] = [turn(2), turn(1)];
+    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, { ...placed, thread: first.id });
+    const marked = { ...placed, thread: first.id, unreadable: [0] };
+    putTimeline(person, ARI, marked, true);
+    expect(readTimeline(person, ARI)[1]).toEqual(marked);
+    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
+    vi.mocked(renameSync).mockClear();
+    putTimeline(person, ARI, marked, true);
+    expect(renameSync).not.toHaveBeenCalled();
+    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
+    // The first save of a turn still keeps it at the end.
+    putTimeline(person, ARI, marked);
+    expect(readTimeline(person, ARI)[1]).toEqual(marked);
+  });
+
+  it('leaves out a saved label that is not in form and shows its turn: a label that fails is dropped, never the answer it came with (R2)', () => {
+    mkdirSync(folder(), { mode: 0o700 });
+    const [first, second, third] = [turn(3), turn(2), turn(1)];
+    writeFileSync(timelinePath(person, ARI), JSON.stringify({ schema_version: 1, kind: 'echo-desktop-ask-timeline-v1',
+      turns: [{ ...first, label: 'pilot\nstart' }, { ...second, label: 7 }, { ...third, label: 'pilot: start' }] }), { mode: 0o600 });
+    expect(readTimeline(person, ARI)).toEqual([first, second, { ...third, label: 'pilot: start' }]);
+  });
+
   it('keeps, on a put, the thread the file has a turn in: no write moves a turn between threads (R12); one saved before threads takes the thread the put names', () => {
     const [named, older] = [turn(2), turn(1)];
     putTimeline(person, ARI, { ...named, thread: named.id });
