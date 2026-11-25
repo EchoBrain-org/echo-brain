@@ -382,14 +382,15 @@ async function readAskProgressStream(response: Response, signal: AbortSignal, on
 type AskScope = ProjectIdV1 | undefined;
 
 /**
- * The Ask's V3 request, with any previous turn and threads: the Authority alone applies the question rule and says which
- * rule a question breaks.
+ * The Ask's V3 request, with any previous turn and threads, and whether it reads labels (ADR-0057): the Authority alone
+ * applies the question rule and says which rule a question breaks.
  */
-function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]) {
+function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[], labels?: boolean) {
   return { schema_version: 3, question: personQuestionToSend(question),
     ...(scope === undefined ? {} : { project_id: scope }),
     ...(previous === undefined ? {} : { previous }),
-    ...(threads === undefined ? {} : { threads }) };
+    ...(threads === undefined ? {} : { threads }),
+    ...(labels === true ? { labels: true } : {}) };
 }
 
 /** Every Ask sends the client's clock and time zone. */
@@ -401,8 +402,8 @@ function askHeaders(): Readonly<Record<string, string>> {
  * An answer echoes the requested scope; since and choices come only to an Ask that sent its previous turn, its question
  * also to one that sent threads (ADR-0047), and the rest of T2 is personAnswerThreadsProblemV1's.
  */
-function inAskScope<T extends { readonly scope: unknown; readonly question?: string; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[] }>(
-  response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[]): T {
+function inAskScope<T extends { readonly scope: unknown; readonly question?: string; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[]; readonly label?: string }>(
+  response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[], labels = false): T {
   const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
@@ -410,9 +411,10 @@ function inAskScope<T extends { readonly scope: unknown; readonly question?: str
   if (previous === undefined && [...(threads === undefined ? ['question'] : []), 'since', 'choices'].some(key => Object.hasOwn(response, key))) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority answered a previous turn the Ask did not send');
   }
-  const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined);
+  const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined, labels);
   if (placement === 'unsent') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority named a thread the Ask did not send');
   if (placement === 'unplaced') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority did not place a question the Ask sent threads for');
+  if (placement === 'unasked') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority labelled a conversation the Ask did not ask it to');
   return response;
 }
 
@@ -855,8 +857,9 @@ export class PersonAuthorityClient {
    * The Ask's one transport (`/v7`, the V8 answer, research tool contract v1), streamed in Ask progress V3 (ADR-0039):
    * global by default, and a supplied project ID is a strict project-only scope. The answer may cite live tickets and
    * pages, follow-ups, and the asker's projects, people, tools and tool containers, and must echo the requested scope.
-   * The request may carry the asker's previous turn (ADR-0047) and other threads (ADR-0056). Each step event reaches
-   * `onProgress` as it arrives, and the answer comes back with the receipt the Authority built after its final check.
+   * The request may carry the asker's previous turn (ADR-0047) and other threads (ADR-0056), and say it reads labels
+   * (ADR-0057). Each step event reaches `onProgress` as it arrives, and the answer comes back with the receipt the
+   * Authority built after its final check.
    * Every Ask streams: a JSON reply is an error from before the stream started, and an error inside the stream is the
    * error its JSON response would have had. There is no whole-Ask deadline: the Ask waits as long as the Authority keeps
    * sending (its heartbeat included), fails as `stalled` after ASK_SILENCE_MS with nothing, and stops on the caller's
@@ -864,12 +867,12 @@ export class PersonAuthorityClient {
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void,
-    threads?: readonly PersonAnswerThreadV1[]): Promise<PersonLiveAnswerV3> {
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonLiveAnswerV3> {
     const watch = silenceWatch(ASK_SILENCE_MS, signal);
     let terminal: PersonAskProgressTerminalEventV3;
     try {
       // Sent as built, within the Ask's own body bound: the Authority validates the request once (askRequest).
-      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous, threads), validate_request: request => request,
+      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous, threads, labels), validate_request: request => request,
         maximum_request_bytes: PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
         access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, watch.signal);
       watch.alive();
@@ -888,7 +891,7 @@ export class PersonAuthorityClient {
     if (terminal.type === 'error') {
       throw new PersonAuthorityClientError(terminal.error.code, terminal.status, refusalMessage(terminal.error.code));
     }
-    return Object.freeze({ result: inAskScope(terminal.response, scope, previous, threads), receipt: terminal.receipt });
+    return Object.freeze({ result: inAskScope(terminal.response, scope, previous, threads, labels === true), receipt: terminal.receipt });
   }
 
   /** Staging-only research evaluation: starts one research run (research loop evaluation v1). */

@@ -53,6 +53,7 @@ export interface PersonClientCliDependencies {
 
 const OPTIONS = {
   progress: { type: "boolean" },
+  labels: { type: "boolean" },
   "document-id": { type: "string" },
   audience: { type: "string" },
   "expected-membership-id": { type: "string" },
@@ -135,7 +136,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "progress", "previous", "threads"],
+    accepts: ["question", "project", "progress", "previous", "threads", "labels"],
     requires: ["question"],
   },
   list: { accepts: ["project", "only-me", "cursor"] },
@@ -229,7 +230,7 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>] [--labels]
 
 Ask one question in plain language, of any length that fits the Ask's 64 KiB request; line breaks and tabs are fine, other control characters are not. It is sent as NFC text without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
@@ -237,9 +238,11 @@ Ask asks POST /v7/person/ask, with every configured request-local live source, i
 
 --progress prints what Ask is doing while it works, one {"ok":true,"progress":...} line per step: the stage, the kinds of source searched with how many items they found, and the items read once you may open them, follow-ups, projects, people, tools and tool containers included. Between steps, each heartbeat from the Authority prints one {"ok":true,"alive":true} line, so a caller can tell a long Ask from a stalled one. The last line is the usual {"ok":true,"result":...} with the answer's receipt. Ask has no time limit: it waits as long as the Authority keeps sending, and fails with code "stalled" after 40 seconds with nothing from it. Paired --expected-membership-id and --expected-authority bind it to its captured account: signed in as another, it asks nothing and prints no step.
 
---previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with that answer's sentences and citations as it carried them, within the Ask's request body. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request. A follow-up may also carry the older turns of its thread, oldest first, as "earlier": each a turn like the previous one, without a purpose.
+--previous carries your previous turn as JSON: {"purpose":"follow_up" or "ask_again","question":...,"asked_at":...,"statements":[{"text":...,"citation_indexes":[...]}],"citations":[...]}, with that answer's sentences and citations as it carried them, within the Ask's request body. It is your own context, never evidence, and is not stored. A follow-up answers the full question it worked out, naming it as "question", or, when more than one thing could fit, has the outcome "clarify" and one full question per thing in "choices". Ask again also says what is different "since" the earlier answer. One that is not valid is refused with invalid_request. A follow-up may also carry the older turns of its thread, oldest first, as "earlier": each a turn like the previous one, without a purpose, and the label of its conversation as "label": one line of at most 80 characters.
 
---threads carries your other threads as JSON, most recently asked first: [{"questions":[the questions you typed in it, oldest first],"asked_at":...}], or [] when you have none. Your own words only, never stored, and never beside an Ask again. The answer then says where the question belongs when not in the previous turn's thread: "thread" is {"kind":"new"}, or {"kind":"other","threads":[indexes into what you sent]} with the outcome "clarify" and no answer; "merge" lists the indexes of threads on the same subject. A list that is not valid is refused with invalid_request.
+--threads carries your other threads as JSON, most recently asked first: [{"questions":[the questions you typed in it, oldest first],"asked_at":...}], or [] when you have none. Each may carry its "label", every word of which is a word of its questions. Your own words only, never stored, and never beside an Ask again. The answer then says where the question belongs when not in the previous turn's thread: "thread" is {"kind":"new"}, or {"kind":"other","threads":[indexes into what you sent]} with the outcome "clarify" and no answer; "merge" lists the indexes of threads on the same subject. A list that is not valid is refused with invalid_request.
+
+--labels asks for the label of the conversation a follow-up continues: one line in your own words, returned as "label" on an ordinary answer to an Ask that carried --previous. Never beside an Ask again.
 `,
   list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
@@ -687,7 +690,7 @@ async function readBoundedLine(input: NodeJS.ReadableStream, output: NodeJS.Writ
   }
 }
 
-/** A `--previous` (ADR-0047) or `--threads` (ADR-0056) this client refuses before anything is sent. */
+/** A `--previous` (ADR-0047), `--threads` (ADR-0056) or `--labels` (ADR-0057) this client refuses before anything is sent. */
 class AskPreviousError extends Error {}
 
 /**
@@ -717,6 +720,16 @@ function askThreadsOf(values: Record<Option, string | boolean | undefined>, prev
     return validatePersonAnswerThreadsV1(threads);
   } catch (error) {
     throw new AskPreviousError(`Ask threads is invalid: ${(error as Error).message}`);
+  }
+}
+
+/** `--labels` (ADR-0057): beside an Ask again it is refused by the request's own rule. */
+function askLabelsOf(previous: PersonAnswerPreviousV1 | undefined): true {
+  try {
+    if (previous?.purpose === "ask_again") validatePersonAnswerRequestV3({ schema_version: 3, question: previous.question, previous, labels: true });
+    return true;
+  } catch (error) {
+    throw new AskPreviousError(`Ask labels is invalid: ${(error as Error).message}`);
   }
 }
 
@@ -981,6 +994,7 @@ export async function runPersonClientCli(
     let askCheckRequest: PersonAskCheckRequestV1 | undefined;
     let askPrevious: PersonAnswerPreviousV1 | undefined;
     let askThreads: readonly PersonAnswerThreadV1[] | undefined;
+    let askLabels: true | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   let pin: AccountPin | undefined;
   try {
@@ -1077,9 +1091,10 @@ export async function runPersonClientCli(
       throw new Error("--expected-membership-id and --expected-authority require --progress with `echo-brain person ask`");
     }
     pin = accountPin(values);
-    // The previous turn (ADR-0047) and the other threads (ADR-0056) are validated before any network or session use.
+    // The previous turn (ADR-0047), the other threads (ADR-0056) and labels (ADR-0057) are validated before any network or session use.
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     if (action === "ask" && values.threads !== undefined) askThreads = askThreadsOf(values, askPrevious);
+    if (action === "ask" && values.labels === true) askLabels = askLabelsOf(askPrevious);
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -1285,11 +1300,11 @@ export async function runPersonClientCli(
           // Each heartbeat prints an alive line, so a caller waits on liveness, not on a clock.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
             progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious,
-            () => print(stdout, { ok: true, alive: true }), askThreads);
+            () => print(stdout, { ok: true, alive: true }), askThreads, askLabels);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, receipt: answer.receipt }));
           break;
         }
-        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious, askThreads) });
+        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious, askThreads, askLabels) });
         break;
       }
       case "list":

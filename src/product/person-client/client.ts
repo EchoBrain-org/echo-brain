@@ -483,12 +483,13 @@ export class PersonClient {
    * request-advertised live evidence sources, ECHO's shared follow-ups
    * (ADR-0040), and the asker's projects, people, tools and tool containers
    * (research tool contract v1). It may carry the asker's previous turn
-   * (ADR-0047) and other threads (ADR-0056). It is the one streamed Ask
-   * (askWithLiveProgress) with its steps unread.
+   * (ADR-0047) and other threads (ADR-0056), and say it reads labels
+   * (ADR-0057). It is the one streamed Ask (askWithLiveProgress) with its
+   * steps unread.
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, previous?: PersonAnswerPreviousV1,
-    threads?: readonly PersonAnswerThreadV1[]): Promise<PersonAnswerV8> {
-    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, undefined, threads)).result;
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonAnswerV8> {
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, undefined, threads, labels)).result;
   }
 
   /**
@@ -506,7 +507,7 @@ export class PersonClient {
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void,
-    threads?: readonly PersonAnswerThreadV1[]): Promise<PersonLiveAnswerV3> {
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -520,7 +521,7 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat, threads);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat, threads, labels);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_SESSION_HEADROOM_MS);
