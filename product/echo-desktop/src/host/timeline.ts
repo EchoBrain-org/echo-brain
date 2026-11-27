@@ -22,7 +22,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ITEM_ID, THREAD_ACTIVE_MS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect, type TimelineAnswer, type TimelineTurn,
+  ITEM_ID, THREAD_ACTIVE_MS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect, type TimelineAnswer, type TimelineEntry, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -102,9 +102,9 @@ function storedTurns(personDirectory: string, account: Expect, strict = false): 
  * not in form is left out and its turn shows: a label that fails is dropped
  * wherever it is found (R2), never the answer it came with.
  */
-export function readTimeline(personDirectory: string, account: Expect): TimelineTurn[] {
-  return storedTurns(personDirectory, account).map(({ label, ...turn }) => timelineTurn(isPersonAnswerLabelV1(label) ? { ...turn, label } : turn))
-    .filter((turn): turn is TimelineTurn => turn !== null);
+export function readTimeline(personDirectory: string, account: Expect): TimelineEntry[] {
+  return storedTurns(personDirectory, account).map(({ label, ...turn }) => timelineEntry(isPersonAnswerLabelV1(label) ? { ...turn, label } : turn))
+    .filter((turn): turn is TimelineEntry => turn !== null);
 }
 
 /**
@@ -129,12 +129,13 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
  * file has it in, whatever the page sends: no write moves a turn between
  * threads (ADR-0057, R12).
  */
-export function putTimeline(personDirectory: string, account: Expect, turn: TimelineTurn, known = false): void {
+export function putTimeline(personDirectory: string, account: Expect, turn: TimelineEntry, known = false): void {
   // A change is read strictly: with a file that cannot be read it fails, and is never taken as made.
   rewriteTimeline(personDirectory, account, (turns) => {
     const put = turn as unknown as StoredTurn;
     const at = turns.findIndex(kept => kept.id === turn.id);
     if (at < 0) return known ? null : [...turns, put];
+    if ('answer' in turns[at]! && !('answer' in turn)) return null;
     const { thread } = turns[at]!;
     turns[at] = typeof thread === 'string' && ID.test(thread) ? { ...put, thread } : put;
     return turns;
@@ -363,7 +364,22 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
-/** A turn as a put writes it, or null for anything else. */
+/** A pending submission has no answer or thread assignment. Other unknown shapes stay hidden. */
+export function timelineEntry(value: unknown): TimelineEntry | null {
+  if (!record(value) || (value.clarification !== undefined && !string(value.clarification))) return null;
+  if ('answer' in value) return timelineTurn(value);
+  if ('thread' in value || 'question' in value || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !value.text.trim()
+      || !scope(value.scope) || !(value.follows === null || (string(value.follows) && ID.test(value.follows)))
+      || (value.action !== undefined && (value.follows === null || (value.action !== 'again' && value.action !== 'everywhere')))
+      || ![value.needs_clarification, value.fixed, value.candidate].every(flag => flag === undefined || flag === true)) return null;
+  return { id: value.id, asked_at: value.asked_at, text: value.text, scope: value.scope as AskScope, follows: value.follows,
+    ...(value.clarification === undefined ? {} : { clarification: value.clarification }),
+    ...(value.action === 'again' || value.action === 'everywhere' ? { action: value.action } : {}),
+    ...(value.fixed === true ? { fixed: true } : {}), ...(value.candidate === true ? { candidate: true } : {}),
+    ...(value.needs_clarification === true ? { needs_clarification: true } : {}) };
+}
+
+/** A completed turn as a put writes it. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !string(value.question)
       || !scope(value.scope) || !answer(value.answer)) return null;

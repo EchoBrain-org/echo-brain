@@ -42,6 +42,8 @@ export interface PersonAnswerPreviousStatementV1 {
 
 export interface PersonAnswerPreviousV1 {
   readonly purpose: PersonAnswerPreviousPurposeV1;
+  /** An implicit older match. A bare reference needs confirmation before research. */
+  readonly candidate?: true;
   /** The earlier turn's full question, within the question bound. */
   readonly question: string;
   /** When the earlier turn was asked: ISO-8601 UTC with milliseconds. */
@@ -57,7 +59,7 @@ export interface PersonAnswerPreviousV1 {
 }
 
 /** One older turn of the thread a follow-up continues (ADR-0056). */
-export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label'>;
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label' | 'candidate'>;
 
 /** One of the asker's other threads (ADR-0056): their typed questions, oldest first, only their own words (R2), never stored. */
 export interface PersonAnswerThreadV1 {

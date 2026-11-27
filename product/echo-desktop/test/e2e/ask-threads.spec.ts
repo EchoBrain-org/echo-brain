@@ -4,7 +4,7 @@
 // moves nothing, a thread a week of quiet ended, "Which one do you mean?", and what of the conversations a request carries.
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -103,8 +103,8 @@ test('Ask shows one conversation and nothing that names a thread; its title open
   await askInApollo(page, 'Which tests fail?');
   // Each carried the conversations it could be placed in, a list that goes even when empty, and reads labels. A project
   // Ask carries only that project's (R3): Apollo had none, so its list is empty though Home has two. Home's carried Home's.
-  expect(asks().map(body => body.threads)).toEqual([[], [{ questions: ['Who owns billing?'], asked_at: expect.any(String) }], []]);
-  expect(asks().map(body => 'previous' in body)).toEqual([false, false, false]);
+  expect(asks().map(body => body.threads)).toEqual([[], [], []]);
+  expect(asks().map(body => 'previous' in body)).toEqual([false, true, false]);
   expect(asks().map(body => body.labels)).toEqual([true, true, true]);
   expect(asks()[2]).toMatchObject({ question: 'Which tests fail?', project_id: APOLLO });
 
@@ -204,13 +204,13 @@ test('Ask shows one conversation and nothing that names a thread; its title open
   await expect(page.getByTestId('scope-chip')).toHaveCount(0);
   await openDoor(page);
   await rows.filter({ hasText: 'Who owns billing?' }).click();
-  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?']);
+  await expect(page.locator('.msg.you')).toHaveText(['Who owns billing?', 'When does the pilot start?']);
   await back(page);
   await expect(page.getByTestId('home')).toBeVisible();
   await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
 });
 
-test('"New question", behind the door, shows an empty chat, and the next question is asked with nothing carried and starts a conversation of its own', async () => {
+test('"New question", behind the door, keeps the transcript, and the next question is asked with nothing carried and starts a conversation of its own', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -220,7 +220,7 @@ test('"New question", behind the door, shows an empty chat, and the next questio
   await expect(door).toHaveCount(0);
   // An empty chat: no message, no line, and the caret in the bar.
   await expect(page.getByTestId('ask-view')).toBeVisible();
-  await expect(page.locator('.msg')).toHaveCount(0);
+  await expect(page.locator('.msg.you')).toHaveText(['When does the pilot start?']);
   await expect(page.getByTestId('ask-field')).toBeFocused();
   // About the pilot, which ECHO would have placed there: asked fresh, nothing rides on it and nothing places it.
   await ask(page, 'is the pilot on track?');
@@ -232,70 +232,18 @@ test('"New question", behind the door, shows an empty chat, and the next questio
   expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: 'is the pilot on track?' } });
 });
 
-test('ECHO moves a question to the conversation it belongs to and says so in one line; Undo takes its turn out of this computer\'s file and asks the words as a new question, and one this computer cannot write removes nothing and can be tried again', async () => {
+
+test('a named callback goes to the older subject without swapping the visible chat', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'Who owns billing?');
-  // A follow-up: its answer names the full question the resolver wrote, and the conversation's label.
-  await ask(page, 'and since when?');
-  await back(page);
-  await askAtHome(page, 'When does the pilot start?');
-  // Typed in the pilot's conversation, a question about billing: Ask moves to billing's without asking, and asks it there.
-  await page.getByTestId('ask-field').fill('who approves billing invoices?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('who approves billing invoices?');
-  await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('clarify')).toHaveCount(0);
-  // The chat swapped in place: billing's own turns, and one faint line just above the moved question, with Undo.
-  await expect(page.getByTestId('timeline-question')).toHaveText(['Who owns billing?']);
-  await expect(page.getByTestId('question')).toHaveText(['and since when?', 'who approves billing invoices?']);
-  const note = page.getByTestId('moved-note');
-  await expect(note).toHaveText(/^Continuing Who owns billing, and since when, who approves billing invoices\s*·\s*Undo$/u);
-  await picture(page, 'ask-moved');
-  const sent = asks();
-  expect(sent.map(body => body.question)).toEqual(['Who owns billing?', 'and since when?', 'When does the pilot start?', 'who approves billing invoices?', 'who approves billing invoices?']);
-  // The first time it carried the shown conversation's turn and the other conversation, by the person's own words and its label.
-  expect(sent[3]).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' },
-    threads: [{ questions: ['Who owns billing?', 'and since when?'], label: 'Who owns billing, and since when' }] });
-  // Asked again where it belongs: a plain follow-up of that conversation, with its older turn and its label, and no list
-  // that could move it again.
-  expect(sent[4]).toMatchObject({ previous: { purpose: 'follow_up', question: 'and since when?', earlier: [{ question: 'Who owns billing?' }], label: 'Who owns billing, and since when' } });
-  expect(sent[4]).not.toHaveProperty('threads');
-  // The resolver's question was kept for the page, and never sent back as the person's (R2).
-  expect(file().map(turn => turn.question).some(question => question?.startsWith(RESOLVED))).toBe(true);
-  expect(JSON.stringify(sent.map(body => [body.threads ?? [], (body.previous as { earlier?: unknown } | undefined)?.earlier ?? []]))).not.toContain(RESOLVED);
-  const moved = { 'Who owns billing?': 'Who owns billing?', 'and since when?': 'Who owns billing?', 'When does the pilot start?': 'When does the pilot start?',
-    'who approves billing invoices?': 'Who owns billing?' };
-  await expect.poll(filed).toEqual(moved);
-
-  // The timeline's folder becomes a link, which the host never writes through: Undo removes nothing, here or in the file,
-  // says so as a warning, and is still offered.
-  const folder = join(run.home, TIMELINE_FOLDER);
-  renameSync(folder, `${folder}.kept`);
-  symlinkSync(`${folder}.kept`, folder);
-  try {
-    await page.getByTestId('placed-undo').click();
-    await expect(page.getByTestId('toast')).toHaveText('That question could not be taken back, so its answer is where it was.');
-    await expect(page.getByTestId('question')).toHaveText(['and since when?', 'who approves billing invoices?']);
-    await expect(page.getByTestId('placed-undo')).toBeEnabled();
-  } finally {
-    rmSync(folder);
-    renameSync(`${folder}.kept`, folder);
-  }
-  expect(filed()).toEqual(moved);
-  expect(asks()).toHaveLength(5);
-  // Now it goes through: the turn leaves the file, and the same words are asked as a new question with nothing carried.
-  await page.getByTestId('placed-undo').click();
-  await expect(page.getByTestId('question')).toHaveText(['who approves billing invoices?']);
-  await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('moved-note')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveCount(0);
-  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'who approves billing invoices?', labels: true });
-  await expect.poll(filed).toEqual({ ...moved, 'who approves billing invoices?': 'who approves billing invoices?' });
-  expect(file().filter(turn => turn.text === 'who approves billing invoices?')).toHaveLength(1);
-  // A new subject has no Undo.
-  await expect(page.getByTestId('placed-undo')).toHaveCount(0);
+  await ask(page, 'When does the pilot start?');
+  await ask(page, 'Who approves billing invoices?');
+  expect(asks().at(-1)).toMatchObject({ question: 'Who approves billing invoices?', previous: { question: 'Who owns billing?', candidate: true } });
+  await expect(page.locator('.msg.you')).toHaveText(['Who owns billing?', 'When does the pilot start?', 'Who approves billing invoices?']);
+  for (const note of ['clarify', 'moved-note', 'continues-note', 'placed-undo']) await expect(page.getByTestId(note)).toHaveCount(0);
+  await expect.poll(() => file().map(row => row.text)).toEqual(['Who owns billing?', 'When does the pilot start?', 'Who approves billing invoices?']);
 });
 
 test('a conversation an answer names as the same thing is linked to the one the question lands in: the turn names it, no turn moves, and they are one conversation from then on', async () => {
@@ -320,8 +268,7 @@ test('a conversation an answer names as the same thing is linked to the one the 
   expect(file().find(turn => turn.text === question)!.continues).toEqual([ledger.id]);
   expect(file().filter(turn => turn.text !== question).every(turn => turn.continues === undefined)).toBe(true);
   // The page shows billing's own turns: the link put nothing of the ledger's on it, and said nothing of itself.
-  await expect(page.getByTestId('question')).toHaveText(['Who owns billing?', question]);
-  await expect(page.getByTestId('timeline-row')).toHaveCount(0);
+  await expect(page.locator('.msg.you')).toHaveText(['Who owns billing?', 'Is the ledger closed?', 'When does the pilot start?', question]);
   await expect(page.getByTestId('continues-note')).toHaveCount(0);
   await expect(page.getByTestId('toast')).toHaveCount(0);
   // One conversation now: the door lists it once, beside the pilot's.
@@ -332,10 +279,10 @@ test('a conversation an answer names as the same thing is linked to the one the 
   await back(page);
   await askAtHome(page, 'an unrelated one: what is for lunch?');
   expect((asks().at(-1)!.threads as { questions: string[] }[]).map(thread => thread.questions)).toEqual([
-    ['Who owns billing?', 'Is the ledger closed?', question], ['When does the pilot start?']]);
+    ['When does the pilot start?']]);
 });
 
-test('a week of quiet ends a thread: a question in it starts a new chat that continues it, the line at its top opens the older part, and a question typed there goes on in the newest', async () => {
+test('an older implicit subject asks for clarification and a typed reply after restart completes the original question', async () => {
   // A conversation last asked in eight days ago, as this computer's file kept it.
   const old = '11111111-1111-4111-8111-111111111111';
   const asked = new Date(Date.now() - 8 * 24 * 60 * 60_000).toISOString();
@@ -345,43 +292,30 @@ test('a week of quiet ends a thread: a question in it starts a new chat that con
     answer: { scope: { kind: 'global' }, sources: [], outcome: 'not_found', parts: [{ question: pilot, status: 'not_found', statements: [] }] },
   }] }) });
   const { page } = run;
+
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Picked behind the door, the person is in it. It looks as any conversation does: nothing says it has ended.
-  await page.getByTestId('sidebar-ask').click();
-  const door = await openDoor(page);
-  await door.getByTestId('door-row').click();
-  await expect(page.getByTestId('question')).toHaveText([pilot]);
-  await expect(page.getByTestId('continues-note')).toHaveCount(0);
-  // A question in it: a joined thread never changes (R12), so a new chat starts, with one line at its top (R13). The
-  // person asked it there themselves, so the line offers no Undo (R15).
-  await ask(page, 'who decided that?');
-  await expect(page.getByTestId('question')).toHaveText(['who decided that?']);
-  const note = page.getByTestId('continues-note');
-  await expect(note).toHaveText(/^Continues\s*When does the pilot start\?\s*from \w{3} \d{1,2}(, \d{4})?$/u);
-  await picture(page, 'ask-continues');
-  // It was asked as a follow-up of the old turn, and its own turn names the old thread; the old turn is as it was.
-  expect(asks().at(-1)).toMatchObject({ question: 'who decided that?', previous: { purpose: 'follow_up', question: pilot }, threads: [], labels: true });
-  await expect.poll(() => file().map(turn => [turn.text, turn.thread === old, turn.continues])).toEqual([[pilot, true, undefined], ['who decided that?', false, [old]]]);
-  expect(file()[0]).toMatchObject({ id: old, asked_at: asked, text: pilot });
-  // One conversation behind the door, under the label that came back.
-  await openDoor(page);
-  await expect(door.getByTestId('door-row').locator('.name')).toHaveText(['When does the pilot start, who decided that']);
-  await page.keyboard.press('Escape');
-  // The line's label opens the older part. A question typed there goes on in the newest thread (R14): once answered the
-  // chat shows that thread, with no line about it, as the person asked it in this conversation themselves.
-  await note.getByTestId('continues-open').click();
-  await expect(page.getByTestId('question')).toHaveText([pilot]);
-  await ask(page, 'and when does it end?');
-  await expect(page.getByTestId('question')).toHaveText(['who decided that?', 'and when does it end?']);
-  await expect(page.getByTestId('moved-note')).toHaveCount(0);
-  await expect(page.getByTestId('placed-undo')).toHaveCount(0);
-  // It carried the whole conversation, oldest first, under its label.
-  expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: 'who decided that?', earlier: [{ question: pilot }],
-    label: 'When does the pilot start, who decided that' } });
-  await expect.poll(() => file().length).toBe(3);
-  const [, second, third] = file();
-  expect(third).toMatchObject({ text: 'and when does it end?', thread: second!.thread });
-  expect(third!.continues).toBeUndefined();
+  await page.getByTestId('ask-field').fill('Did it ship?');
+  await page.getByTestId('ask-field').press('Enter');
+  await expect(page.getByTestId('choice')).toHaveText(['The pilot']);
+  const pending = file().at(-1)!;
+  expect(pending).not.toHaveProperty('answer');
+  expect(asks().at(-1)).toMatchObject({ previous: { candidate: true, question: pilot } });
+  // Start a new Electron process with exactly the account file written by the first.
+  const disk = readFileSync(join(run.home, TIMELINE_FILE), 'utf8');
+  await run.close();
+  run = await launch('ask-threads', { [TIMELINE_FILE]: disk });
+  const resumed = run.page;
+  await expect(resumed.getByTestId('sidebar-project')).toHaveCount(2);
+  await resumed.getByTestId('sidebar-ask').click();
+  await expect(resumed.getByTestId('pending-turn')).toContainText('Which subject did you mean?');
+  expect(asks()).toHaveLength(0);
+  await resumed.getByTestId('ask-field').fill('The March pilot.');
+  await resumed.getByTestId('ask-field').press('Enter');
+  await expect(resumed.getByTestId('clarification-reply')).toHaveText('The March pilot.');
+  await expect(resumed.getByTestId('pending-turn')).toHaveCount(0);
+  expect(asks().at(-1)!.question).toBe('Did it ship?\nThe March pilot.');
+  await expect.poll(() => file().at(-1)).toMatchObject({ id: pending.id, text: 'Did it ship?', clarification: 'The March pilot.', answer: { outcome: 'answered' } });
+  expect(file()).toHaveLength(2);
 });
 
 test('a label is kept only when every word of it was typed in the conversation: one a model made up is dropped, and the conversation keeps the name it had', async () => {
@@ -409,8 +343,8 @@ test('a question a model wrote is sent again only while every turn its request c
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'What was drafted last week?');
-  await back(page);
-  await askAtHome(page, 'When does the pilot start?');
+  await (await openDoor(page)).getByTestId('door-new').click();
+  await ask(page, 'When does the pilot start?');
   // A follow-up in the pilot's conversation: its answer names the full question a resolver wrote.
   await ask(page, 'and who decided?');
   const rewrite = `${RESOLVED} and who decided? (after "When does the pilot start?")`;
@@ -441,162 +375,28 @@ test('a question a model wrote is sent again only while every turn its request c
   expect(filed()['What was drafted last week?']).toBe('What was drafted last week?');
 });
 
-test('a question that could belong to several conversations asks which one: one in a project names it, and picking it opens the project\'s page and asks there; "New question" starts a conversation', async () => {
+
+test('ambiguous callbacks use the same row and Home never sends project conversation history', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await askInApollo(page, 'Which tests fail?');
+  await back(page);
+  await askAtHome(page, 'Who owns billing?');
+  await ask(page, 'When does the pilot start?');
   await ask(page, 'Is the ledger closed?');
-  await back(page);
-  // Apollo's own ledger conversation: a project Ask carries none from outside, so nothing places it at Home.
-  await askInApollo(page, 'Where is the Apollo ledger kept?');
-  await back(page);
-  await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('ask-field').fill('what changed in the ledger?');
-  await page.getByTestId('ask-field').press('Enter');
-  // ECHO asks, as a reply, with a quick reply a conversation, the one that lives in a project naming it, and "New
-  // question" last. Nothing was guessed (R4).
-  const clarify = page.getByTestId('clarify');
-  await expect(clarify.locator('.msg.echo')).toHaveText('Which one do you mean?');
-  const choices = clarify.getByTestId('choice');
-  await expect(choices).toHaveText([/^Where is the Apollo ledger kept\?\s*Apollo$/u, 'Is the ledger closed?', 'New question']);
-  await expect(choices.nth(0).getByTestId('choice-project')).toHaveText('Apollo');
-  await expect(page.getByTestId('turn')).toHaveCount(0);
-  expect(asks()).toHaveLength(3);
-  expect(asks()[2]).toMatchObject({ question: 'what changed in the ledger?', threads: [{ questions: ['Where is the Apollo ledger kept?'] }, { questions: ['Is the ledger closed?'] }] });
-  expect(asks()[2]).not.toHaveProperty('previous');
-  await picture(page, 'ask-which-one');
-  // Never on its own in another home (R5): the pick moves to Apollo's page, its chip showing, and asks the words there.
-  // The person placed it, so no line offers an Undo.
-  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  await choices.nth(0).click();
-  await expect(page.getByTestId('scope-chip')).toContainText('Apollo');
-  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('what changed in the ledger?');
-  await expect(page.getByTestId('asking')).toHaveCount(0);
-  await expect(page.getByTestId('question')).toHaveText(['Where is the Apollo ledger kept?', 'what changed in the ledger?']);
-  await expect(page.getByTestId('placed-undo')).toHaveCount(0);
-  expect(asks()[3]).toMatchObject({ question: 'what changed in the ledger?', project_id: APOLLO, previous: { purpose: 'follow_up', question: 'Where is the Apollo ledger kept?' } });
-  expect(asks()[3]).not.toHaveProperty('threads');
-  await expect.poll(filed).toMatchObject({ 'what changed in the ledger?': 'Where is the Apollo ledger kept?' });
-  // Back on Apollo's page under Ask: the project it was asked in.
-  await back(page);
-  await expect(page.getByTestId('title')).toHaveText('Apollo');
-  // A question from Apollo's page carries Apollo's conversation and no other (R3): Home's ledger one stays out of it.
-  await ask(page, 'Which tests fail?');
-  expect(asks().at(-1)).toMatchObject({ question: 'Which tests fail?', project_id: APOLLO });
-  expect(asks().at(-1)!.threads).toEqual([{ questions: ['Where is the Apollo ledger kept?', 'what changed in the ledger?'], asked_at: expect.any(String) }]);
-  await expect(page.getByTestId('question')).toHaveText(['Which tests fail?']);
-  await back(page);
-
-  // "New question": the same words, where they were typed, with nothing carried; the answer starts a conversation.
-  await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('ask-field').fill('who audits the ledger?');
-  await page.getByTestId('ask-field').press('Enter');
-  await expect(clarify.getByTestId('choice')).toHaveCount(3);
-  await clarify.getByTestId('choice').last().click();
-  await expect(page.getByTestId('question')).toHaveText(['who audits the ledger?']);
-  await expect(clarify).toHaveCount(0);
-  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'who audits the ledger?', labels: true });
-  await expect.poll(filed).toMatchObject({ 'who audits the ledger?': 'who audits the ledger?', 'Is the ledger closed?': 'Is the ledger closed?' });
-});
-
-test('a conversation whose project the person can no longer ask in is never asked in from "Which one do you mean?": the pick says so, moves nothing, and "New question" stays', async () => {
-  run = await launch('ask-threads');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await askInApollo(page, 'Where is the Apollo ledger kept?');
-  await back(page);
-  // Apollo is archived: its conversation stays on this computer, and Apollo is no longer a project to ask in.
-  await page.getByTestId('project-settings').click();
-  await page.getByTestId('project-archive').click();
-  await page.getByTestId('project-settings-confirm').click();
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(1);
-  await page.getByTestId('sidebar-home').click();
-  await page.getByTestId('ask-field').fill('what changed in the ledger?');
+  await page.getByTestId('ask-field').fill('The billing or pilot release?');
   await page.getByTestId('ask-field').press('Enter');
   const choices = page.getByTestId('clarify').getByTestId('choice');
-  await expect(choices).toHaveText([/^Where is the Apollo ledger kept\?/u, 'New question']);
-  const sent = asks().length;
-  await choices.nth(0).click();
-  // Nothing is asked outside the conversation's home (R9), and the person is not moved to a page they did not choose.
-  await expect(page.getByTestId('toast')).toHaveText('This is no longer available to you.');
-  await expect(choices).toHaveText(['New question']);
-  await expect(page.getByTestId('question')).toHaveText(['what changed in the ledger?']);
-  await expect(page.getByTestId('scope-chip')).toHaveCount(0);
-  expect(asks()).toHaveLength(sent);
-  await choices.click();
-  await expect(page.getByTestId('turn').getByTestId('question')).toHaveText(['what changed in the ledger?']);
-  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'what changed in the ledger?', labels: true });
-  await expect.poll(filed).toEqual({ 'Where is the Apollo ledger kept?': 'Where is the Apollo ledger kept?', 'what changed in the ledger?': 'what changed in the ledger?' });
-});
-
-test('back in Ask from the sidebar a question is placed among every conversation, the one shown included; asked in one it continues it, and one placed where it already shows has no line', async () => {
-  run = await launch('ask-threads');
-  const { page } = run;
-  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  await ask(page, 'Who owns billing?');
-  await back(page);
-  await askAtHome(page, 'When does the pilot start?');
-  await back(page);
-  // The sidebar's Ask shows the conversation asked in last. Showing it is not being in it.
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('question')).toHaveText(['When does the pilot start?']);
-  await page.getByTestId('ask-field').fill('what changed for billing and the pilot?');
-  await page.getByTestId('ask-field').press('Enter');
-  // It could be either, so the page asks: the question alone, the conversation that was showing among the quick replies.
-  const clarify = page.getByTestId('clarify');
-  await expect(clarify.getByTestId('choice')).toHaveText(['When does the pilot start?', 'Who owns billing?', 'New question']);
-  await expect(page.getByTestId('question')).toHaveText(['what changed for billing and the pilot?']);
-  await expect(page.getByTestId('turn')).toHaveCount(0);
-  await picture(page, 'ask-which-one-shown');
-  // It carried no earlier turn, and every conversation it could be placed in, the one shown included.
-  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'what changed for billing and the pilot?', labels: true, threads: [
-    { questions: ['When does the pilot start?'], asked_at: expect.any(String) }, { questions: ['Who owns billing?'], asked_at: expect.any(String) }] });
-  // Picked, the person is in the pilot's conversation: the words are asked there, with nothing that could place them again.
-  await clarify.getByTestId('choice').nth(0).click();
-  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('what changed for billing and the pilot?');
-  await expect(page.getByTestId('asking')).toHaveCount(0);
-  expect(asks().at(-1)).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' } });
-  expect(asks().at(-1)).not.toHaveProperty('threads');
-  // A question typed now, in the conversation, continues it: the turn before it, and only the other conversation.
-  await ask(page, 'did that change?');
-  expect(asks().at(-1)).toMatchObject({ question: 'did that change?', previous: { purpose: 'follow_up' } });
-  expect(asks().at(-1)!.threads).toEqual([{ questions: ['Who owns billing?'], asked_at: expect.any(String) }]);
-  await expect.poll(filed).toMatchObject({ 'did that change?': 'When does the pilot start?', 'what changed for billing and the pilot?': 'When does the pilot start?' });
-
-  // Back again, a question about the one conversation that is showing: asked with no earlier turn, it is placed there
-  // without asking, and asked in it. Nothing moved, so no line says so and nothing offers an Undo.
-  await back(page);
-  await page.getByTestId('sidebar-ask').click();
-  await expect(page.getByTestId('question')).toHaveText(['did that change?']);
-  const before = asks().length;
-  await ask(page, 'is the pilot still on?');
+  await expect(choices).toHaveCount(3);
+  const row = file().at(-1)!;
+  const sent = asks().at(-1)!;
+  expect(JSON.stringify(sent)).not.toContain('Which tests fail?');
+  await choices.filter({ hasText: 'Who owns billing?' }).click();
   await expect(page.getByTestId('clarify')).toHaveCount(0);
-  await expect(page.getByTestId('moved-note')).toHaveCount(0);
-  await expect(page.getByTestId('placed-undo')).toHaveCount(0);
-  const [placed, again] = asks().slice(before);
-  expect(placed).not.toHaveProperty('previous');
-  expect((placed!.threads as { questions: string[] }[]).map(thread => thread.questions[0])).toEqual(['When does the pilot start?', 'Who owns billing?']);
-  expect(again).toMatchObject({ question: 'is the pilot still on?', previous: { purpose: 'follow_up' } });
-  expect(again).not.toHaveProperty('threads');
-  expect(asks()).toHaveLength(before + 2);
-  await expect.poll(filed).toMatchObject({ 'is the pilot still on?': 'When does the pilot start?' });
-
-  // Back once more, and the conversation that is showing is picked behind the door, by Return on it as the one found:
-  // the person is in it, so the next question continues it, in one request.
-  await back(page);
-  await page.getByTestId('sidebar-ask').click();
-  const door = await openDoor(page);
-  await door.getByTestId('door-find').fill('PILOT');
-  await expect(door.getByTestId('door-row')).toHaveCount(1);
-  await expect(door.getByTestId('door-row')).toHaveAttribute('aria-current', 'true');
-  await page.keyboard.press('Enter');
-  await expect(door).toHaveCount(0);
-  await expect(page.getByTestId('ask-field')).toBeFocused();
-  const picked = asks().length;
-  await ask(page, 'and who runs it?');
-  expect(asks()).toHaveLength(picked + 1);
-  expect(asks().at(-1)).toMatchObject({ question: 'and who runs it?', previous: { purpose: 'follow_up', question: 'is the pilot still on?' } });
-  await expect.poll(filed).toMatchObject({ 'and who runs it?': 'When does the pilot start?' });
+  await expect.poll(() => file().at(-1)).toMatchObject({ id: row.id, answer: { outcome: 'answered' } });
+  await expect(page.locator('.msg.you')).toHaveText(['Who owns billing?', 'When does the pilot start?', 'Is the ledger closed?', 'The billing or pilot release?']);
+  expect(asks().at(-1)).toMatchObject({ previous: { question: 'Who owns billing?' } });
 });
 
 test('the door stays shut while a question is on its way, and opens after with nothing left to find', async () => {
@@ -619,7 +419,7 @@ test('the door stays shut while a question is on its way, and opens after with n
   await expect(page.getByTestId('asking')).toHaveCount(0);
   const door = await openDoor(page);
   await expect(door.getByTestId('door-find')).toHaveValue('');
-  await expect(door.getByTestId('door-row')).toHaveCount(2);
+  await expect(door.getByTestId('door-row')).toHaveCount(1);
 });
 
 test('Capture opened by its shortcut over the door closes it and keeps its own Escape and the keyboard: a Return then never picks a conversation behind it', async () => {
@@ -656,10 +456,10 @@ test('Capture opened by its shortcut over the door closes it and keeps its own E
   await expect(page.getByTestId('compose')).toHaveCount(0);
   await expect(page.getByTestId('door')).toHaveCount(0);
   await expect(page.getByTestId('ask-view')).toBeVisible();
-  await expect(page.getByTestId('question')).toHaveText(['unrelated, what is for lunch?']);
+  await expect(page.locator('.msg.you').last()).toHaveText('unrelated, what is for lunch?');
 });
 
-test('an answer that does not say where a question asked with the conversations belongs is refused, and nothing of it is kept', async () => {
+test('an answer that does not say where a question asked with the conversations belongs is refused and its submission remains available', async () => {
   // This Authority names the question and leaves out its place: with no previous turn there is no thread that could mean (T2).
   run = await launch('ask-threads-unplaced');
   const { page } = run;
@@ -669,7 +469,8 @@ test('an answer that does not say where a question asked with the conversations 
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO sent back something this app could not read. Try again, or update the app.');
   await expect(page.getByTestId('turn')).toHaveCount(0);
   expect(asks()).toEqual([{ schema_version: 3, question: 'When does the pilot start?', threads: [], labels: true }]);
-  expect(file()).toEqual([]);
+  expect(file()).toMatchObject([{ text: 'When does the pilot start?' }]);
+  expect(file()[0]).not.toHaveProperty('answer');
 });
 
 test('from a person\'s only conversation a new subject starts a second one: the question carries an empty list', async () => {
@@ -687,7 +488,7 @@ test('from a person\'s only conversation a new subject starts a second one: the 
   // new. A new subject has no line and no Undo.
   await ask(page, 'an unrelated one: what is for lunch?');
   expect(asks()[2]).toMatchObject({ question: 'an unrelated one: what is for lunch?', previous: { purpose: 'follow_up' }, threads: [] });
-  await expect(page.getByTestId('question')).toHaveText(['an unrelated one: what is for lunch?']);
+  await expect(page.locator('.msg.you').last()).toHaveText('an unrelated one: what is for lunch?');
   await expect(page.getByTestId('placed-undo')).toHaveCount(0);
   await expect(page.locator('.note:not(.stamp)')).toHaveCount(0);
   await expect.poll(filed).toEqual({ 'When does the pilot start?': 'When does the pilot start?', 'who decided that?': 'When does the pilot start?',
@@ -695,4 +496,46 @@ test('from a person\'s only conversation a new subject starts a second one: the 
   // Two conversations behind the door now, the first under the label its follow-up brought.
   const door = await openDoor(page);
   await expect(door.getByTestId('door-row').locator('.name')).toHaveText(['an unrelated one: what is for lunch?', 'When does the pilot start, who decided that']);
+});
+
+test('selecting an earlier message anchors the next question in that same chat', async () => {
+  run = await launch('ask-threads');
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(page, 'March pilot?');
+  await ask(page, 'June billing release?');
+  await page.getByRole('button', { name: 'Follow up on: March pilot?' }).click();
+  await ask(page, 'Did it ship?');
+  const sent = asks().at(-1)!;
+  expect(sent.previous).toMatchObject({ question: 'March pilot?' });
+  expect(sent.previous).not.toHaveProperty('candidate');
+  expect(sent).not.toHaveProperty('threads');
+  await expect(page.locator('.msg.you')).toHaveText(['March pilot?', 'June billing release?', 'Did it ship?']);
+});
+
+test('quitting during research keeps the submission and resuming it fills the original row', async () => {
+  run = await launch('ask-progress');
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await run.page.getByTestId('ask-field').fill('What changed?');
+  await run.page.getByTestId('ask-field').press('Enter');
+  await expect(run.page.getByTestId('asking')).toBeVisible();
+  // The UI can acknowledge a click while the host is saving. The research request must follow the durable write.
+  await expect.poll(() => asks().length).toBe(1);
+  const first = file()[0]!;
+  expect(first).not.toHaveProperty('answer');
+  const disk = readFileSync(join(run.home, TIMELINE_FILE), 'utf8');
+  await run.close();
+  run = await launch('ask-progress', { [TIMELINE_FILE]: disk, 'release-ask': '' });
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await run.page.getByTestId('sidebar-ask').click();
+  await expect(run.page.getByTestId('pending-turn')).toContainText('This question was interrupted.');
+  expect(asks()).toHaveLength(0);
+  await run.page.getByTestId('resume-turn').click();
+  await expect(run.page.getByTestId('turn')).toHaveCount(1);
+  await expect.poll(() => file()[0]).toMatchObject({ id: first.id, text: first.text, answer: { outcome: 'answered' } });
+  await ask(run.page, 'What changed?');
+  await expect.poll(() => file()[1]).toMatchObject({ text: 'What changed?', answer: { outcome: 'answered' } });
+  expect(file()).toHaveLength(2);
+  expect(file()[1]!.id).not.toBe(first.id);
+  await expect(run.page.locator('.msg.you')).toHaveText(['What changed?', 'What changed?']);
 });

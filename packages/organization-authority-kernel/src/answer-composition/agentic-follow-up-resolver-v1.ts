@@ -139,7 +139,7 @@ export const FOLLOW_UP_RESOLVER_PROMPT = [
   "- \"clarify\": two or more things in the earlier question or answer could fit. Give \"choices\": one for each thing that could fit, each a short \"label\" naming the thing and a \"question\": the new question asked about that thing alone, as one full question that stands on its own.",
   "",
   "Rules:",
-  "- Resolve only when exactly one thing fits. When two or more could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
+  "- If the possible meanings lead to the same research and answer, use the question as asked. Otherwise resolve only when exactly one thing fits. When two or more could fit, return \"clarify\" with one choice for each. Never guess, and never pick the one that seems likelier.",
   "- A thing fits when it is of the kind the question names and the question's words can mean it: \"that ticket\" fits only tickets, \"that meeting\" only meetings, \"that person\" only people; \"it\" or \"that\" can fit anything the earlier answer names.",
   "- Each question you write is one line, in the person's words and language, that a person could ask without having seen the earlier answer.",
   "- Never answer the question, and never add facts or names the earlier question and answer do not give.",
@@ -193,7 +193,9 @@ export const THREAD_RESOLVER_PROMPT = [
   "Rules:",
   "- Say one thing. \"resolution\", \"question\", \"about\" and \"choices\" belong only to an \"open\" reply, and \"threads\" only to an \"other\" reply. A reply that names one place and adds what belongs to another has not said where the question belongs.",
   "- Never guess a thread. When the question could belong to more than one of the other threads, name every one of them in \"threads\", and never pick the one that seems likelier: the person is then asked which one.",
-  "- The open thread comes first. When the question continues it or refers to something in it, the thread is \"open\", even when another thread is about the same thing.",
+  "- When open.candidate is true, the person did not select this earlier context. A callback naming its subject can continue silently. If only a bare reference such as 'did it ship?' ties the question to an older subject, return open with clarify, even if there is just one plausible choice. Give that one choice so the person can confirm or type another subject.",
+  "- Ask for clarification only when choosing a subject would change the research or the answer. If the person's wording could equally mean the open subject or a different listed subject, return open with clarify and a standalone choice for each. Name the specific subject in each choice’s full question so that selecting it identifies the right thread. If they mean both, research their question as asked.",
+  "- For an ordinary follow-up in a recent or explicitly selected context, the open thread comes first. When the question continues it or refers to something in it, the thread is \"open\", even when another thread is about the same thing.",
   "- A question belongs to a thread only when it is about the same thing as that thread: the same named project, ticket, part, quote, decision, meeting or event. Sharing a team, a program, a vendor or a kind of problem does not make it belong.",
   "- \"new\" is only for a subject none of the threads is about. A question that names a thing no thread is about is \"new\", however much it resembles their questions.",
   "- A question that refers to something (\"it\", \"that\", \"the other one\") which neither the open thread nor any other thread gives stays in the open thread as \"same\"; with no open thread it is \"new\". Never make up what it refers to.",
@@ -453,6 +455,7 @@ function threadResolverInput(input: Pick<AgenticThreadResolverInputV1, "previous
   return {
     today: input.today,
     ...(previous === undefined || open === undefined ? {} : { open: {
+      ...(previous.candidate ? { candidate: true } : {}),
       turns: [...(previous.earlier ?? []), previous].map((turn, at) => ({
         question: turn.question,
         asked_on: agenticPreviousAskedOnV1(turn, input.time_zone),
@@ -499,7 +502,7 @@ export async function resolveAgenticFollowUpV1(input: AgenticFollowUpResolverInp
  */
 export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1): Promise<AgenticThreadResolvedV1> {
   const { previous, threads } = input;
-  if (previous !== undefined && previous.earlier === undefined && threads === undefined) {
+  if (previous !== undefined && !previous.candidate && previous.earlier === undefined && threads === undefined) {
     const followed = await resolveAgenticFollowUpV1({ ...input, previous });
     return followed.fallback ? fallbackPlacement(previous) : Object.freeze({ placement: inOpenThread(followed.resolution), fallback: false });
   }

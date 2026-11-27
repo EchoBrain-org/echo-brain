@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Answer, AnswerSource, ArrangedBlock } from '../../src/shared/protocol.js';
 import {
-  answerLead, answerMarkdown, answerSentences, answerText, cardWord, documentName, drawnBlocks, externalSourceProvider, passageBlocks, sourceGroups, statementGroups, tableDay,
+  answerLead, answerMarkdown, answerSentences, answerText, cardWord, documentName, drawnBlocks, externalSourceProvider, passageBlocks, shownTitles, sourceGroups, statementGroups,
+  tableDay,
 } from '../../src/renderer/answer.js';
 import { blocksAnswer, paragraphs } from '../fixtures/authority.js';
 import { answerView } from '../../src/host/views.js';
@@ -341,6 +342,30 @@ describe('an arranged answer (answer layout v2, ADR-0051)', () => {
       '### Open risk', '', 'Sensor self-heating is still unexplained, so the soak report keeps it on the PVT watch list. [2]', '',
       ...BLOCK_SOURCES,
     ].join('\n'));
+  });
+
+  it('gives a block its own title, but the paragraph right after the answer, which reads on from it, and a card, which names itself', () => {
+    const blocks = drawnBlocks(arranged().parts[0]!.blocks!);
+    // The fixture: the answer, a table, a titled timeline, a card, titled steps, titled text, a quote.
+    expect(shownTitles(blocks, blocks.map(() => true))).toEqual([undefined, undefined, 'Soak test', undefined, 'Before PVT', 'Open risk', undefined]);
+    // Titled text right after the answer has no title; text further down keeps its own.
+    const reply: ArrangedBlock[] = [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Source', statements: [1] }, { kind: 'text', title: 'Details', statements: [2] }];
+    expect(shownTitles(reply, [true, true, true])).toEqual([undefined, undefined, 'Details']);
+    // Any other block right after the answer keeps its title, and so does text with no answer above it.
+    expect(shownTitles([reply[0]!, { kind: 'points', title: 'Blockers', ordered: false, statements: [1, 2] }], [true, true])).toEqual([undefined, 'Blockers']);
+    expect(shownTitles(reply.slice(1), [true, true])).toEqual(['Source', 'Details']);
+    // Only what the page shows counts: text after a block left out is right after the answer, and an answer left out is no answer.
+    expect(shownTitles([reply[0]!, { kind: 'points', title: 'Blockers', ordered: false, statements: [1] }, { kind: 'text', title: 'Details', statements: [2] }], [true, false, true])[2]).toBeUndefined();
+    expect(shownTitles(reply, [false, true, true])).toEqual([undefined, 'Source', 'Details']);
+  });
+
+  it('writes no heading over the paragraph right after the answer, as the page shows none', () => {
+    const said = (text: string) => ({ text, citation_indexes: [0], private: false });
+    const answer: Answer = { scope: { kind: 'global' }, sources: [page('1')], outcome: 'answered', receipt: { looked_through: 0 }, parts: [{ question: 'When?', status: 'answered',
+      statements: [said('It starts Monday.'), said('The plan moved it.'), said('Billing moves first.')],
+      blocks: [{ kind: 'answer', statements: [0] }, { kind: 'text', title: 'Source', statements: [1] }, { kind: 'text', title: 'Details', statements: [2] }] }] };
+    expect(markdown(answer, ['Launch plan'])).toBe([
+      'It starts Monday. [1]', '', 'The plan moved it. [1]', '', '### Details', '', 'Billing moves first. [1]', '', 'Sources', '', '1. Launch plan'].join('\n'));
   });
 
   it('keeps a title, a card, a fact and a quote as text: their punctuation escaped, a start that would make a list a sentence again', () => {

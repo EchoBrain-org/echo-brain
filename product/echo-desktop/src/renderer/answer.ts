@@ -222,9 +222,20 @@ export function shownItems(part: AnswerPart, places: readonly number[], shows: S
   return places.map((place, at) => ({ place, at })).filter(({ place }) => shows(part.statements[place]!.citation_indexes));
 }
 
-/** An arranged block's section heading: its title, but for a card's, which names the card itself. */
-export function blockTitle(block: ArrangedBlock): string | undefined {
+/** An arranged block's own title: a section's label, but for a card's, which names the card itself. */
+function blockTitle(block: ArrangedBlock): string | undefined {
   return block.kind === 'text' || block.kind === 'points' || block.kind === 'table' || block.kind === 'timeline' ? block.title : undefined;
+}
+
+/**
+ * The title the page shows over each of a part's blocks, by its place: the block's own, but for the paragraph right
+ * after the part's answer, which reads on from it and so has none. `showing` says which blocks the page shows
+ * (shownArranged): one it leaves out is neither the answer nor what comes after it.
+ */
+export function shownTitles(blocks: readonly ArrangedBlock[], showing: readonly boolean[]): (string | undefined)[] {
+  const first = showing.indexOf(true);
+  const after = blocks[first]?.kind === 'answer' ? showing.indexOf(true, first + 1) : -1;
+  return blocks.map((block, place) => place === after && block.kind === 'text' ? undefined : blockTitle(block));
 }
 
 /** What a card's kind reads as, before its title ("Ticket THERM-48"). */
@@ -267,7 +278,7 @@ function tableMarkdown(block: AnswerTable, shows: Shows, cited: Cited): string[]
 
 /**
  * An arranged part as Copy answer writes it, in the page's order and without
- * what the page leaves out: a title as a heading; the answer and text as
+ * what the page leaves out: a title the page shows as a heading; the answer and text as
  * paragraphs; points as a list, numbered when they are steps; a table as a
  * Markdown table; a timeline as a list, each event from its day as the page
  * names it ("Oct 27, Noor Haddad: Approved the soak plan."); a card as its
@@ -277,9 +288,10 @@ function tableMarkdown(block: AnswerTable, shows: Shows, cited: Cited): string[]
 function arrangedMarkdown(part: AnswerPart, arranged: readonly ArrangedBlock[], shows: Shows, cited: Cited): string[] {
   const blocks = drawnBlocks(arranged);
   const showing = shownArranged(part, blocks, shows);
+  const titles = shownTitles(blocks, showing);
   return blocks.flatMap((block, place) => {
     if (!showing[place]) return [];
-    const title = blockTitle(block);
+    const title = titles[place];
     const heading = title === undefined ? [] : [`### ${markdownText(title)}`];
     const shown = shownItems(part, block.statements, shows).map(({ place: sentence, at }) => ({ statement: part.statements[sentence]!, at }));
     const claims = shown.map(({ statement }) => cited(statement.text, statement.citation_indexes));

@@ -17,7 +17,7 @@ import { suggestedQuestions } from '../../src/renderer/bar.js';
 import { askedWhen, stamped } from '../../src/renderer/format.js';
 import { paragraphs } from '../fixtures/authority.js';
 import {
-  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, numbered, ok, plainHooks, project, render, rpcFor, startStore,
+  ACCOUNT, byTestId, classes, click, elements, fail, fileOf, flush, Held, latestTurn, ok, plainHooks, project, render, rpcFor, startStore,
   storeLifecycle, text, timelineFiles, wake,
 } from './harness.js';
 
@@ -397,15 +397,15 @@ describe('Ask on the timeline', () => {
     expect(byTestId(thread(store), 'question').map(text)).toEqual(['What now?', 'And next?']);
   });
 
-  it('says when a turn could not be saved on this computer, and still shows it', async () => {
+  it('keeps an unsaved question available for retry before starting research', async () => {
     const store = await startStore();
     const timeline = rpc.getMockImplementation()!;
     rpc.mockImplementation(async (method: string, params: Record<string, unknown>) => (method === 'timeline.put' ? fail('invalid_output') : timeline(method, params)));
     await store.ask('What now?');
     await flush();
-    expect(store.getState().timeline.turns.map(each => each.question)).toEqual(['What now?']);
-    const { TURN_NOT_SAVED } = await import('../../src/renderer/store.js');
-    expect(store.getState().toast).toBe(TURN_NOT_SAVED);
+    expect(store.getState().timeline.entries.map(each => each.text)).toEqual(['What now?']);
+    expect(store.getState().ask?.failed?.failure).toEqual({ code: 'not_saved', retryable: true });
+    expect(calls('ask.run')).toHaveLength(0);
   });
 
   it.each([
@@ -420,6 +420,7 @@ describe('Ask on the timeline', () => {
     const store = await startStore();
     await flush();
     expect(calls('timeline.read')).toHaveLength(2);
+    expect(store.getState().timeline.loading).toBe(false);
     expect(store.getState().timeline.turns.map(each => each.question)).toEqual(shown);
   });
 
@@ -453,6 +454,45 @@ describe('Ask on the timeline', () => {
     expect(kept()[2]!.question).toBe('Who owns THERM-482?');
   });
 
+  it.each(['before', 'after'])('checks unrelated topics when Home asks directly and saved history loads %s the question', async timing => {
+    const older = turn('Who is on the review?', 2 * DAY, answerOf('Who is on the review?', [page('19')], [['Private review details.', [0]]]));
+    const recent = turn('What shipped?', DAY, answerOf('What shipped?', [ticket('SHIP-4', '4')], [['The SDK shipped.', [0]]]));
+    const history = [...asThread(older), ...asThread(recent)];
+    seed(...history);
+    const read = timing === 'after' ? held.hold('timeline.read') : null;
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'page' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    if (read) {
+      await store.ask('Before history is ready');
+      expect(calls('ask.run')).toHaveLength(0);
+      read(ok({ turns: history }));
+      await flush();
+    }
+    await store.ask('Did it ship?');
+    await flush();
+    expect(calls('ask.run')).toHaveLength(1);
+    expect(calls('ask.run')[0]).toMatchObject({ previous: { question: recent.question } });
+    expect(store.checksOf(older)).toEqual({ 0: 'unreadable' });
+    const shown = (await view())(store);
+    expect(byTestId(shown, 'timeline-question').map(text)).toContain(older.text);
+    expect(byTestId(shown, 'timeline-row').map(text).join(' ')).not.toContain('Private review details.');
+  });
+
+  it('checks newly answered turns on reentry even when older turns in the scope still have fresh checks', async () => {
+    const previous = turn('What did the review decide?', DAY, answerOf('Review?', [page('19')], [['The review finished.', [0]]]));
+    seed(previous);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.kind === 'ticket' ? 'unreadable' : 'same' })) });
+    const store = await startStore();
+    await store.returnToAsk();
+    await store.ask('What is open?');
+    const newest = latestTurn(store)!;
+    store.closeAsk();
+    const before = calls('ask.check').length;
+    await store.returnToAsk();
+    expect(store.checksOf(newest)).toEqual({ 0: 'unreadable' });
+    expect(calls('ask.check').slice(before).flatMap(call => call.items)).toEqual([expect.objectContaining({ asked_at: newest.asked_at })]);
+  });
+
   it('checks every turn\'s sources once when Ask opens, keeps that five minutes, and leaves out by it', async () => {
     const turns = Array.from({ length: 11 }, (_, at) => turn(`Turn ${at}?`, (11 - at) * DAY, status()));
     seed(...turns);
@@ -467,7 +507,7 @@ describe('Ask on the timeline', () => {
     expect(Object.keys(store.getState().timeline.checks)).toHaveLength(11);
     const thread = await view();
     // Past the newest three, earlier questions fold into one line: opened, every line shows. The latest is in full.
-    store.toggleEarlier();
+
     expect(byTestId(thread(store), 'timeline-row')).toHaveLength(10);
     store.toggleTurn(turns[3]!.id);
     const opened = byTestId(thread(store), 'opened-turn')[0]!;
@@ -651,7 +691,7 @@ describe('Ask on the timeline', () => {
     rpc.mockImplementation(rpcFor(held, {
       'ask.check': params => checks!(params.items as never), 'clipboard.writeText': () => ok(null),
     }, () => ({ active: [apollo], archived: [] })));
-    seed(one, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    seed(one, ...(earlier ? [turn('Two?', DAY, status(), { scope: inApollo })] : []));
     const store = await startStore();
     store.pickSuggestion({ question: 'One?', turn: one.id });
     await flush();
@@ -895,14 +935,14 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     const store = await startStore();
     // From a page: asked on its own.
     await store.ask('First?');
-    expect(calls('ask.run')[0]).not.toHaveProperty('previous');
+    expect(calls('ask.run')[0]).toMatchObject({ previous: { question: 'Recent?' } });
     // Ask open, on the thread that question started: continues the latest, asked just now.
     await store.ask('who owns it?');
     expect(calls('ask.run')[1]!.previous).toMatchObject({ purpose: 'follow_up', question: 'First?' });
     // The earlier thread opened: a question continues its latest turn, however long ago it was asked.
     await store.openThread(old.id);
     await store.ask('and since then?');
-    expect(calls('ask.run')[2]!.previous).toMatchObject({ purpose: 'follow_up', question: 'Recent?', asked_at: recent.asked_at });
+    expect(calls('ask.run')[2]!.previous).toMatchObject({ purpose: 'follow_up', question: 'who owns it?' });
     // An earlier turn opened: continues that one.
     store.toggleTurn(old.id);
     await store.ask('and that one?');
@@ -979,7 +1019,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     // Six minutes on, what that check said is no longer good.
     vi.setSystemTime(NOW.getTime() + 6 * 60_000);
     const thread = await view();
-    store.toggleEarlier();
+
     // Opened: its own check, whose reply waits here.
     const release = held.hold('ask.check');
     store.toggleTurn(turns[0]!.id);
@@ -1231,18 +1271,19 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     await store.ask('who owns that ticket?');
     await flush();
     expect(store.getState().ask?.clarify).toMatchObject({ question: 'who owns that ticket?', choices });
-    expect(kept()).toHaveLength(2);
+    expect(kept()).toHaveLength(3);
+    const pendingId = kept().at(-1)!.id;
     const thread = await view();
     const clarify = byTestId(thread(store), 'clarify')[0]!;
     expect(text(clarify)).toContain('Which one do you mean?');
     expect(byTestId(clarify, 'choice').map(text)).toEqual(['THERM-482 · Sensor drift', 'THERM-490 · DVT retest']);
-    const previous = calls('ask.run')[1]!.previous;
+    const { earlier: _older, ...previous } = calls('ask.run')[1]!.previous as AskPrevious;
     click(byTestId(clarify, 'choice')[0]);
     await flush();
     expect(calls('ask.run')[2]).toMatchObject({ question: 'Who owns THERM-482?', previous });
     expect(store.getState().ask?.clarify).toBeNull();
     // The question sent was the model's choice; what the person typed was their follow-up.
-    expect(latestTurn(store)).toMatchObject({ text: 'Who owns THERM-482?', question: 'Who owns THERM-482?', typed: 'who owns that ticket?' });
+    expect(latestTurn(store)).toMatchObject({ id: pendingId, text: 'who owns that ticket?', question: 'Who owns THERM-482?', typed: 'who owns that ticket?' });
   });
 
   // Every Authority takes the earlier turn (C3): a refused Ask fails as it is, and is never asked again without it.
@@ -1290,7 +1331,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     expect(store.getState().ask?.opened).toBeNull();
     const shown = thread(store);
     // The question shows once: the old turn folds away, and the new answer stands for it.
-    expect(byTestId(shown, 'timeline-question').map(text)).not.toContain(one.question);
+    expect(byTestId(shown, 'timeline-question').map(text)).toContain(one.question);
     expect(byTestId(shown, 'question').map(text).filter(question => question === one.question)).toHaveLength(1);
     const since = byTestId(shown, 'since')[0]!;
     expect(text(byTestId(since, 'changed-since'))).toBe(`Changed since ${askedWhen(one.asked_at, NOW.getTime())}`);
@@ -1504,66 +1545,70 @@ describe('one thread on the page, each checked on its own (ADR-0049, ADR-0056)',
   });
 });
 
-describe('the earlier questions folded into one line, and the sidebar\'s Ask', () => {
+describe('the chronological scope history, and the sidebar\'s Ask', () => {
   /** `count` turns a day apart, the oldest first, the newest a day ago. */
   const days = (count: number) => Array.from({ length: count }, (_, at) => turn(`Turn ${at}?`, (count - at) * DAY, status()));
-  const line = (shown: unknown) => byTestId(shown, 'earlier-toggle')[0];
   const lines = (shown: unknown) => byTestId(shown, 'timeline-question').map(text);
   beforeEach(() => { checks = items => ok({ items: items.map(() => ({ state: 'same' })) }); });
 
-  it('shows the newest three earlier questions as lines, the rest folded into one line that opens them in place, folded again the next time Ask opens', async () => {
-    seed(...days(12));
+
+  it('keeps every older question reachable in order and opens an explicit anchor', async () => {
+    const turns = days(12);
+    seed(...turns);
     const store = await startStore();
-    await reopen(store);
-    await store.ask('What now?');
+    store.pickSuggestion({ question: 'Turn 2?', turn: turns[2]!.id });
     await flush();
     const thread = await view();
-    // Turn 11 was the latest when Ask opened, so it stays in full with the answer: the other eleven fold, the newest three as lines.
-    expect(lines(thread(store))).toEqual(['Turn 8?', 'Turn 9?', 'Turn 10?']);
-    expect(text(line(thread(store)))).toBe('8 earlier questions');
-    expect(line(thread(store))?.props['aria-expanded']).toBe(false);
-    expect(byTestId(thread(store), 'question').map(text)).toEqual(['Turn 11?', 'What now?']);
-    click(line(thread(store)));
-    expect(lines(thread(store))).toEqual(Array.from({ length: 11 }, (_, at) => `Turn ${at}?`));
-    expect(line(thread(store))?.props['aria-expanded']).toBe(true);
-    expect(text(line(thread(store)))).toBe('8 earlier questions');
-    // Those it opens are kept out of Ask's live region, so a screen reader does not read them all out.
-    const live = elements(thread(store)).filter(node => classes(node).includes('folded-turn')).map(node => node.props['aria-live'] ?? null);
-    expect(live).toEqual([...Array.from({ length: 8 }, () => 'off'), null, null, null]);
-    click(line(thread(store)));
-    expect(lines(thread(store))).toEqual(['Turn 8?', 'Turn 9?', 'Turn 10?']);
-    // Left open, it is folded again the next time Ask opens.
-    click(line(thread(store)));
-    store.closeAsk();
-    await reopen(store);
-    await store.ask('And next?');
-    await flush();
-    expect(line(thread(store))?.props['aria-expanded']).toBe(false);
-    expect(lines(thread(store))).toEqual(['Turn 9?', 'Turn 10?', 'Turn 11?']);
-    expect(text(line(thread(store)))).toBe('9 earlier questions');
+    expect(lines(thread(store))).toEqual(turns.slice(0, -1).map(turn => turn.text));
+    expect(byTestId(thread(store), 'earlier-toggle')).toHaveLength(0);
+    expect(byTestId(thread(store), 'opened-turn')).toHaveLength(1);
+    await store.ask('And this one?');
+    expect(calls('ask.run').at(-1)).toMatchObject({ previous: { question: 'Turn 2?' } });
   });
 
-  it('needs no line for three earlier questions or fewer, and names one in the singular', async () => {
-    seed(...days(4));
+  it('reopens the current scope while other projects keep their own history', async () => {
+    const projectTurn = turn('Apollo question?', DAY, status(), { scope: inApollo });
+    seed(projectTurn);
     const store = await startStore();
-    await reopen(store);
-    await store.ask('What now?');
+    expect(await store.returnToAsk()).toBe(false);
+    await store.openProject(apollo);
+    expect(await store.returnToAsk()).toBe(true);
+    expect(store.askThread().map(turn => turn.text)).toEqual(['Apollo question?']);
+    store.widenScope();
+    expect(store.askThread()).toEqual([]);
+    await store.ask('At Home?');
+    expect(calls('ask.run').at(-1)).not.toHaveProperty('previous');
+    expect(store.entriesInScope(inApollo).map(turn => turn.text)).toEqual(['Apollo question?']);
+  });
+
+  it('keeps Home and Capture available while the composer and sidebar Ask wait for local history', async () => {
+    const previous = turn('Earlier topic?', DAY, status());
+    const reading = held.hold('timeline.read');
+    const store = await startStore();
+    const { Sidebar } = await import('../../src/renderer/screens/sidebar.js');
+    const { Bar } = await import('../../src/renderer/screens/ask.js');
+    const sidebar = render(Sidebar({ state: store.getState() }));
+    const field = () => byTestId(render(Bar({ state: store.getState() })), 'ask-field')[0]!.props;
+    expect(field()).toMatchObject({ readOnly: true, placeholder: 'Loading Ask history…', 'aria-disabled': true });
+    expect(byTestId(sidebar, 'sidebar-ask')[0]!.props.disabled).toBe(true);
+    for (const id of ['sidebar-home', 'sidebar-capture']) expect(byTestId(sidebar, id)[0]!.props.disabled).toBeFalsy();
+    expect(store.suggestionsShown()).toBe(false);
+    expect(await store.returnToAsk()).toBe(false);
+    expect(store.getState().ask).toBeNull();
+    reading(ok({ turns: [previous] }));
     await flush();
-    const thread = await view();
-    expect(byTestId(thread(store), 'earlier-toggle')).toEqual([]);
-    expect(lines(thread(store))).toEqual(['Turn 0?', 'Turn 1?', 'Turn 2?']);
-    store.closeAsk();
-    await reopen(store);
-    await store.ask('And next?');
-    await flush();
-    expect(text(line(thread(store)))).toBe('1 earlier question');
-    expect(lines(thread(store))).toEqual(['Turn 1?', 'Turn 2?', 'Turn 3?']);
+    expect(field()).toMatchObject({ readOnly: false, placeholder: 'Ask ECHO' });
+    expect(store.getState().ask).toBeNull();
+    expect(await store.returnToAsk()).toBe(true);
+    expect(store.getState().ask?.latest).toBe(previous.id);
+    expect(calls('ask.run')).toHaveLength(0);
   });
 
   it('says the time between messages as a texting app does: above the first shown, the first of its day, and one asked an hour or more after the one before', async () => {
+    vi.setSystemTime(new Date(2026, 9, 25, 15));
     const at = (iso: string) => NOW.getTime() - Date.parse(iso);
-    seed(turn('Friday?', at('2026-10-23T10:00:00.000Z'), status()), turn('and then?', at('2026-10-23T10:59:00.000Z'), status()),
-      turn('This morning?', at('2026-10-25T09:00:00.000Z'), status()), turn('and after?', at('2026-10-25T10:00:00.000Z'), status()));
+    seed(turn('Friday?', at('2026-10-23T10:00:00.000'), status()), turn('and then?', at('2026-10-23T10:59:00.000'), status()),
+      turn('This morning?', at('2026-10-25T09:00:00.000'), status()), turn('and after?', at('2026-10-25T10:00:00.000'), status()));
     const store = await startStore();
     await reopen(store);
     await store.ask('What now?');
@@ -1572,111 +1617,10 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     const shown = elements(thread(store)).filter(node => ['stamp', 'timeline-question', 'question'].includes(String(node.props['data-testid']))).map(text);
     expect(shown).toEqual(['Oct 23, 10:00 AM', 'Friday?', 'and then?', 'Today 9:00 AM', 'This morning?', 'Today 10:00 AM', 'and after?', 'Today 3:00 PM', 'What now?']);
     // The rule itself: a minute short of the hour says nothing, the hour does, and so does a minute past midnight.
-    expect(stamped('2026-10-25T10:59:00.000Z', '2026-10-25T10:00:00.000Z')).toBe(false);
-    expect(stamped('2026-10-25T11:00:00.000Z', '2026-10-25T10:00:00.000Z')).toBe(true);
-    expect(stamped('2026-10-25T00:01:00.000Z', '2026-10-24T23:59:00.000Z')).toBe(true);
-    expect(stamped('2026-10-25T00:01:00.000Z', undefined)).toBe(true);
-  });
-
-  it('opens the line when a suggestion opens a question folded into it, so that question shows where it is', async () => {
-    const turns = days(12);
-    seed(...turns);
-    const store = await startStore();
-    store.pickSuggestion({ question: 'Turn 2?', turn: turns[2]!.id });
-    await flush();
-    expect(store.getState().ask).toMatchObject({ opened: turns[2]!.id, focus: turns[2]!.id, earlier: true });
-    const thread = await view();
-    expect(lines(thread(store))).toHaveLength(11);
-    expect(byTestId(thread(store), 'opened-turn')).toHaveLength(1);
-    // One of the newest three opens with the line still folded.
-    store.closeAsk();
-    store.pickSuggestion({ question: 'Turn 9?', turn: turns[9]!.id });
-    await flush();
-    expect(store.getState().ask).toMatchObject({ opened: turns[9]!.id, earlier: false });
-    expect(lines(thread(store))).toEqual(['Turn 8?', 'Turn 9?', 'Turn 10?']);
-    expect(byTestId(thread(store), 'opened-turn')).toHaveLength(1);
-  });
-
-  it('folds a question opened among them when the line folds them again, so a follow-up never continues one out of sight', async () => {
-    const turns = days(12);
-    seed(...turns);
-    const store = await startStore();
-    await reopen(store);
-    await store.ask('What now?');
-    await flush();
-    store.toggleEarlier();
-    store.toggleTurn(turns[2]!.id);
-    expect(store.getState().ask?.opened).toBe(turns[2]!.id);
-    store.toggleEarlier();
-    expect(store.getState().ask).toMatchObject({ earlier: false, opened: null });
-    // One of the newest three stays open through it.
-    store.toggleEarlier();
-    store.toggleTurn(turns[9]!.id);
-    store.toggleEarlier();
-    expect(store.getState().ask).toMatchObject({ earlier: false, opened: turns[9]!.id });
-  });
-
-  it('keeps the thread it shows, and the turn opened in it, when × widens the bar: the thread is not the place\'s any more (ADR-0056)', async () => {
-    const old = turn('What was Apollo\'s plan?', 20 * DAY, status(), { scope: inApollo });
-    const latest = turn('What is left in Apollo?', HOUR, status(), { scope: inApollo });
-    seed(...asThread(old, latest), ...asThread(...Array.from({ length: 5 }, (_, at) => turn(`Home ${at}?`, (5 - at) * DAY, status()))));
-    const store = await startStore();
-    await store.openProject(apollo);
-    store.pickSuggestion({ question: old.question, turn: old.id });
-    await flush();
-    expect(store.getState().ask).toMatchObject({ thread: { id: old.id, entered: true }, opened: old.id, earlier: false });
-    const checked = calls('ask.check').length;
-    store.widenScope();
-    await flush();
-    expect(store.getState().barScope).toEqual({ kind: 'global' });
-    expect(store.getState().ask).toMatchObject({ thread: { id: old.id, entered: true }, opened: old.id, earlier: false });
-    expect(lines((await view())(store))).toEqual([old.question]);
-    expect(calls('ask.check')).toHaveLength(checked);
-  });
-
-  it('goes back to Ask where you left it, from any page: the thread asked in most recently, at Home for one with no project, its answer at the bottom', async () => {
-    seed(turn('What did we agree?', DAY, status()));
-    const store = await startStore();
-    await reopen(store);
-    await store.ask('Who approved it?');
-    await flush();
-    await store.openProject(apollo);
-    expect(store.getState().ask).toBeNull();
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(store.getState().route).toEqual({ page: 'home' });
-    expect(store.getState().barScope).toEqual({ kind: 'global' });
-    expect(store.getState().ask).toMatchObject({ latest: latestTurn(store)!.id, asked: [], opened: null, focus: null, earlier: false });
-    const thread = await view();
-    expect(byTestId(thread(store), 'question').map(text)).toEqual(['Who approved it?']);
-    expect(lines(thread(store))).toEqual(['What did we agree?']);
-    // Open already, it stays as it is.
-    const open = store.getState().ask;
-    expect(await store.returnToAsk()).toBe(true);
-    expect(store.getState().ask).toBe(open);
-  });
-
-  it('goes back to a project\'s Ask for a question asked there', async () => {
-    seed(turn('What is left in Apollo?', DAY, status(), { scope: inApollo }));
-    const store = await startStore();
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: apollo.project_id } });
-    expect(store.getState().barScope).toEqual(inApollo);
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left in Apollo?']);
-  });
-
-  it('goes back to the thread at Home when its project is no longer one of yours', async () => {
-    seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
-    // Not among the person's projects: read by its id, it is not theirs.
-    const base = rpc.getMockImplementation()!;
-    rpc.mockImplementation((method: string, params: Record<string, unknown>) => (method === 'projects.read' ? Promise.resolve(fail('not_found')) : base(method, params)));
-    const store = await startStore();
-    await store.openProject(apollo);
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(store.getState().route).toEqual({ page: 'home' });
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What was left?']);
+    expect(stamped('2026-10-25T10:59:00.000', '2026-10-25T10:00:00.000')).toBe(false);
+    expect(stamped('2026-10-25T11:00:00.000', '2026-10-25T10:00:00.000')).toBe(true);
+    expect(stamped('2026-10-25T00:01:00.000', '2026-10-24T23:59:00.000')).toBe(true);
+    expect(stamped('2026-10-25T00:01:00.000', undefined)).toBe(true);
   });
 
   it('opens Ask over the page it is on when that page\'s bar asks the thread already', async () => {
@@ -1687,21 +1631,6 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     await flush();
     expect(store.getState().route).toBe(route);
     expect(store.getState().ask).toMatchObject({ latest: latestTurn(store)!.id, asked: [] });
-  });
-
-  it('narrows a widened bar back on the project\'s own page, without reading the page again', async () => {
-    seed(turn('What did we agree?', 2 * DAY, status()), ...asThread(turn('What is left in Apollo?', DAY, status(), { scope: inApollo })));
-    const store = await startStore();
-    await store.openProject(apollo);
-    store.widenScope();
-    const route = store.getState().route;
-    const reads = calls('list.page').length;
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(store.getState().route).toBe(route);
-    expect(calls('list.page')).toHaveLength(reads);
-    expect(store.getState().barScope).toEqual(inApollo);
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left in Apollo?']);
   });
 
   it('keeps Ask open when a question asked in it is cancelled, though the sidebar\'s Ask opened it', async () => {
@@ -1715,7 +1644,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(store.getState().ask?.asking).not.toBeNull();
     store.cancelAsk();
     expect(store.getState().ask).toMatchObject({ asking: null, asked: [] });
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What did we agree?']);
+    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What did we agree?', 'And then?']);
     // Ask opened from a page for a question still closes with it.
     store.closeAsk();
     held.hold('ask.run');
@@ -1731,44 +1660,7 @@ describe('the earlier questions folded into one line, and the sidebar\'s Ask', (
     expect(store.getState().ask).toBeNull();
   });
 
-  it('reads a project the sidebar has not loaded by its id, and goes back to that project\'s Ask', async () => {
-    // Twelve projects: the sidebar shows the first page of ten, and the latest question was asked in the twelfth.
-    const many = numbered(12);
-    const later = many[11]!;
-    rpc.mockImplementation(rpcFor(held, { 'projects.read': params => ok(many.find(item => item.project_id === params.project_id)) }, () => ({ active: many, archived: [] })));
-    seed(turn('What is left?', DAY, status(), { scope: { kind: 'project', project_id: later.project_id } }));
-    const store = await startStore();
-    expect(store.getState().projects.items.map(item => item.project_id)).not.toContain(later.project_id);
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(calls('projects.read')).toEqual([expect.objectContaining({ project_id: later.project_id })]);
-    expect(store.getState().route).toMatchObject({ page: 'project', project: { project_id: later.project_id } });
-    expect(store.getState().barScope).toEqual({ kind: 'project', project_id: later.project_id });
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What is left?']);
-  });
-
-  it('goes to the thread at Home for an unloaded project you no longer have, and says why when it cannot be read', async () => {
-    const many = numbered(12);
-    let reply = fail('not_found');
-    rpc.mockImplementation(rpcFor(held, { 'projects.read': () => reply }, () => ({ active: many, archived: [] })));
-    seed(turn('What was left?', DAY, status(), { scope: { kind: 'project', project_id: 'prj_99999999-1111-4111-8111-111111111111' } }));
-    const store = await startStore();
-    await store.openProject(many[0]!);
-    expect(await store.returnToAsk()).toBe(true);
-    await flush();
-    expect(store.getState().route).toEqual({ page: 'home' });
-    expect(byTestId((await view())(store), 'question').map(text)).toEqual(['What was left?']);
-    // Any other failure opens nothing, and says why: the sidebar's Ask then puts the cursor in the bar.
-    store.closeAsk();
-    await store.openProject(many[0]!);
-    reply = fail('unavailable', { retryable: true });
-    expect(await store.returnToAsk()).toBe(false);
-    await flush();
-    expect(store.getState().ask).toBeNull();
-    expect(store.getState().toast).toBe('ECHO is unavailable right now. Try again.');
-  });
 });
-
 
 describe('follow-ups from the bar', () => {
   it('keeps every follow-up in the project, and only carries an earlier turn while Ask is open', async () => {
@@ -1778,7 +1670,7 @@ describe('follow-ups from the bar', () => {
     store.closeAsk();
     await store.ask('Fourth?');
     expect(calls('ask.run').map(call => call.scope)).toEqual([inApollo, inApollo, inApollo, inApollo]);
-    expect(calls('ask.run').map(call => (call.previous as AskPrevious | undefined)?.question)).toEqual([undefined, 'First?', 'Second?', undefined]);
+    expect(calls('ask.run').map(call => (call.previous as AskPrevious | undefined)?.question)).toEqual([undefined, 'First?', 'Second?', 'Third?']);
     expect(kept().map(turn => turn.text)).toEqual(['First?', 'Second?', 'Third?', 'Fourth?']);
   });
 
@@ -1796,7 +1688,8 @@ describe('follow-ups from the bar', () => {
     expect(latestTurn(store)?.text).toBe('First?');
     late(ok(answerOf('Second?', [], [['A late answer.', []]])));
     await flush();
-    expect(kept().map(turn => turn.text)).toEqual(['First?']);
+    expect(kept().map(turn => turn.text)).toEqual(['First?', 'Second?']);
+    expect(kept()[1]).not.toHaveProperty('answer');
     const failing = held.hold('ask.run');
     store.submitBar();
     await flush();
@@ -1810,7 +1703,7 @@ describe('follow-ups from the bar', () => {
     expect(byTestId(shown, 'ask-retry')).toHaveLength(1);
     store.retryAsk();
     await flush();
-    expect(kept().map(turn => turn.text)).toEqual(['First?', 'Third?']);
+    expect(kept().map(turn => turn.text)).toEqual(['First?', 'Second?', 'Third?']);
     expect(calls('ask.run').map(call => call.question)).toEqual(['First?', 'Second?', 'Third?', 'Third?']);
     expect(store.getState().ask?.failed).toBeFalsy();
   });
@@ -1820,7 +1713,7 @@ describe('follow-ups from the bar', () => {
     const nothing = turn(question, 2 * DAY, answerOf(question, [], [], { scope: inApollo, outcome: 'not_found',
       parts: [{ question, status: 'not_found', statements: [] }] }));
     rpc.mockImplementation(rpcFor(held, { 'clipboard.writeText': () => ok(null), 'ask.record': () => fail('not_found') }, () => ({ active: [apollo], archived: [] })));
-    seed(nothing, ...(earlier ? [turn('Two?', DAY, status())] : []));
+    seed(nothing, ...(earlier ? [turn('Two?', DAY, status(), { scope: inApollo })] : []));
     const store = await startStore();
     store.pickSuggestion({ question, turn: nothing.id });
     await flush();

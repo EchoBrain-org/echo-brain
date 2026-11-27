@@ -19,6 +19,7 @@ import {
   type Notice, type Result, type UpdateState,
 } from '../shared/protocol.js';
 import { sameFolder } from '../shared/folders.js';
+import { hideWindow } from './hide.js';
 import { installRefusal, startUpdater, updateCode, updaterSetup, type ClientUpdateModule, type Updater } from './update.js';
 
 const BUILD = __dirname;
@@ -588,7 +589,7 @@ function createWindow(): BrowserWindow {
   });
   created.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   created.on('close', event => {
-    if (!quitting) { event.preventDefault(); created.hide(); }
+    if (!quitting) { event.preventDefault(); hideWindow(created); }
   });
   // Quitting closes the window before macOS stops reporting app events.
   created.on('closed', () => { if (window === created) window = null; });
@@ -613,7 +614,7 @@ function show(): void {
 }
 
 function toggle(): void {
-  if (window?.isVisible() && window.isFocused()) window.hide();
+  if (window?.isVisible() && window.isFocused()) hideWindow(window);
   else show();
 }
 

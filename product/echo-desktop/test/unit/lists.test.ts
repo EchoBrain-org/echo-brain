@@ -144,11 +144,13 @@ describe('leaving Ask while it answers', () => {
     const cancelled = () => rpc.mock.calls.filter(([method]) => method === 'ask.cancel').map(([, params]) => params.cancel_id);
     held.hold('ask.run');
     void store.ask('What changed?');
+    await flush();
     await store.openProject(apollo);
     await flush();
     expect(cancelled()).toEqual(sent());
     held.hold('ask.run');
     void store.ask('And here?');
+    await flush();
     store.closeAsk();
     store.goHome();
     expect(sent()).toHaveLength(2);

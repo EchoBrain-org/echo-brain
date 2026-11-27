@@ -28,6 +28,10 @@ const ask = (value: unknown) => ({ schema_version: 3, question: 'what are the de
 describe('the previous turn on the Ask request (ADR-0047)', () => {
   it('carries a follow-up or an Ask again, exactly as sent, and leaves a request without it unchanged', () => {
     expect(validatePersonAnswerRequestV3(ask(previous()))).toEqual(ask(previous()));
+    expect(validatePersonAnswerRequestV3(ask(previous({ candidate: true }))).previous?.candidate).toBe(true);
+    expect(() => validatePersonAnswerRequestV3(ask(previous({ candidate: false })))).toThrow();
+    expect(() => validatePersonAnswerRequestV3({ schema_version: 3, question: previous().question,
+      previous: previous({ purpose: 'ask_again', candidate: true }) })).toThrow();
     const again = { schema_version: 3, question: previous().question, previous: previous({ purpose: 'ask_again', statements: [], citations: [] }) };
     expect(validatePersonAnswerRequestV3(again)).toEqual(again);
     expect(validatePersonAnswerRequestV3({ schema_version: 3, question: 'What changed?' })).toEqual({ schema_version: 3, question: 'What changed?' });

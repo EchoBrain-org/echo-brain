@@ -393,11 +393,13 @@ function citationIndexes(value: unknown, label: string, bound: number): readonly
  */
 function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
+  const candidate = Object.hasOwn(input, 'candidate');
   const older = Object.hasOwn(input, 'earlier');
   const labelled = Object.hasOwn(input, 'label');
-  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : []), ...(labelled ? ['label'] : [])], 'Ask previous');
+  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : []), ...(labelled ? ['label'] : []), ...(candidate ? ['candidate'] : [])], 'Ask previous');
   const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   // Only a follow-up continues a thread (ADR-0056): an Ask again compares with the one earlier answer.
+  if (candidate && (purpose !== 'follow_up' || input.candidate !== true)) fail('Invalid Ask previous candidate');
   if (older && purpose !== 'follow_up') fail('Ask again carries no earlier turns');
   if (labelled && purpose !== 'follow_up') fail('Ask again carries no label');
   const earlier = older ? Object.freeze(boundedList(input.earlier, 'Ask previous earlier', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
@@ -407,7 +409,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   })) : undefined;
   // Its label (ADR-0057) is checked in form only: a turn's question here may be a model's rewrite, so only the client,
   // which holds the typed words, can check the label's words.
-  return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(earlier === undefined ? {} : { earlier }),
+  return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(candidate ? { candidate: true as const } : {}), ...(earlier === undefined ? {} : { earlier }),
     ...(labelled ? { label: answerLabel(input.label, 'Ask previous label') } : {}) });
 }
 
