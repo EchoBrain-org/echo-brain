@@ -10,6 +10,20 @@ changes that version's page, one of its rules (R2), how long a thread lives,
 and how two threads are joined. Everything of threads v1 this document does
 not name stays as it is.
 
+## November 27 milestone
+
+Ask now shows one chronological conversation for Home and one for each project. The rules below describe the previous desktop. This milestone supersedes its visible thread changes, placement notes, Undo, and collapsed groups of older questions. Older answers still open in place. Repeated questions each keep their place.
+
+The desktop writes a submitted question into the existing account file before starting research. If the write fails, the person can retry. Its answer, retry, or clarification updates the same ID. Reopening the transcript restores the latest prompt if it is waiting for clarification. A new question submitted from Home starts a separate turn. Only completed turns supply research context. After an interruption, Echo regenerates source-derived choices against current access.
+
+An explicitly opened turn anchors a follow-up. Otherwise Ask uses a recent same-scope conversation and supplies other same-scope topics to the existing resolver. A named callback can continue an older topic silently. An implicit match after the existing seven-day window, or a topic selected automatically from another conversation, is a candidate. A bare reference with a weak match prompts for clarification. The user can pick a suggestion or type an answer.
+
+The reader introduced in `7ee96ef` preserves unknown rows on write. The installed staging desktop at `18af498` also preserves them. Earlier writers, including `1441d68`, can read a file containing an unfinished question as empty and replace its history on the next write. Use a desktop with the `7ee96ef` fix or later when rolling back on a device with pending questions.
+
+The new desktop sends `previous.candidate` for implicit older context. Release the updated Authority before the desktop and its bundled Person client. Older desktops can continue sending the existing request format.
+
+This milestone covers clarification before research. Clarification during research and retrieval of an exact historical quote are separate work.
+
 ## Why
 
 The founder, 2026-11-24, on a mock that drew threads on the page: "too noisy.
@@ -67,6 +81,7 @@ something, ECHO needs the person, or the person reaches for it.
 | Two conversations about the same thing are linked, and nothing moves | "Link them" |
 | Threads are kept as fields on each saved question, with no thread records | "yes continue", to the shape under "How it is stored" |
 | The page reads like texting a coworker, with no mark on ECHO's replies. Look and feel only | "i want it to feel like a real conversation like how they would text and ask their co worker. this is strictly a UI/UX requerst", then "no need fo E actaully" |
+| ECHO's replies are plain text on the page, with no box around them (2026-11-25, after he used the built page with real answers) | "also i dont liek the UI and UX for current ask page", then his pick among three mocked looks: "B, plain reply" |
 
 ## Words
 
@@ -153,14 +168,29 @@ Look and feel only. Nothing here changes what is asked, kept or sent.
 - **Your questions** are messages on the right, in a soft grey bubble, as
   typed. A quick reply shows the question it asked, and Ask again the
   question it asked again, as in threads v1.
-- **ECHO's replies** are messages on the left, in a white bubble. No avatar
-  and no name.
-- **Short first.** The statement the answer opens with is its own short
-  message: its direct answer, or the first sentence of a one-part answer that
-  opens with a sentence. The rest of the answer follows as the next message,
-  with the blocks (lists, tables, timelines, quotes) and citations inside it.
-  An answer with no direct answer that opens with a table, a list or a card,
-  or has several parts, is one message.
+- **ECHO's replies** are plain text on the left, in a measure short enough
+  to read, with no box, avatar or name. As first built a reply was a white
+  bubble, and the rest of the answer a second outlined box. With real answers
+  that drew a box inside a box around every table and card, and the founder
+  chose the plain reply on 2026-11-25.
+- **Short first.** The statement the answer opens with comes first, in
+  slightly larger and heavier type: its direct answer, or the first sentence
+  of a one-part answer that opens with a sentence. The rest of the answer
+  follows under it, a step quieter, in the blocks the writer arranged
+  (ADR-0051) with their citations. An answer with no direct answer that opens
+  with a table, a list or a card, or has several parts, has no such first
+  line.
+- **The seven blocks, drawn plainly** (this updates how the desktop draws
+  ADR-0051's blocks, and nothing of what they hold). A block's title is a
+  small quiet label over it, not a bold heading, and the paragraph right
+  after the answer shows no title, since it reads on from the answer. A table
+  has no box, only a hairline between its rows. A card is one thing, so it
+  alone keeps a soft panel, with no line. Points, a timeline and a quote read
+  as before.
+- **While ECHO works** nothing changes: the one quiet line under the question
+  (a pulse, the step now, a timer, Cancel), which was already plain text.
+- **A sentence's source numbers** stay on the line of its last word. A number
+  never starts a line alone.
 - **Times** sit in the middle between messages, as in a texting app: above
   the first turn shown, the first of a day, and one asked an hour or more
   after the one before it.
@@ -169,8 +199,8 @@ Look and feel only. Nothing here changes what is asked, kept or sent.
   message only, which opens the rest in place on a click and folds it again.
 - **Sources** are one small "N sources" link under a reply, opening the pane
   as before.
-- **"Which one do you mean?"** is a reply from ECHO with quick replies under
-  it.
+- **"Which one do you mean?"** is a reply from ECHO, in the type of a short
+  answer, with quick replies under it.
 - **The faint lines** of items 3 and 4 are centred notes in the conversation,
   like the notes a texting app shows.
 - A reply whose every sentence cites a source the person can no longer read
@@ -178,7 +208,8 @@ Look and feel only. Nothing here changes what is asked, kept or sent.
 - The bar is unchanged, and still says "Ask ECHO".
 
 Mock: boards A to E of "Redesign: a conversation, threads underneath" on the
-canvas https://claude.ai/artifact/LPH5TbV5ZLNaufcJEk1xxf.
+canvas https://claude.ai/artifact/LPH5TbV5ZLNaufcJEk1xxf, and for the plain
+reply, look B on its page "New look".
 
 ## Rules
 
@@ -595,9 +626,9 @@ The founder asked that this work add no state-machine problems.
    cannot be taken apart in this version.
 6. **Labels use words exactly as typed,** at most 80 characters, and can
    arrive one question late.
-7. **The look's details.** Grey for the person's messages and white for
-   ECHO's; the answer's opening statement as its own message; earlier replies
-   cut to that first message; times in the middle, said again after an hour.
+7. **The look's details.** Grey for the person's messages; the answer's
+   opening statement first, in larger type; earlier replies cut to that first
+   line; times in the middle, said again after an hour.
 8. **The door's list is flat.** No project headings: a row from another
    project shows that project's name. The up arrow opens it only from an
    empty bar, and only while Ask is open.
@@ -614,6 +645,14 @@ The founder asked that this work add no state-machine problems.
 13. **"an earlier conversation".** A line that would name a conversation
     none of whose questions kept the person's words says this, because its
     old heading may be a model's.
+14. **No title on the paragraph right after the answer.** The writer often
+    titles it ("Source", "Details"), and under a short answer that label is
+    noise. The page leaves it out, and so does Copy answer; every other
+    block keeps its title. The mock he picked drew it this way, and he was
+    told it was his call.
+15. **The plain reply's details.** A reply is at most 680 px wide; what
+    follows the short answer is a step quieter than it; a card is at most
+    480 px wide; the line under an answer still says how long it took.
 
 ## Delivery
 

@@ -353,7 +353,7 @@ const THREAD_SUBJECTS = ['billing', 'pilot', 'tests', 'ledger'] as const;
  */
 function threadsAnswer(request: {
   readonly question: string; readonly labels?: true; readonly threads?: readonly { readonly questions: readonly string[] }[];
-  readonly previous?: { readonly purpose: string; readonly question: string; readonly label?: string; readonly earlier?: readonly { readonly question: string }[] };
+  readonly previous?: { readonly purpose: string; readonly question: string; readonly candidate?: true; readonly label?: string; readonly earlier?: readonly { readonly question: string }[] };
 }, plain: Record<string, unknown>): Record<string, unknown> {
   const { question, previous, threads } = request;
   const full = previous?.purpose === 'follow_up' ? `Resolved: ${question} (after "${previous.question}")` : question;
@@ -361,6 +361,10 @@ function threadsAnswer(request: {
   const named = `${previous?.label ?? bare(previous?.earlier?.[0]?.question ?? previous?.question ?? '')}, ${bare(question)}`;
   const labelled = request.labels === true && previous?.purpose === 'follow_up' && (threads !== undefined || previous.earlier !== undefined)
     ? { label: /\bmislabel\b/iu.test(question) ? 'Invented by the model' : [...named].length <= 80 ? named : [...bare(question)].slice(0, 80).join('').trim() } : {};
+  if (previous?.candidate && question === 'Did it ship?') {
+    return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: plain.scope, outcome: 'clarify', citations: [], parts: [], question,
+      choices: [{ label: 'The pilot', question: 'Did the pilot ship?' }] };
+  }
   if (threads === undefined) return previous === undefined ? plain : { ...plain, question: full, ...labelled };
   const on = (subject: string) => threads.flatMap((thread, at) => (thread.questions.some(typed => typed.toLowerCase().includes(subject)) ? [at] : []));
   const words = question.toLowerCase();
@@ -372,7 +376,9 @@ function threadsAnswer(request: {
     return { schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: plain.scope, outcome: 'clarify', citations: [], parts: [], question,
       thread: { kind: 'other', threads: belongs }, ...(belongs.length === 1 && merge.length > 0 ? { merge } : {}) };
   }
-  if (previous === undefined || /\bunrelated\b/u.test(words)) return { ...plain, question, thread: { kind: 'new' } };
+  const subjects = THREAD_SUBJECTS.filter(subject => about.includes(subject));
+  const prior = [previous?.question, previous?.label, ...(previous?.earlier ?? []).map(turn => turn.question)].join(' ').toLowerCase();
+  if (previous === undefined || /\bunrelated\b/u.test(words) || (subjects.length > 0 && !subjects.some(subject => prior.includes(subject)))) return { ...plain, question, thread: { kind: 'new' } };
   return { ...plain, question: full, ...(merge.length > 0 ? { merge } : {}), ...labelled };
 }
 
@@ -1813,7 +1819,7 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
         const plain = mode === 'ask-threads-checked' && /\bdrafted\b/iu.test(question)
           ? timelineV8(question, scope, [TRACE_FOLLOW_UP], [cites([TRACE_FOLLOW_UP], 'Confirm the trace is still open.', [0])])
           // A "long readout" is an answer long enough to scroll, as `ask-scroll` answers.
-          : /\blong readout\b/iu.test(question) ? { ...answer, scope, ...longReadout(question) } : { ...answer, scope, parts: [{ ...part, question }] };
+          : /\blong readout\b/iu.test(question) ? { ...answer, scope, ...longReadout(question) } : { ...answer, scope, parts: [{ ...part, question: question.replace(/\s+/gu, ' ') }] };
         return answered(threadsAnswer(request, plain));
       }
       // `ask-threads-unplaced` answers as an Authority that does not hold T2 would: to a question asked with the threads

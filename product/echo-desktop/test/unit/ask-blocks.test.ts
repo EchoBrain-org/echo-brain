@@ -1,8 +1,9 @@
 // An answer the writer arranged in blocks (answer layout v2, ADR-0051), on the
-// page: the answer in the lead's type, a title as its block's section heading,
-// points as bullets or numbered steps, a table in its own box with its dates
-// in mono, a timeline with each event's day down the side, a card headed by
-// its kind, and a quote with its source under it. Each item is a sentence
+// page: the answer in the lead's type, a title as its block's label (none over
+// the paragraph right after the answer), points as bullets or numbered steps,
+// a table in its own scroll box with its dates in mono, a timeline with each
+// event's day down the side, a card headed by its kind, and a quote with its
+// source under it. Each item is a sentence
 // with its sources' numbers, lit on its own; a check leaves out what you can
 // no longer read (ADR-0047), and a block left with nothing to show goes with
 // its title. For every answer: the sources start as
@@ -127,6 +128,15 @@ describe('an arranged part reads as its blocks', () => {
     expect(byTestId(layout, 'answer-row')).toHaveLength(2);
   });
 
+  it('shows no title over the paragraph right after the answer, and keeps every other block\'s', async () => {
+    // The titled text ("Open risk") right under the answer; the table, the timeline, the card, the steps and the quote after it.
+    const shown = await shownAnswer(changed(blocks => [blocks[0]!, blocks[5]!, ...blocks.slice(1, 5), blocks[6]!]));
+    const [layout] = byClass(shown, 'answer-layout');
+    expect(drawn(layout).slice(0, 2)).toEqual(['p.answer-paragraph', 'div.answer-table']);
+    expect(byType(layout, 'h3').map(text)).toEqual(['Soak test', 'Before PVT']);
+    expect(text(shown)).not.toContain('Open risk');
+  });
+
   it('gives every item its sentence\'s numbers and lights only the one whose number opened the pane, a row by its own id', async () => {
     const { store, thread } = await answered(therm());
     const items = () => byTestId(thread(), 'statement');
@@ -218,7 +228,7 @@ describe('an arranged part reads as its blocks', () => {
       : { ...block, columns, rows: block.rows.map(row => ({ ...row, cells: columns.map((_, at) => row.cells[at] ?? `x${at}`) })) }));
     const [box] = byClass(byTestId((await answered(wide)).thread(), 'answer').at(-1), 'answer-table');
     expect(byType(box, 'table')[0]!.props.style).toEqual({ minWidth: '800px' });
-    const [plain] = byClass((await answered(therm())).thread(), 'answer-table');
+    const [plain] = byClass(await shownAnswer(therm()), 'answer-table');
     expect(byType(plain, 'table')[0]!.props.style).toBeUndefined();
   });
 

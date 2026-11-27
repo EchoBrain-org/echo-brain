@@ -121,7 +121,7 @@ export function Sidebar({ state }: { state: State }) {
             <HomeIcon /><span class="label">Home</span>{needs > 0 && <span class="badge" data-testid="sidebar-badge">{needs}</span>}
           </button>
           <button type="button" class={`side-row${askOpen ? ' current' : ''}`} data-testid="sidebar-ask" aria-current={askOpen ? 'page' : undefined}
-            onClick={backToAsk} onDragOver={noDrop} onDrop={noDrop}>
+            disabled={state.timeline.loading} onClick={backToAsk} onDragOver={noDrop} onDrop={noDrop}>
             <Ask /><span class="label">Ask</span>
           </button>
           <button type="button" class="side-row" data-testid="sidebar-capture" onClick={() => openCompose()}>

@@ -81,6 +81,21 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([first]);
   });
 
+  it('reopens unfinished questions and fills the original row even when another question finished first', () => {
+    const first = turn(3), last = turn(1);
+    const pending = { id: first.id, asked_at: first.asked_at, text: first.text, scope: first.scope, follows: null };
+    putTimeline(person, ARI, pending);
+    putTimeline(person, ARI, last);
+    putTimeline(person, ARI, { ...pending, needs_clarification: true });
+    expect(readTimeline(person, ARI)).toEqual([{ ...pending, needs_clarification: true }, last]);
+    expect(readTimeline(person, MINA)).toEqual([]);
+    const finished = { ...first, thread: last.id, clarification: 'The March one.' };
+    putTimeline(person, ARI, finished);
+    expect(readTimeline(person, ARI)).toEqual([finished, last]);
+    putTimeline(person, ARI, pending);
+    expect(readTimeline(person, ARI)).toEqual([finished, last]);
+  });
+
   it('keeps a new turn at the end and one already kept in its place, writing the file whole and leaving no temporary file', () => {
     const [first, second] = [turn(2), turn(1)];
     putTimeline(person, ARI, first);
@@ -439,13 +454,13 @@ describe('the timeline file (C5)', () => {
     putTimeline(person, ARI, arranged);
     const [readArranged] = readTimeline(person, ARI);
     expect(readArranged).toEqual(arranged);
-    expect(readArranged!.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
+    expect(readArranged && 'answer' in readArranged && readArranged.answer.parts[0]!.blocks!.map(block => block.kind)).toEqual(['answer', 'table', 'timeline', 'card', 'points', 'text', 'quote']);
     // An answer in blocks has no count of statements of its own (ADR-0051): 70 read back as written.
     const wide = arranged.answer.parts[0]!;
     const seventy = Array.from({ length: 70 }, (_, at) => ({ text: `Step ${at + 1}.`, citation_indexes: [0], private: wide.statements[0]!.private }));
     const long = turn(2, { answer: { ...arranged.answer, parts: [{ ...wide, statements: seventy, blocks: [{ kind: 'answer', statements: [0] }, { kind: 'points', ordered: true, statements: seventy.slice(1).map((_, at) => at + 1) }] }] } });
     putTimeline(person, ARI, long);
-    expect(readTimeline(person, ARI).find(entry => entry.id === long.id)?.answer.parts[0]!.statements).toHaveLength(70);
+    expect(readTimeline(person, ARI).find((entry): entry is TimelineTurn => entry.id === long.id && 'answer' in entry)?.answer.parts[0]!.statements).toHaveLength(70);
     const part = arranged.answer.parts[0]!;
     const blocks = part.blocks! as unknown as Record<string, unknown>[];
     const timeline = blocks[2] as { events: Record<string, unknown>[] };

@@ -209,15 +209,46 @@ test('an answer the writer arranged in blocks draws every block in the window, a
   const { page } = run;
   await askFromHome(page, 'Can THERM start PVT?');
   const answer = page.getByTestId('answer');
-  // The statement the answer opens with is its own short message (ADR-0057); the blocks follow in the next, and it is not said twice.
+  // The statement the answer opens with comes first, as its short answer (ADR-0057); the blocks follow under it, and it is not said twice.
   await expect(answer.locator('.msg.echo').first().getByTestId('statement-text')).toHaveText('Yes, PVT can start: the 72-hour soak passed on Oct 23.');
   await expect(answer.locator('.msg.echo')).toHaveCount(2);
   await expect(answer.getByText('Yes, PVT can start: the 72-hour soak passed on Oct 23.')).toHaveCount(1);
+  // ECHO's reply is plain text on the page: no line and no fill around either part of it, nor around its table.
+  expect(await answer.locator('.msg.echo, .answer-table').evaluateAll(parts => parts.map(part => {
+    const style = getComputedStyle(part);
+    return [style.borderTopWidth, style.backgroundColor];
+  }))).toEqual([['0px', 'rgba(0, 0, 0, 0)'], ['0px', 'rgba(0, 0, 0, 0)'], ['0px', 'rgba(0, 0, 0, 0)']]);
   await expect(answer.locator('h3.answer-heading')).toHaveText(['Soak test', 'Before PVT', 'Open risk']);
   for (const block of ['.answer-table', '.answer-timeline', '.answer-card', 'ol.answer-steps', '.answer-quote']) await expect(answer.locator(block).first()).toBeVisible();
   // A table keeps its own box.
   expect(await page.evaluate(() => document.querySelector('.ask')!.scrollWidth <= document.querySelector('.ask')!.clientWidth)).toBe(true);
 });
+test('a sentence\'s numbers stay on the line of its last word, however narrow the sentence wraps', async () => {
+  run = await launch('ask-blocks');
+  const { page } = run;
+  await askFromHome(page, 'Can THERM start PVT?');
+  await expect(page.getByTestId('answer')).toBeVisible();
+  // The short answer, a paragraph and a numbered step, each narrowed a pixel at a time: at no width is a number on a later
+  // line than its sentence's last word. Each has one number.
+  const stray = await page.evaluate(() => ['.msg.lead .answer-statement', '.answer-paragraph', '.answer-steps li'].map(selector => {
+    const item = document.querySelector<HTMLElement>(selector)!;
+    const words = item.querySelector('[data-testid="statement-text"]')!.firstChild as Text;
+    const last = document.createRange();
+    last.setStart(words, words.data.lastIndexOf(' ') + 1);
+    last.setEnd(words, words.data.length);
+    const numbers = [...item.querySelectorAll('[data-testid="citation"]')];
+    let alone = 0;
+    for (let width = 600; width >= 120; width -= 1) {
+      item.style.width = `${width}px`;
+      const word = [...last.getClientRects()].at(-1)!;
+      if (numbers.some(number => number.getBoundingClientRect().top >= word.bottom - 2)) alone += 1;
+    }
+    item.style.width = '';
+    return [numbers.length, alone];
+  }));
+  expect(stray).toEqual([[1, 0], [1, 0], [1, 0]]);
+});
+
 test('a long Ask shows one quiet line that names what it looks through while it works, then how many sources and how long', async () => {
   run = await launch('ask-progress');
   const { page } = run;

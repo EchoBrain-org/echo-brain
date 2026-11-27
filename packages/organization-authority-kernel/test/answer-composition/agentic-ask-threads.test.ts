@@ -266,6 +266,18 @@ describe("an Ask without threads or older turns is today's (ADR-0056)", () => {
     expect(audits[0]!.answer_sha256).toBe(canonicalSha256({ direct: response.direct ?? null, parts: response.parts, question: response.question }));
   });
 
+  it("can confirm a single implicit subject before any research starts", async () => {
+    const choices = [CHOICES[0]!];
+    const run = scripted({ resolver: [{ thread: "open", resolution: "clarify", choices }] });
+    const port = desk();
+    const { ask, audits } = askV8(port, run);
+    const response = await ask.answer({ question: "Did it ship?", previous: { ...SINGLE, candidate: true } });
+    expect(JSON.parse(run.of("resolver")[0]!.user_prompt).open.candidate).toBe(true);
+    expect(response).toMatchObject({ outcome: "clarify", choices });
+    for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
+    expect(audits[0]).toMatchObject({ rounds: 0, model_calls: 1 });
+  });
+
   it("gives the same calls and the same response with threads absent or undefined", async () => {
     const replies = () => scripted({ steps: [searchFor("Who owns the THERM-482 fix?", "THERM-482"), finishOn("Who owns the THERM-482 fix?", ["E1"])],
       writer: [writerReply([{ text: "Dev Patel owns the THERM-482 fix.", evidence: ["E1"] }])] });

@@ -383,7 +383,25 @@ export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'ch
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
  * it in the account's file on this device. Never sent to the Authority.
  */
+export interface PendingTurn {
+  readonly id: string;
+  readonly asked_at: string;
+  readonly text: string;
+  readonly scope: AskScope;
+  readonly follows: string | null;
+  /** Only the person's own clarification is retained. Source-derived choices are resolved afresh on retry. */
+  readonly clarification?: string;
+  readonly needs_clarification?: true;
+  /** Repeat the same placement decision when a person resumes an interrupted question. */
+  readonly action?: 'again' | 'everywhere';
+  readonly fixed?: true;
+  readonly candidate?: true;
+}
+
+export type TimelineEntry = PendingTurn | TimelineTurn;
+
 export interface TimelineTurn {
+  readonly clarification?: string;
   /** A UUID the page gave it. */
   readonly id: string;
   /** When it was asked, by this computer's clock (ISO 8601). */
@@ -773,12 +791,12 @@ export interface HostMethods {
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). `threads`: the asker's other threads (ADR-0056). */
   'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
-  'timeline.read': { params: { expect: Expect }; result: { turns: TimelineTurn[] } };
+  'timeline.read': { params: { expect: Expect }; result: { turns: TimelineEntry[] } };
   /**
    * Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go.
    * `known`: a change to a turn already kept, so only in its place: one Undo took out meanwhile stays out (ADR-0057, R15).
    */
-  'timeline.put': { params: { expect: Expect; turn: TimelineTurn; known?: true }; result: Record<string, never> };
+  'timeline.put': { params: { expect: Expect; turn: TimelineEntry; known?: true }; result: Record<string, never> };
   /**
    * Undo of a placement (ADR-0057, R15): takes one turn out of the file in a compare-and-set write, only while it is the
    * newest turn of an active thread and no kept turn names it. `removed`: the file does not hold it now.

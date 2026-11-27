@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { launch, type Launched } from './launch.js';
 
@@ -363,9 +363,12 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
     await expect.poll(() => view.evaluate(element => element.clientWidth)).toBe(widthBefore + by);
     await settled(page);
   };
+  // A reply is at most 680px wide (ADR-0057's plain reply), and wider than that a window re-wraps nothing. So the window
+  // "as it was" is 40px narrower than it launches: 100px wider than that still re-wraps every line of the answer.
+  const AS_IT_WAS = -40, WIDER = AS_IT_WAS + 100, NARROWER = -100;
   try {
     // At the end of a window 100px wider, the first sentence that starts in view, and where it reads there.
-    await widen(100);
+    await widen(WIDER);
     await expect.poll(bottom).toBeLessThan(1);
     const anchor = await view.evaluate(element => {
       const top = element.getBoundingClientRect().top;
@@ -373,7 +376,7 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
     });
     const held = view.locator(`[data-reading-anchor="${anchor}"]`);
     const at = await offset(held);
-    await widen(0);
+    await widen(AS_IT_WAS);
     await expect.poll(bottom).toBeLessThan(1);
     // Scrolled to read it there in the window as it was: short of the end by what the wider window takes off below it.
     await held.evaluate((element, top) => {
@@ -384,11 +387,11 @@ test('a sentence held by scrolling stays held when a wider window brings the vie
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await bottom()).toBeGreaterThanOrEqual(40);
     // Wider again, the sentence held where it is leaves nothing below the view.
-    await widen(100);
+    await widen(WIDER);
     await expect.poll(async () => Math.abs(await offset(held) - at)).toBeLessThanOrEqual(1);
     await expect.poll(bottom).toBeLessThan(1);
     // Narrower than at first, the end would take the sentence out of view: it stays where it is held.
-    await widen(-100);
+    await widen(NARROWER);
     await expect(held).toBeInViewport({ ratio: 1 });
     await expect.poll(async () => Math.abs(await offset(held) - at)).toBeLessThanOrEqual(1);
   } finally {
@@ -425,7 +428,28 @@ test('a latest citation chosen at the end while a question is on its way opens i
   await expect(page.getByTestId('asking')).toHaveCount(0);
 });
 
-test('the line that says ECHO moved a question going away, when its Undo is refused, leaves the sentence being read where it was: only a new question, answer, choice or failure goes to the end', async () => {
+test('resuming an older question keeps its progress and answer in view', async () => {
+  run = await launch('ask-progress');
+  const { page, home } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('ask-field').fill('What changed?');
+  await page.getByTestId('ask-field').press('Enter');
+  await page.getByTestId('ask-cancel').click();
+  await page.getByTestId('sidebar-ask').click();
+  const resume = page.getByTestId('resume-turn');
+  await expect(resume).toBeVisible();
+  writeFileSync(join(home, 'release-ask'), '');
+  for (let i = 1; i <= 5; i++) await ask(page, `Status update ${i}?`);
+  await expect(resume).not.toBeInViewport();
+  rmSync(join(home, 'release-ask'));
+  await resume.click();
+  await expect(page.getByTestId('asking')).toBeInViewport();
+  writeFileSync(join(home, 'release-ask'), '');
+  const answer = page.getByTestId('turn').filter({ has: page.getByText('What changed?', { exact: true }) });
+  await expect(answer.getByTestId('statement-text').first()).toBeInViewport();
+});
+
+test('a routed answer arrives at the end of the same scrollable history', async () => {
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
@@ -436,51 +460,8 @@ test('the line that says ECHO moved a question going away, when its Undo is refu
   await page.getByTestId('sidebar-home').click();
   await ask(page, 'When does the pilot start?');
   await ask(page, 'Long readout on billing invoices');
-  await expect(page.getByTestId('moved-note')).toBeVisible();
+  await expect(page.getByTestId('moved-note')).toHaveCount(0);
+  await expect(page.locator('.msg.you')).toHaveText(['Who owns billing?', 'When does the pilot start?', 'Long readout on billing invoices']);
   const bottom = () => page.getByTestId('ask-view').evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(bottom).toBeLessThan(1);
-  // The person reads the answer's second sentence with the line and its Undo wholly in view above it. The line is held 24
-  // pixels down the view and the sentence's place is read from there: how far apart the two sit differs by platform, and
-  // a click on a link the view clips would scroll it in, which is the test moving the page, not the page.
-  const sentence = page.getByTestId('turn').last().getByTestId('statement-text').nth(1);
-  await page.getByTestId('moved-note').evaluate((note) => {
-    const view = note.closest('.ask')!;
-    view.scrollTop += note.getBoundingClientRect().top - view.getBoundingClientRect().top - 24;
-  });
-  await settled(page);
-  await expect(page.getByTestId('placed-undo')).toBeInViewport({ ratio: 1 });
-  await expect(sentence).toBeInViewport({ ratio: 1 });
-  const read = await offset(sentence);
-  const stays = async () => {
-    await settled(page);
-    await expect.poll(async () => Math.abs(await offset(sentence) - read)).toBeLessThanOrEqual(1);
-  };
-  await stays();
-  // An Undo this computer cannot write (its timeline folder made a link) removes nothing and keeps its line: the sentence stays.
-  const folder = join(run.home, '.local', 'share', 'echo-brain', 'person', 'ask-timeline-v1');
-  const refused = 'That question could not be taken back, so its answer is where it was.';
-  renameSync(folder, `${folder}.kept`);
-  symlinkSync(`${folder}.kept`, folder);
-  try {
-    await page.getByTestId('placed-undo').click();
-    await expect(page.getByTestId('toast')).toHaveText(refused);
-    await expect(page.getByTestId('moved-note')).toBeVisible();
-    await stays();
-  } finally {
-    rmSync(folder);
-    renameSync(`${folder}.kept`, folder);
-  }
-  // The file comes to hold a later turn in that thread, which the page has not read: the moved turn is no longer its
-  // newest, so the file itself refuses the Undo (R15). The offer ends, its line goes from above the answer being read,
-  // and the sentence is still where it was.
-  const [name] = readdirSync(folder).filter(each => each.endsWith('.json'));
-  const kept = JSON.parse(readFileSync(join(folder, name!), 'utf8')) as { turns: { id: string; asked_at: string; thread: string; text: string }[] };
-  const movedTurn = kept.turns.find(turn => turn.text === 'Long readout on billing invoices')!;
-  kept.turns.push({ ...kept.turns.find(turn => turn.text === 'Who owns billing?')!, id: '99999999-9999-4999-8999-999999999999', asked_at: new Date().toISOString(), thread: movedTurn.thread });
-  writeFileSync(join(folder, name!), JSON.stringify(kept));
-  await page.getByTestId('placed-undo').click();
-  await expect(page.getByTestId('moved-note')).toHaveCount(0);
-  await expect(page.getByTestId('toast')).toHaveText(refused);
-  await expect(page.getByTestId('turn').last().getByTestId('question')).toHaveText('Long readout on billing invoices');
-  await stays();
 });

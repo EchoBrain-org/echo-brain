@@ -193,18 +193,6 @@ export function shownInFull(turn: TimelineTurn, turns: readonly TimelineTurn[], 
   return turns.at(-1)?.id === turn.id || full.includes(turn.id);
 }
 
-/** How many earlier questions Ask shows as lines before the older ones go behind one line. */
-const EARLIER_SHOWN = 3;
-
-/**
- * The earlier questions behind Ask's one "N earlier questions" line: every
- * turn shown as a line but the newest three, oldest first.
- */
-export function behindEarlierLine(turns: readonly TimelineTurn[], full: readonly string[]): string[] {
-  const folded = turns.filter(turn => !shownInFull(turn, turns, full));
-  return folded.slice(0, Math.max(0, folded.length - EARLIER_SHOWN)).map(turn => turn.id);
-}
-
 /**
  * The turn a follow-up continues: the turn opened (from its line, or chosen from the bar's suggestions, the latest included),
  * or else the latest, however long ago it was asked. A question typed with Ask open is a follow-up because the person asks it there.
@@ -252,9 +240,9 @@ export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined):
  * bound. `label`: its conversation's label, on a follow-up only (ADR-0057).
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
-  earlier: string = askText(turn.question), label?: string): AskPrevious {
+  earlier: string = askText(turn.question), label?: string, candidate?: true): AskPrevious {
   const chosen = readableStatements(turn, known);
-  const labelled = purpose === 'follow_up' && label !== undefined ? { label } : {};
+  const labelled = purpose === 'follow_up' ? { ...(label === undefined ? {} : { label }), ...(candidate ? { candidate } : {}) } : {};
   let previous: AskPrevious = { purpose, ...carried(turn, earlier, chosen), ...labelled };
   while (chosen.length > 0 && bodyBytes(question, scope, previous) > BODY_ROOM) {
     chosen.pop();
@@ -531,7 +519,7 @@ export function continuedThread(thread: Thread, threads: readonly Thread[]): Thr
  */
 export function otherChains(chains: readonly Chain[], scope: AskScope, continued: string | null): Chain[] {
   return newestFirst(chains.filter(chain => !chain.threads.some(thread => thread.id === continued) && chain.questions.length > 0
-    && (scope.kind === 'global' || sameScope(chain.home, scope))));
+    && sameScope(chain.home, scope)));
 }
 
 /** The door's rows: conversations whose label or a typed question holds `find`, the one asked in most recently first. */
