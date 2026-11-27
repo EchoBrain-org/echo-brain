@@ -1,8 +1,4 @@
-// Ask threads (ADR-0056) and the conversations they make (ADR-0057), in the rules and in the store: which thread a turn
-// belongs to, a thread's home and name, a conversation (chain) and its label, what an Ask carries of the other
-// conversations and of its own older turns and how that is cut to fit; where an answer lands, a joined thread never
-// changing, "Which one?" and "New question"; what ECHO just did and its Undo; links; the door; and the way out of every
-// wait (cancel, failure, another account, a page change, closing Ask, the timeline read again).
+// Ask context selection, thread links, clarification, and how the store resumes a saved conversation.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskScope, AskThread, PendingTurn, TimelineTurn } from '../../src/shared/protocol.js';

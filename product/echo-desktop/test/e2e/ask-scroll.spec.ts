@@ -453,8 +453,7 @@ test('a routed answer arrives at the end of the same scrollable history', async 
   run = await launch('ask-threads');
   const { page } = run;
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
-  // Two conversations with no project. A long question about billing, typed in the pilot's: ECHO moves it to billing's,
-  // and one faint line above it says so, with Undo.
+  // The third question returns to billing. All three stay in chronological order on Home.
   await ask(page, 'Who owns billing?');
   await page.getByTestId('back').click();
   await page.getByTestId('sidebar-home').click();

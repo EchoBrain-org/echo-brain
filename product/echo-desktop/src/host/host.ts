@@ -19,7 +19,7 @@ import { askText } from '../shared/query.js';
 import { askArgv, askCheckArgv, askCheckRequest, askContext, askLabels, askProgressLines, askRecordArgv, askSourceArgv, silence } from './ask.js';
 import { jsonLines, lastJson, runCli, type CliRun, type PersonCli } from './cli.js';
 import { lost, pinRefusal, refreshStops } from './session.js';
-import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, removeTimeline, TimelineWriteUnsure, timelineEntry } from './timeline.js';
+import { deleteOtherTimelines, deleteTimeline, putTimeline, readTimeline, TimelineWriteUnsure, timelineEntry } from './timeline.js';
 import {
   abandonView, answerView, askCheckView, changeView, createdView, directoryView, employeesView, evidenceView, failureView, homeView, invitationView, listView,
   membersView, noteTitle, openItemsView, openItemView, openView, projectJiraMappingView, projectConfluenceMappingView, confluenceSpacesView, projectGranolaMappingView, granolaFoldersView, projectPageView, projectView,
@@ -94,7 +94,7 @@ const modules = load();
 modules.catch(error => { console.error('person host failed to load the client:', error); });
 
 /** Calls that never reach the Authority: they wait out a refresh, never start one. */
-const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put', 'timeline.remove']);
+const LOCAL: ReadonlySet<HostMethodName> = new Set<HostMethodName>(['app.status', 'documents.abandon', 'timeline.read', 'timeline.put']);
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID = new RegExp(`^mem_${UUID}$`);
 const ASK_CANCEL_ID = new RegExp(`^${UUID}$`);
@@ -637,11 +637,6 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
       if (turn === null || (known !== undefined && known !== true)) return code('invalid_request');
       // Pruned by this computer's clock, the one the page asked by.
       return onDevice(expect, directory => { putTimeline(directory, expect, turn, known === true); return {}; });
-    }
-    case 'timeline.remove': {
-      const { expect, turn } = params as Params<'timeline.remove'>;
-      if (typeof turn !== 'string' || !ASK_CANCEL_ID.test(turn)) return code('invalid_request');
-      return onDevice(expect, directory => removeTimeline(directory, expect, turn));
     }
     case 'ask.check': {
       // The person client prints the check as its last line.

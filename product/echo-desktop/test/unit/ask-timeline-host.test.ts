@@ -24,12 +24,12 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
-import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS, THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
+import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
 import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
-  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, removeTimeline, TIMELINE_FILE_FRAME_BYTES,
+  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES,
   timelinePath, timelineTurn, TimelineWriteUnsure,
 } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
@@ -106,98 +106,40 @@ describe('the timeline file (C5)', () => {
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('takes back only the turn ECHO just placed, in one compare-and-set write: the newest of an active thread that no kept turn names (ADR-0057, R12, R15)', () => {
-    const [first, placed] = [turn(2), turn(1)];
-    putTimeline(person, ARI, { ...first, thread: first.id });
-    putTimeline(person, ARI, { ...placed, thread: first.id, follows: first.id });
-    const before = readFileSync(timelinePath(person, ARI), 'utf8');
-    vi.mocked(renameSync).mockClear();
-    // Not the newest of its thread, and named by a later turn: nothing is written.
-    expect(removeTimeline(person, ARI, first.id, NOW)).toEqual({ removed: false });
-    // Named by any kept turn, however: its follows, again_of, carried or continues. Each refusal writes nothing.
-    for (const names of [{ follows: placed.id }, { again_of: placed.id }, { carried: [placed.id] }, { continues: [placed.id] }]) {
-      const other = turn(0, names);
-      putTimeline(person, ARI, { ...other, thread: other.id });
-      const held = readFileSync(timelinePath(person, ARI), 'utf8');
-      vi.mocked(renameSync).mockClear();
-      expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: false });
-      expect(renameSync).not.toHaveBeenCalled();
-      expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(held);
-      // That turn is itself the newest of its own thread, named by none: it goes, in one write.
-      expect(removeTimeline(person, ARI, other.id, NOW)).toEqual({ removed: true });
-      expect(renameSync).toHaveBeenCalledTimes(1);
-    }
-    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-    // A turn the file does not hold is not held: nothing to remove, and nothing written.
-    vi.mocked(renameSync).mockClear();
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    expect(renameSync).not.toHaveBeenCalled();
-  });
-
-  it('never takes a turn out of a joined thread: one asked 7 days ago or more, by this computer\'s clock, or one that names no thread (R11, R12)', () => {
-    const old = turn(8);
-    putTimeline(person, ARI, { ...old, thread: old.id });
-    const asked = Date.parse(old.asked_at);
-    expect(removeTimeline(person, ARI, old.id, asked + THREAD_ACTIVE_MS)).toEqual({ removed: false });
-    expect(removeTimeline(person, ARI, old.id, asked + THREAD_ACTIVE_MS - 1)).toEqual({ removed: true });
-    // Saved before threads: in no thread the file knows of.
-    const legacy = turn(0);
-    putTimeline(person, ARI, legacy);
-    expect(removeTimeline(person, ARI, legacy.id, NOW)).toEqual({ removed: false });
-    expect(readTimeline(person, ARI)).toEqual([legacy]);
-  });
-
-  it('reads the file strictly for a removal: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds nothing', () => {
-    const first = turn(1);
-    expect(removeTimeline(person, ARI, first.id, NOW)).toEqual({ removed: true });
+  it('updates source visibility in place only for a turn already in the file', () => {
+    const [first, second] = [turn(2), turn(1)];
+    const marked = { ...first, unreadable: [0] };
+    putTimeline(person, ARI, marked, true);
     expect(existsSync(timelinePath(person, ARI))).toBe(false);
-    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, first);
+    vi.mocked(renameSync).mockClear();
+    putTimeline(person, ARI, { ...second, unreadable: [0] }, true);
+    expect(renameSync).not.toHaveBeenCalled();
+    expect(readTimeline(person, ARI)).toEqual([first]);
+    putTimeline(person, ARI, second);
+    putTimeline(person, ARI, marked, true);
+    expect(readTimeline(person, ARI)).toEqual([marked, second]);
+  });
+
+  it('leaves invalid or unreadable history untouched on a source visibility update', () => {
+    const first = turn(1);
+    const marked = { ...first, unreadable: [0] };
+    putTimeline(person, ARI, first);
     const path = timelinePath(person, ARI);
     for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {
       writeFileSync(path, text, { mode: 0o600 });
-      expect(() => removeTimeline(person, ARI, first.id, NOW)).toThrow();
+      expect(() => putTimeline(person, ARI, marked, true)).toThrow();
       expect(readFileSync(path, 'utf8')).toBe(text);
     }
-    // A file no one may read: a removal fails, where a read or a put takes it as empty.
-    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, first);
     chmodSync(path, 0o000);
     try {
-      expect(() => removeTimeline(person, ARI, first.id, NOW)).toThrow();
+      expect(() => putTimeline(person, ARI, marked, true)).toThrow();
       expect(readTimeline(person, ARI)).toEqual([]);
     } finally {
       chmodSync(path, 0o600);
     }
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-  });
-
-  it('makes a change to a kept turn only in its place: one Undo took out meanwhile is not brought back, and nothing is written (R15)', () => {
-    const [first, placed] = [turn(2), turn(1)];
-    putTimeline(person, ARI, { ...first, thread: first.id });
-    putTimeline(person, ARI, { ...placed, thread: first.id });
-    const marked = { ...placed, thread: first.id, unreadable: [0] };
-    putTimeline(person, ARI, marked, true);
-    expect(readTimeline(person, ARI)[1]).toEqual(marked);
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    vi.mocked(renameSync).mockClear();
-    putTimeline(person, ARI, marked, true);
-    expect(renameSync).not.toHaveBeenCalled();
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-    // The first save of a turn still keeps it at the end.
-    putTimeline(person, ARI, marked);
-    expect(readTimeline(person, ARI)[1]).toEqual(marked);
-    // A change is read strictly: a file that cannot be read fails it and is left as it was, where a first save replaces it.
-    const path = timelinePath(person, ARI);
-    writeFileSync(path, 'not json', { mode: 0o600 });
-    expect(() => putTimeline(person, ARI, marked, true)).toThrow();
-    expect(readFileSync(path, 'utf8')).toBe('not json');
-    putTimeline(person, ARI, marked);
-    expect(readTimeline(person, ARI)).toEqual([marked]);
-    // With no file there is nothing to change, and none is made.
-    rmSync(path);
-    putTimeline(person, ARI, marked, true);
-    expect(existsSync(path)).toBe(false);
+    expect(readTimeline(person, ARI)).toEqual([first]);
   });
 
   it('leaves out a saved label that is not in form and shows its turn: a label that fails is dropped, never the answer it came with (R2)', () => {
@@ -229,7 +171,7 @@ describe('the timeline file (C5)', () => {
     // A write that fails before the new file has its name leaves the file as it was, and says so plainly.
     vi.mocked(renameSync).mockImplementationOnce(() => { throw new Error('EIO'); });
     let thrown: unknown;
-    try { removeTimeline(person, ARI, second.id, NOW); } catch (error) { thrown = error; }
+    try { putTimeline(person, ARI, turn()); } catch (error) { thrown = error; }
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBeInstanceOf(TimelineWriteUnsure);
     expect(readTimeline(person, ARI)).toHaveLength(2);

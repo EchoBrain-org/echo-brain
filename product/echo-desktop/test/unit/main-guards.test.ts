@@ -39,11 +39,10 @@ describe('a call no host answered', () => {
     expect(hostGoneFailure('host_restarted', false, 7, false)).toEqual({ code: 'host_restarted', retryable: true });
   });
 
-  it('counts a save or a removal of this computer\'s own Ask timeline as a change, so one no host took was never made', () => {
-    for (const method of ['timeline.put', 'timeline.remove']) {
-      expect(mayChange(method, {})).toBe(true);
-      expect(hostGoneFailure('host_restarted', mayChange(method, {}), undefined, false)).toEqual({ code: 'host_restarted', retryable: true, mutation_outcome: 'not_submitted' });
-    }
+  it('marks an unsubmitted Ask history save as a write', () => {
+    const changes = mayChange('timeline.put', {});
+    expect(changes).toBe(true);
+    expect(hostGoneFailure('host_restarted', changes, undefined, false)).toEqual({ code: 'host_restarted', retryable: true, mutation_outcome: 'not_submitted' });
     expect(mayChange('timeline.read', {})).toBe(false);
     expect(mayChange('runs', { request: { operation: 'send' } })).toBe(true);
     expect(mayChange('runs', { request: { operation: 'items' } })).toBe(false);

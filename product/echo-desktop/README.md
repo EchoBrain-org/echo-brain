@@ -66,64 +66,38 @@ research did not cover is not shown, and an answer that came has no Try again:
 only a question that failed does. "Nothing in Apollo matched", with **Ask
 across everything you can see**, stays.
 
-Ask keeps a timeline (ADR-0047): every question you asked and its answer, on
-this computer only, in one owner-only file per account beside the person
-session (`ask-timeline-v1`), every turn until the file would pass what the runtime can read back as one string. Our own sign-out,
-or another account signing in here, deletes it; a session that merely ended
-keeps it. The Authority never stores it. Ask opens over the page on one
-conversation (ADR-0056 and ADR-0057, proposed): the turns that carry the same
-thread label, as messages, yours on the right and ECHO's replies on the left,
-with nothing on the page that names or lists a thread. Threads are how ECHO
-keeps context underneath. One is active for 7 days after its newest turn and
-then joined, part of memory, which never changes: a question that belongs to
-a joined thread starts a new one that continues it, and one line at its top,
-"Continues (label) from (date)", opens the older part. Threads that continue
-or are linked to one another are one conversation, worked out from the saved
-turns each time; nothing stores it. When ECHO puts your question somewhere
-other than what you were looking at, one faint line says so with **Undo**,
-which stops the question or takes its turn back out of this computer's file
-(only while it is still the newest of its thread and nothing names it), then
-asks your words as a new question. The title, **Ask**, is the one door: it,
-or the up arrow in the empty bar, opens a list with Find, **New question**
-and one row for each conversation, labelled only in words you typed. You are
-in a thread once you have asked in it or picked it since Ask opened; the
-sidebar's Ask only shows the one you last used. In a thread, a typed question
-continues its conversation. Otherwise it is placed among all your
-conversations, the one shown included: it starts one, or is asked in the one
-the answer says it belongs to. The latest turn, and those asked since Ask
-opened, show in full; each of the three before shows its question and the
-reply's first message, which opens the rest; older ones sit behind one line.
-A turn's time shows in the middle above it when it is the first shown, the
-first of its day, or an hour after the one before. Back, Escape or any page
-closes Ask and keeps the timeline. Opening Ask checks what the newest ten turns of its thread
-cited in one content-free read (`person ask-check`): at most every five
-minutes for each thread, and quiet when it fails. A turn opened from its first
-message or a suggestion is checked too when nothing in the last five minutes
-said what its sources are now, and what a check said shows for five minutes
-only. An earlier turn's first message opens the rest of its answer as it was,
-dimmed, under it: a sentence whose source changed is lit in the signal under
-"Changed since Oct 14", one citing something you can no longer read is left
-out, and **Ask again** sits on the line under it. Nothing is said when nothing
-changed (ADR-0049); a turn with every sentence left out says you can no longer
-read what it cited, with Ask again under it.
-Ask again asks the same full question in the same scope (a turn asked in Mine
-before it went, at Home): the new answer lands at the bottom, opening with
-"Changed since Oct 14" and what is different, each cited, or nothing when
-nothing material changed, and the old turn folds away. A question shows once
-on a thread: one asked again word for word in the same place folds the one
-before. The empty bar suggests the questions asked in its place first,
-newest first; one opens its thread at its turn instead of asking it again.
+Ask shows one chronological conversation at Home and one in each project.
+Each question appears when you submit it, including repeats. The latest
+answer and answers received while Ask is open appear in full. Older answers
+show their opening message, which you can expand in place. A timestamp marks
+the first turn, the start of a day and a gap of an hour or more. Choosing a
+previous question from the bar's suggestions opens its answer. Click the
+**Ask** title or press the up arrow in the empty bar to find a conversation
+or choose **New question**.
 
-Typed in a thread you are in, a question continues the conversation: it carries the
-earlier turn opened, or else the latest one, however long ago it was asked
-(the question, and the sentences a check of the last five minutes found you can
-still read, within the Ask's request body bound). It waits for that check; with none, it
-carries the question alone. A turn asked in the last five minutes needs none:
-its answer just read what it cites.
-ECHO works out what "it" or "that ticket" means: when one thing fits it answers
-at once, and the turn's line later reads the full question ("Who owns
-THERM-482?"); when several fit, the turn says "Which one?" with a button each,
-which asks that one's full question. It never guesses.
+The desktop saves your question before research begins. Its answer, a retry
+or a clarification updates the same turn. If Ask closes while you are
+waiting, the question stays in the transcript so you can resume it. All
+scopes share one owner-only file per account in `ask-timeline-v1` beside the
+Person session. Turns stay until the file reaches the size the desktop can
+read back. Signing out or switching accounts here clears the old account's
+file. An expired session keeps it. [Ask timeline](../../docs/decisions/ADR-0047-ask-timeline.md)
+
+Topics stay underneath the conversation. Opening an earlier answer gives your
+next question a subject. Otherwise ECHO uses completed turns from the same
+scope. Naming an older subject can continue it directly. When a reference
+such as “did it ship?” leaves the subject unclear and the choice would
+change the research, ECHO asks what you mean in the transcript. You can pick
+a suggestion or type a clarification. [Ask memory milestone](../../docs/product/2026-11-24-ask-memory-v1.md#november-27-milestone)
+
+Opening Ask checks the sources of saved answers in the current scope. Opening
+an older answer prioritizes its check. A result from `person ask-check`
+stays fresh for five minutes. The expanded answer marks a sentence whose
+source changed and hides sentences whose sources you can no longer read.
+If every sentence is hidden, the answer tells you why. **Ask again** runs
+the question in the same scope and adds the new answer at the end, with
+cited changes when research finds any. The earlier answer keeps its place.
+[Quieter Ask](../../docs/decisions/ADR-0049-only-me-is-a-lock.md)
 
 An answer may draft follow-ups (ADR-0053): when you ask for a task to be
 handed to someone, the answer carries a card that already waits, not sent, in

@@ -314,8 +314,7 @@ button.msg.folded:hover { color: var(--text); }
 /* An old answer opened: as it was, dimmed, with Show less on the line under it. */
 .opened { display: flex; flex-direction: column; gap: 6px; }
 .reply.dimmed .msg, .reply.dimmed :is(.answer-lead, .answer-card-title) { color: var(--muted); }
-/* A faint line in the middle of the conversation, as a texting app has: when a turn was asked, what ECHO just did with a
-   question and its Undo, the older part a chat continues, and the earlier questions folded away. */
+/* The timestamp between turns. */
 .note { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: center; gap: 2px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
 .note.stamp { font-size: 12px; }
 /* The door (ADR-0057): Ask's title is a button that reads as a title, and its list opens under it, over the page. */

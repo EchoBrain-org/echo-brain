@@ -5,7 +5,6 @@
 import type { VNode } from 'preact';
 import { afterEach, beforeEach, vi } from 'vitest';
 import type { AskStep, Expect, OpenItemsView, ProjectSummary, TimelineTurn } from '../../src/shared/protocol.js';
-import { THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
 import type { AskTook, State } from '../../src/renderer/store.js';
 
 export const ok = (value: unknown) => ({ ok: true, value });
@@ -87,13 +86,7 @@ export function changesFor(lists: { active: ProjectSummary[]; archived: ProjectS
   });
 }
 
-/**
- * The host's Ask timeline files (ADR-0047), by account, as `timeline.put` keeps
- * turns (in place, or at the end, a `known` one only in place; one the file has in a thread stays in it),
- * `timeline.remove` takes back the one ECHO just placed (ADR-0057) and
- * `timeline.read` reads them. A test reads or seeds them, or deletes one as the host's own
- * sign-out does.
- */
+/** In-memory timeline files for the renderer tests, one per account. */
 export const timelineFiles = new Map<string, TimelineTurn[]>();
 export const fileOf = (account: Expect) => `${account.authority} ${account.membership_id}`;
 
@@ -120,20 +113,6 @@ export function rpcFor(held: Held, handlers: Record<string, Handler>, lists: () 
         const put = thread === undefined ? turn : { ...turn, thread };
         if (at >= 0 || params.known !== true) timelineFiles.set(fileOf(params.expect as Expect), at >= 0 ? kept.map(other => (other.id === turn.id ? put : other)) : [...kept, turn]);
         return ok({});
-      }
-      case 'timeline.remove': {
-        // Compare and set, as the host removes (removeTimeline): only the newest turn of an active thread, by this
-        // computer's clock, that no kept turn names; a turn the file does not hold is not held.
-        const id = params.turn as string;
-        const file = timelineFiles.get(fileOf(params.expect as Expect)) ?? [];
-        const at = file.findIndex(turn => turn.id === id);
-        if (at < 0) return ok({ removed: true });
-        const { thread, asked_at } = file[at]!;
-        const names = (turn: TimelineTurn) => turn.follows === id || turn.again_of === id || turn.carried?.includes(id) === true || turn.continues?.includes(id) === true;
-        const removed = thread !== undefined && Date.now() - Date.parse(asked_at) < THREAD_ACTIVE_MS
-          && !file.slice(at + 1).some(later => later.thread === thread) && !file.some(other => other.id !== id && names(other));
-        if (removed) timelineFiles.set(fileOf(params.expect as Expect), file.filter(turn => turn.id !== id));
-        return ok({ removed });
       }
       case 'ask.check': return fail('not_supported');
       case 'projects.activity': return ok({ items: lists().active.map(project => ({ project_id: project.project_id, latest_at: null })) });

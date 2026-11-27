@@ -690,7 +690,7 @@ export function clearToast(shown: number): void {
 
 /**
  * Whether `patch` is a move of the person's (navSeq): a page, item or view changed, Ask closed or a question started, or
- * Home zoomed. The door's "New question", an Undo and the bar widened count too (newQuestion, undoPlaced, widenScope).
+ * Home zoomed.
  */
 function navigated(before: State, patch: Partial<State>): boolean {
   if ('ask' in patch && (patch.ask === null || (patch.ask?.asking && !before.ask?.asking))) return true;
@@ -3638,10 +3638,7 @@ async function loadTimeline(): Promise<void> {
 }
 
 /**
- * Nothing of the account's timeline stays on screen or in memory: signed out, or another account. Its file is the
- * host's. An Undo's removal on its way ends here: its reply is for a timeline that is gone. So do a question on its
- * way or being prepared and a jump still reading its project: they were built from turns that are gone, and the same
- * account signing back in reads them again.
+ * Clears the previous account's timeline from memory and invalidates its in-flight questions and project jumps.
  */
 function forgetTimeline(): void {
   timelineSeq += 1;
@@ -3695,13 +3692,6 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
 /** What the person is told when a turn could not be kept on this computer. */
 export const TURN_NOT_SAVED = 'This answer could not be saved on this computer, so it will be gone after ECHO restarts.';
 
-/**
- * Keeps turns, here and in the account's file: each in place of the turn with
- * its id, or at the end, named with its thread (ADR-0056). `known`: a change
- * to turns already kept, made only in their place, so one Undo took out
- * meanwhile stays out (R15). A put that fails is not retried; the page says
- * the turn shows only until the timeline is read again.
- */
 function isAnswered(turn: TimelineEntry): turn is TimelineTurn {
   return 'answer' in turn;
 }
@@ -4877,7 +4867,6 @@ function emptyBar(): void {
 /** Return: asks the bar's scope, and the bar empties. */
 export function submitBar(): void {
   const text = state.barText;
-  // While Ask is busy (a question on its way, an Undo being kept) the next question waits in the bar.
   if (text.trim() === '' || askBusy()) return;
   emptyBar();
   void ask(text, state.barScope);

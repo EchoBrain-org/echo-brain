@@ -470,8 +470,7 @@ export interface TimelineTurn {
 }
 
 /**
- * How long a thread stays active after its newest turn (ADR-0057, R11): the founder's rule, a week. Nothing is stored:
- * the page and the host both work it out from the turns' own times. A literal, as the sandboxed renderer imports this file.
+ * The page considers a thread active for one week after its newest turn (ADR-0057, R11).
  */
 export const THREAD_ACTIVE_MS = 7 * 24 * 60 * 60_000;
 
@@ -794,14 +793,9 @@ export interface HostMethods {
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineEntry[] } };
   /**
    * Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go.
-   * `known`: a change to a turn already kept, so only in its place: one Undo took out meanwhile stays out (ADR-0057, R15).
+   * With `known`, updates only a turn the file still holds.
    */
   'timeline.put': { params: { expect: Expect; turn: TimelineEntry; known?: true }; result: Record<string, never> };
-  /**
-   * Undo of a placement (ADR-0057, R15): takes one turn out of the file in a compare-and-set write, only while it is the
-   * newest turn of an active thread and no kept turn names it. `removed`: the file does not hold it now.
-   */
-  'timeline.remove': { params: { expect: Expect; turn: string }; result: { removed: boolean } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -909,7 +903,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.remove': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -935,7 +929,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** A call that may change what is kept, the Authority's or this computer's timeline: one no host took is known not made. */
 export function mayChange(method: string, params: unknown): boolean {
-  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.remove';
+  return isWriteCall(method, params) || method === 'timeline.put';
 }
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(

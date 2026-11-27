@@ -1,7 +1,5 @@
-// Ask memory (ADR-0056, ADR-0057), in the real app with the fixture Authority, whose `ask-threads` mode places a question
-// among the conversations its request carries and labels the one it continues: one conversation on the page with nothing
-// that names a thread, the door behind the title, a question ECHO moves and its Undo on this computer's file, a link that
-// moves nothing, a thread a week of quiet ended, "Which one do you mean?", and what of the conversations a request carries.
+// The fixture Authority places each question using the context the desktop sends. The page keeps one chronological
+// conversation per scope and asks for clarification when the subject is ambiguous.
 import { expect, test, type Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -1,9 +1,8 @@
 // The Ask timeline's file (ADR-0047): one per account, beside the person
 // session, readable by its owner only. The Authority never sees it. A put
 // keeps one turn (a new one at the end, an old one in its place; a change to a
-// kept turn only in its place); a remove takes back the one turn ECHO just
-// placed (ADR-0057). Every other turn stays,
-// however old and however many, until the file would pass what this computer
+// kept turn only in its place). Every other turn stays, however old and
+// however many, until the file would pass what this computer
 // can read back as one file; only then do the oldest go. Each write puts a
 // private temporary file in place of the old one, so a reader never meets half
 // a file.
@@ -22,7 +21,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ITEM_ID, THREAD_ACTIVE_MS, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect, type TimelineAnswer, type TimelineEntry, type TimelineTurn,
+  ITEM_ID, type AnswerSource, type AnswerStatement, type ArrangedBlock, type AskScope, type Expect, type TimelineAnswer, type TimelineEntry, type TimelineTurn,
 } from '../shared/protocol.js';
 
 /** The folder's name, inside the person client's own data folder. */
@@ -121,66 +120,34 @@ export function pruneTurns<T>(turns: readonly T[], bytes = MAX_TIMELINE_FILE_BYT
 }
 
 /**
- * Keeps `turn` in the account's file: in place of the turn with its id, or at
- * the end. `known`: a change to a turn already kept, so only in its place: one
- * the file no longer holds was taken back (removeTimeline), and a change still
- * on its way then never brings it back; a file that cannot be read fails it,
- * where a first save replaces such a file. A kept turn stays in the thread the
- * file has it in, whatever the page sends: no write moves a turn between
- * threads (ADR-0057, R12).
+ * Appends a new turn or updates an existing one in its original thread.
+ * A `known` update requires a readable file and skips a turn that has since
+ * been pruned. A late pending save cannot overwrite a completed answer.
  */
 export function putTimeline(personDirectory: string, account: Expect, turn: TimelineEntry, known = false): void {
-  // A change is read strictly: with a file that cannot be read it fails, and is never taken as made.
-  rewriteTimeline(personDirectory, account, (turns) => {
-    const put = turn as unknown as StoredTurn;
-    const at = turns.findIndex(kept => kept.id === turn.id);
-    if (at < 0) return known ? null : [...turns, put];
-    if ('answer' in turns[at]! && !('answer' in turn)) return null;
-    const { thread } = turns[at]!;
+  const directory = folder(personDirectory, 'write');
+  if (directory === null) throw new Error('The Ask timeline folder is not private');
+  const turns = storedTurns(personDirectory, account, known);
+  const put = turn as unknown as StoredTurn;
+  const at = turns.findIndex(kept => kept.id === turn.id);
+  if (at < 0) {
+    if (known) return;
+    turns.push(put);
+  } else {
+    const kept = turns[at]!;
+    if ('answer' in kept && !('answer' in turn)) return;
+    const { thread } = kept;
     turns[at] = typeof thread === 'string' && ID.test(thread) ? { ...put, thread } : put;
-    return turns;
-  }, known);
-}
-
-/**
- * Undo of a placement (ADR-0057, R15): takes the turn out in one compare-and-set write, only while the file holds it as
- * the newest turn of an active thread (R12: a joined thread loses none) that no kept turn names (`follows`, `again_of`,
- * `carried`, `continues`), so nothing kept is left pointing at a turn that is gone. Answers whether the file holds it
- * now: a turn it never held is not held. Read strictly: an unreadable file is a failure, not one with nothing to remove.
- */
-export function removeTimeline(personDirectory: string, account: Expect, id: string, now = Date.now()): { removed: boolean } {
-  const names = (turn: StoredTurn): boolean => turn.follows === id || turn.again_of === id
-    || [turn.carried, turn.continues].some(list => Array.isArray(list) && list.includes(id));
-  let removed = true;
-  rewriteTimeline(personDirectory, account, (held) => {
-    const at = held.findIndex(turn => turn.id === id);
-    if (at < 0) return null;
-    const turn = held[at]!;
-    const thread = typeof turn.thread === 'string' && ID.test(turn.thread) ? turn.thread : null;
-    removed = thread !== null && now - Date.parse(turn.asked_at) < THREAD_ACTIVE_MS
-      && !held.slice(at + 1).some(later => later.thread === thread) && !held.some(other => other !== turn && names(other));
-    return removed ? held.filter(each => each !== turn) : null;
-  }, true);
-  return { removed };
+  }
+  writeTimeline(directory, timelinePath(personDirectory, account), pruneTurns(turns));
 }
 
 /** Named but not synced: the file reads as written, so the write may well have happened. */
 export class TimelineWriteUnsure extends Error {}
 
-/**
- * The account's file, changed by `change` (null: nothing to change) and written
- * whole: every byte, then the new name, on disk before it returns, so a crash
- * leaves the old file or the new one. Answers the turns it holds after.
- */
-function rewriteTimeline(personDirectory: string, account: Expect, change: (turns: StoredTurn[]) => StoredTurn[] | null, strict = false): StoredTurn[] {
-  const directory = folder(personDirectory, 'write');
-  if (directory === null) throw new Error('The Ask timeline folder is not private');
-  const read = storedTurns(personDirectory, account, strict);
-  const changed = change([...read]);
-  if (changed === null) return read;
-  const turns = pruneTurns(changed);
+/** Replaces the file atomically and syncs its directory before returning. */
+function writeTimeline(directory: string, path: string, turns: StoredTurn[]): void {
   const bytes = Buffer.from(JSON.stringify({ schema_version: 1, kind: KIND, turns }), 'utf8');
-  const path = timelinePath(personDirectory, account);
   const temporary = join(directory, `.${randomBytes(12).toString('hex')}.tmp`);
   // Created here, owner-only, never through a link: then its bytes on disk before it takes the name.
   const descriptor = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
@@ -207,7 +174,6 @@ function rewriteTimeline(personDirectory: string, account: Expect, change: (turn
   } catch (cause) {
     throw new TimelineWriteUnsure('The Ask timeline folder could not be synced', { cause });
   }
-  return turns;
 }
 
 /** A folder's entries on disk: a file renamed into it stays renamed after a crash. */
