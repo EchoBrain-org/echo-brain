@@ -27,8 +27,8 @@ test('global Ask reads Jira live and opens its ticket citation', async () => {
   await expect(page.getByTestId('answer')).toBeVisible();
   expect(run.calls().filter(call => call.path.endsWith('/person/ask')).map(call => ({ path: call.path, body: call.body })))
     // A typed question is one to be placed among your conversations (ADR-0056): with none yet, the list it carries is
-    // empty. Every Ask but an Ask again reads labels (ADR-0057).
-    .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question, threads: [], labels: true } }]);
+    // empty. The desktop requests labels and accepts clarification from research.
+    .toEqual([{ path: '/v7/person/ask', body: { schema_version: 3, question, threads: [], labels: true, research_clarification: true } }]);
   await expect(page.getByTestId('statement-text')).toHaveText('ECHO-7 is titled Jira launch.');
   // No lock in the answer: ECHO reads the ticket with your own access (ADR-0049).
   await expect(page.getByTestId('answer').getByRole('img', { name: /only you/i })).toHaveCount(0);
