@@ -10,7 +10,7 @@ import type {
 } from '../shared/protocol.js';
 import { checkCitation, checkOf, subjectCitation, MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
-import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
+import { answerGaps, answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
 /** A check is good for five minutes: opening a thread then checks every turn of it again. */
 export const CHECK_FRESH_MS = 5 * 60_000;
@@ -175,12 +175,14 @@ function sentences(turn: TimelineTurn): Sentence[] {
   return [...answerSentences(turn.answer).map(([, statement]) => statement), ...(turn.since ?? [])];
 }
 
-/** Whether every sentence of a turn is left out: then an opened turn shows only Ask again. */
+export const UNREADABLE_ANSWER = 'You can no longer read what this answer cited.';
+
+/** All factual sentences lost access and no independent explanation remains. */
 export function allOmitted(turn: TimelineTurn, checks: TurnChecks | undefined): boolean {
   if (checks === undefined) return false;
   const all = sentences(turn);
   const shows = showsOf(checks);
-  return all.length > 0 && all.every(statement => !shows(statement.citation_indexes));
+  return all.length > 0 && all.every(statement => !shows(statement.citation_indexes)) && answerGaps(turn.answer, shows).length === 0;
 }
 
 /**
@@ -336,7 +338,7 @@ export function visibleTurns(turns: readonly TimelineTurn[]): TimelineTurn[] {
  * the newest.
  */
 export function askedSuggestions(turns: readonly TimelineTurn[], scope: AskScope): Suggestion[] {
-  return visibleTurns(askedIn(turns, scope)).reverse().map(turn => ({ question: turn.question, turn: turn.id }));
+  return visibleTurns(askedIn(turns, scope)).reverse().map(turn => ({ question: turn.recalled === undefined ? turn.question : originalQuestion(turn), turn: turn.id }));
 }
 
 // ---- threads (ADR-0056) -----------------------------------------------------------
@@ -562,13 +564,19 @@ export function clarificationParts(turn: Pick<TimelineTurn, 'clarification' | 'c
   return [...cuts, clarification.length].map((end, i) => clarification.slice(i === 0 ? 0 : cuts[i - 1]! + 1, end));
 }
 
+/** The original bubble for this turn. A legacy choice could save its generated question in text and the person’s words in typed. */
+export function originalQuestion(turn: TimelineTurn): string {
+  if (turn.clarification || turn.again_of || turn.authored === false) return turn.text;
+  return turn.typed ?? turn.text;
+}
+
 /** Recover what this turn’s person actually submitted. Ask again and cross-scope replays inherit another turn’s wording. */
 function authoredMessages(turn: TimelineTurn, byId: ReadonlyMap<string, TimelineEntry>): LocalMessage[] {
   const words = ownWords(turn);
   if (!words || turn.again_of !== undefined) return [];
   const detail = turn.clarification;
   if (detail && words !== turn.text + '\n' + detail) return [];
-  const original = detail ? turn.text : words;
+  const original = originalQuestion(turn);
   const parent = turn.follows && byId.get(turn.follows);
   // Earlier writers treated the bar’s meeting and week suggestions as typing, and a widened Ask copied its earlier turn.
   const starter = /^(?:What did we decide (?:this week|in .+)|What changed in .+ this week)\?$/u.test(original);
@@ -578,19 +586,23 @@ function authoredMessages(turn: TimelineTurn, byId: ReadonlyMap<string, Timeline
   return messages;
 }
 
-/** The selected conversation in transcript order through the anchor, including repeated submissions. */
-export function messagesThrough(turns: readonly TimelineTurn[], anchor: TimelineTurn, account: readonly TimelineTurn[]): LocalMessage[] {
-  const byId = new Map(account.map(turn => [turn.id, turn]));
+/** A resumed question keeps its original position, even if it later switches topics. A new question is about to be appended. */
+function entriesBefore(entries: readonly TimelineEntry[], id?: string): Map<string, TimelineEntry> {
+  const end = id === undefined ? entries.length : entries.findIndex(entry => entry.id === id);
+  return new Map(entries.slice(0, Math.max(0, end)).map(entry => [entry.id, entry]));
+}
+
+/** The selected conversation through its anchor, limited to what was already present when the recall was submitted. */
+export function messagesThrough(turns: readonly TimelineTurn[], anchor: TimelineTurn, entries: readonly TimelineEntry[], submitted?: string): LocalMessage[] {
+  const before = entriesBefore(entries, submitted);
   return turns.slice(0, turns.findIndex(turn => turn.id === anchor.id) + 1)
-    .flatMap(turn => sameScope(turn.scope, anchor.scope) ? authoredMessages(turn, byId) : []);
+    .flatMap(turn => before.has(turn.id) && sameScope(turn.scope, anchor.scope) ? authoredMessages(turn, before) : []);
 }
 
 /** Resolve local references at display time. Pruned rows and messages without known authorship have no quotable text. */
 export function recalledMessages(turn: TimelineTurn, entries: readonly TimelineEntry[]): LocalMessage[] {
   if (!turn.recalled?.length) return [];
-  const end = entries.findIndex(entry => entry.id === turn.id);
-  if (end < 0) return [];
-  const prior = new Map(entries.slice(0, end).map(entry => [entry.id, entry]));
+  const prior = entriesBefore(entries, turn.id);
   return turn.recalled.flatMap(ref => {
     const source = prior.get(ref.turn);
     if (!source || !('answer' in source) || !sameScope(source.scope, turn.scope)) return [];

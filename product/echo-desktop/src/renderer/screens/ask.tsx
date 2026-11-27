@@ -22,7 +22,7 @@ import {
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, clarificationParts, recalledMessages, recallOnly, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, clarificationParts, originalQuestion, recalledMessages, recallOnly, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, UNREADABLE_ANSWER, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -617,7 +617,7 @@ function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
         ) : <span data-testid="foot-label">{label}</span>)}
         <span class="foot-actions">
           {again && (
-            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
+            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />{turn.recalled === undefined ? 'Ask again' : 'Refresh current facts'}</button>
           )}
           {copy && <CopyAnswer turn={turn} />}
           {fold && <button type="button" class="foot-action" data-testid="timeline-fold" aria-expanded="true" onClick={() => toggleTurn(turn.id)}>Show less</button>}
@@ -632,9 +632,6 @@ function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
 function againAt(state: State, turn: TimelineTurn): string | null {
   return turn.again_of === undefined ? null : turnOf(turn.again_of, state)?.asked_at ?? null;
 }
-
-/** What a reply says when every sentence of it cites a source you can no longer read (ADR-0047): the answer is left out, never blank. */
-const UNREADABLE = 'You can no longer read what this answer cited.';
 
 /** A question as the person asked it: a message on the right. */
 function Asked({ text, testid = 'question', turn, selected, clarificationOf }: { text: string; testid?: string; turn?: string; selected?: boolean; clarificationOf?: string }) {
@@ -682,15 +679,15 @@ function EarlierMessages({ turn, state }: { turn: TimelineTurn; state: State }) 
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
-  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const omitted = allOmitted(turn, view.checks);
   const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
-      <Asked text={turn.text} turn={turn.id} selected={state.ask?.opened === turn.id && state.ask.openedAt === state.ask.asked.length} />
+      <Asked text={originalQuestion(turn)} turn={turn.id} selected={state.ask?.opened === turn.id && state.ask.openedAt === state.ask.asked.length} />
       <ClarificationMessages turn={turn} />
       <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE_ANSWER}</div>
         : !recallOnly(turn) && <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       {(foundNothingInProject(turn) || widen) && (
@@ -698,7 +695,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
           {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
-            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
+            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>{turn.recalled === undefined ? 'Ask across everything you can see' : 'Check current facts across everything you can see'}</button>
           )}
         </div>
       )}
@@ -719,17 +716,17 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
  */
 function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn; opened: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
-  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const omitted = allOmitted(turn, view.checks);
   const messages = turn.recalled && recalledMessages(turn, state.timeline.entries);
   const first = view.lead?.statement.text ?? answerSentences(turn.answer).find(([, sentence]) => view.shows(sentence.citation_indexes))?.[1].text;
   const preview = messages?.[0]?.text ?? missingEarlierMessage(turn.recalled?.length, messages?.length ?? 0);
   return (
     <div class="folded-turn" data-turn={turn.id}>
-      <Asked text={turn.text} testid="timeline-question" turn={turn.id} selected={opened && state.ask?.openedAt === state.ask?.asked.length} />
+      <Asked text={originalQuestion(turn)} testid="timeline-question" turn={turn.id} selected={opened && state.ask?.openedAt === state.ask?.asked.length} />
       <ClarificationMessages turn={turn} />
       {opened ? <OpenedTurn state={state} turn={turn} view={view} omitted={omitted} /> : (
         <button type="button" class="msg echo folded" data-testid="timeline-row" aria-expanded="false" onClick={() => toggleTurn(turn.id)}>
-          <span class="short">{preview ?? (omitted ? UNREADABLE : first ?? nothingLine(turn, state))}</span>
+          <span class="short">{preview ?? (omitted ? UNREADABLE_ANSWER : first ?? nothingLine(turn, state))}</span>
         </button>
       )}
     </div>
@@ -746,10 +743,10 @@ function OpenedTurn({ state, turn, view, omitted }: { state: State; turn: Timeli
     <div class="opened" data-testid="opened-turn">
       <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE_ANSWER}</div>
         : !recallOnly(turn) && <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again={!recallOnly(turn)} copy={!omitted || turn.recalled !== undefined} fold />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again={turn.recalled === undefined || askAgainOffered(turn, state)} copy={!omitted || turn.recalled !== undefined} fold />
     </div>
   );
 }
@@ -993,7 +990,7 @@ export function AskView({ state }: { state: State }) {
           {stamped(turn.asked_at, rows[index - 1]?.asked_at) && <Stamp at={turn.asked_at} />}
           {'answer' in turn && subjectAccess(turn, checksOf(turn, state)) !== 'same'
             ? <div class="turn" data-testid="turn" data-turn={turn.id}>
-              <Asked text={turn.text} turn={turn.id} selected={thread.opened === turn.id} />
+              <Asked text={originalQuestion(turn)} turn={turn.id} selected={thread.opened === turn.id} />
               <ClarificationMessages turn={turn} />
               <div class="msg echo answer-empty" data-testid="answer-unreadable">
                 {checkingAnswerSources(turn.id) ? 'Checking this answer’s sources…' : 'This answer’s sources could not be verified.'}
@@ -1001,7 +998,7 @@ export function AskView({ state }: { state: State }) {
               <button type="button" class="link-button" data-testid="retry-answer-sources" disabled={checkingAnswerSources(turn.id)}
                 onClick={() => retryAnswerSources(turn)}>Check sources again</button>
               {askAgainOffered(turn) && <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)}
-                onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>}
+                onClick={() => askAgain(turn.id)}><Refresh />{turn.recalled === undefined ? 'Ask again' : 'Refresh current facts'}</button>}
             </div> : 'answer' in turn ? (shownInFull(turn, turns, full)
             ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={turn.id === turns.at(-1)?.id} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />)

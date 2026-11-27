@@ -89,6 +89,7 @@ beforeEach(() => {
     'app.status': () => ok(app),
     'ask.run': params => script?.(params) ?? answered(params),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
+    'clipboard.writeText': () => ok(null),
     'ask.record': () => fail('not_found'),
     'open.ref': () => fail('not_found'),
     'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
@@ -1426,6 +1427,51 @@ describe('one Ask transcript per scope', () => {
     await readAgain(store);
     expect(recalledMessages(saved, store.getState().timeline.entries).map(message => message.text)).toEqual([first.text, detail]);
     expect(recalledMessages(saved, store.getState().timeline.entries.filter(row => row.id !== first.id)).map(message => message.text)).toEqual([detail]);
+  });
+
+  it('links a quote from a legacy choice to the message the person typed', async () => {
+    const first = turn('What moved?', 3 * DAY);
+    const source = turn('Where did the THERM-490 launch land?', 2 * DAY, { typed: 'what about that one?', follows: first.id, thread: first.id });
+    const recall = turn('What did I ask?', DAY, { follows: source.id, thread: first.id, recalled: [{ turn: source.id }],
+      answer: answerOf('What did I ask?', GLOBAL, { parts: [], sources: [] }) });
+    seed(first, source, recall);
+    const store = await opened(first.id);
+    const tree = await page(store);
+    const target = elements(tree).find(node => node.props.id === 'ask-original-' + source.id);
+    expect(byTestId(tree, 'recalled-message').map(text)).toEqual([source.typed]);
+    expect(text(target)).toBe(source.typed);
+  });
+
+  it('copies the visible loss-of-access explanation alongside an independently available quote', async () => {
+    const source = turn('I promised to send the July sheet.', 2 * DAY);
+    const mixed = turn('What did I promise and did I do it?', DAY, { recalled: [{ turn: source.id }], follows: source.id, thread: source.id });
+    seed(source, mixed);
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
+    const store = await opened(source.id);
+    const notice = byTestId(await page(store), 'answer-unreadable').map(text);
+    expect(notice).toEqual(['You can no longer read what this answer cited.']);
+    expect(await store.copyAnswer(mixed.id)).toBe(true);
+    expect(calls('clipboard.writeText').at(-1)?.text).toBe('> ' + source.text + '\n\n' + notice[0]);
+  });
+
+  it('keeps a resumed and re-placed lookup before its own submission in the transcript', async () => {
+    const billing = turn('What happened on billing?', 4 * DAY);
+    const first = turn('I will send Maya the July sheet.', 3 * DAY);
+    seed(billing, first);
+    const store = await opened(billing.id);
+    script = () => offer([pilot, partner]);
+    await store.ask('What did I say about Maya?');
+    const pending = kept().at(-1)!;
+    await store.openThread(first.id);
+    script = params => answered(params);
+    await store.ask('I sent Maya the June sheet.');
+    script = params => (params.previous as AskPrevious).question === billing.question ? elsewhere(params, [placeOf(params, first.question)])
+      : answered(params, { parts: [], sources: [], recalled: [0] });
+    store.retryPending(pending.id);
+    await flush(150);
+    expect(asked()).toHaveLength(4);
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([first.text]);
+    expect(byTestId(await page(store), 'recalled-message').map(text)).toEqual([first.text]);
   });
 
   it('distinguishes typing a meeting question from picking the identical starter, including a typed clarification', async () => {

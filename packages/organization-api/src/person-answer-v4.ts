@@ -551,7 +551,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
     ...(labelled ? { label: answerLabel(input.label, 'Ask response label') } : {}),
   };
   if (result.recalled !== undefined) {
-    if (clarify || result.since !== undefined) fail('Ask response recall is inconsistent');
+    if (clarify || result.since !== undefined || result.thread !== undefined) fail('Ask response recall is inconsistent');
     if (result.parts.length === 0 && (result.outcome !== (result.recalled.length > 0 ? 'answered' : 'not_found')
       || result.citations.length !== 0 || result.direct !== undefined || drafted || result.notice !== undefined)) fail('Quote-only Ask response is inconsistent');
   }

@@ -100,6 +100,21 @@ describe('the timeline file (C5)', () => {
     }
   });
 
+  it('keeps quote-only replies opaque to earlier readers while mixed replies keep their live parts', () => {
+    const mixed = turn(1, { recalled: [{ turn: randomUUID() }] });
+    const quote = { ...turn(), recalled: mixed.recalled, answer: { scope: mixed.scope, outcome: 'answered' as const, sources: [], parts: [] } };
+    const miss = { ...quote, id: randomUUID(), recalled: [], answer: { ...quote.answer, outcome: 'not_found' as const } };
+    const protectedQuote = { ...quote, id: randomUUID(), subject_citations: [ticketCitation] };
+    for (const entry of [quote, miss, protectedQuote, mixed]) putTimeline(person, ARI, entry);
+    const rows = JSON.parse(readFileSync(timelinePath(person, ARI), 'utf8')).turns;
+    for (const row of rows.slice(0, 3)) {
+      expect(row.answer).not.toHaveProperty('reply'); // The previous desktop would unwrap a subject-protected reply.
+      expect(timelineEntry(row)).toBeNull();
+    }
+    expect(rows[3]).toEqual(mixed);
+    expect(readTimeline(person, ARI)).toEqual([quote, miss, protectedQuote, mixed]);
+  });
+
   it('keeps a selected answer unreadable to the ordinary v1 row parser while preserving it through other writes', () => {
     const first = turn(1);
     const protectedTurn = { ...first, subject_citations: [ticketCitation], unreadable: [first.answer.sources.length] };

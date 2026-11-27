@@ -1815,13 +1815,16 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // `ask-threads-checked` the source check answers too (timelineCheck), and a question about what was drafted is
       // answered from a follow-up, the one source that check never finds readable.
       if (mode === 'ask-threads' || mode === 'ask-threads-checked') {
-        if (request.previous?.messages && ['What exactly did I say I would send Maya?', 'Did I send it?', 'What did I say I would send Maya, and was it sent?'].includes(question)) {
-          const index = request.previous.messages.findIndex(message => message.startsWith('I’ll send Maya'));
+        const deliveryQuestion = 'Was the July inventory sheet sent to Maya?';
+        const refreshDelivery = question === deliveryQuestion && request.previous?.purpose === 'ask_again';
+        if (refreshDelivery || (request.previous?.messages && ['What exactly did I say I would send Maya?', 'Did I send it?', 'What did I say I would send Maya, and was it sent?'].includes(question))) {
+          const index = request.previous?.messages?.findIndex(message => message.startsWith('I’ll send Maya')) ?? -1;
           const recalled = index < 0 ? [] : [index];
-          if (question === 'Did I send it?' || question.endsWith('was it sent?')) {
+          if (refreshDelivery || question === 'Did I send it?' || question.endsWith('was it sent?')) {
             const ticket = thermTicket('PILOT-9', 'July inventory delivery', '10009');
-            return answered({ ...timelineV8(question, scope, [ticket], [cites([ticket], 'The July inventory sheet was sent to Maya.', [0])]), question,
-              ...(question === 'Did I send it?' ? {} : { recalled }) });
+            const statement = cites([ticket], refreshDelivery ? 'Maya confirmed receipt of the July inventory sheet.' : 'The July inventory sheet was sent to Maya.', [0]);
+            return answered({ ...timelineV8(deliveryQuestion, scope, [ticket], [statement]), question: deliveryQuestion,
+              ...(question.endsWith('was it sent?') ? { recalled } : {}), ...(refreshDelivery ? { since: { statements: [statement] } } : {}) });
           }
           return answered({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, question, recalled,
             outcome: recalled.length ? 'answered' : 'not_found', parts: [], citations: [] }, 0);

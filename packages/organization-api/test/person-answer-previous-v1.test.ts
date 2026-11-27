@@ -156,13 +156,15 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
   it('accepts quote-only matches, misses, and quotes alongside ordinary cited research', () => {
     const quote = answered({ recalled: [2, 0], parts: [], citations: [] });
     const miss = { ...quote, outcome: 'not_found', recalled: [] };
-    for (const valid of [quote, miss, answered({ recalled: [1] }), answered({ recalled: [] })]) {
+    for (const valid of [quote, miss, answered({ recalled: [1] }), answered({ recalled: [] }), { ...quote, merge: [0] }]) {
       expect(validatePersonAnswerResponseV8(valid)).toEqual(valid);
     }
     for (const invalid of [
       { ...quote, recalled: [] }, { ...miss, recalled: [1] }, { ...quote, citations: [ticket] },
       { ...quote, outcome: 'partial' }, answered({ parts: [], citations: [] }),
       clarified({ recalled: [] }), answered({ recalled: [0], since: { statements: [] } }),
+      { ...quote, thread: { kind: 'new' } }, { ...miss, thread: { kind: 'new' } },
+      { ...quote, outcome: 'clarify', thread: { kind: 'other', threads: [0] } },
       ...[[0, 0], [-1], [0.5], ['1'], null].map(recalled => answered({ recalled })),
     ]) expect(() => validatePersonAnswerResponseV8(invalid)).toThrow();
   });

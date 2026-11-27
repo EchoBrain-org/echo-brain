@@ -104,6 +104,7 @@ function storedTurns(personDirectory: string, account: Expect, strict = false): 
  */
 export function readTimeline(personDirectory: string, account: Expect): TimelineEntry[] {
   return storedTurns(personDirectory, account).map(({ label, ...row }) => {
+    if (record(row.answer) && 'quote_only' in row.answer) row.answer = row.answer.quote_only;
     const turn = isPersonAnswerLabelV1(label) ? { ...row, label } : row;
     return record(row.answer) && 'reply' in row.answer
       ? timelineEntry({ ...turn, answer: row.answer.reply, subject_citations: row.answer.subject_citations ?? null })
@@ -139,6 +140,8 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
     const { answer: reply, subject_citations, ...row } = turn;
     put = { ...row, answer: { subject_citations: subject_citations.map(subjectCitation), reply } };
   }
+  // Earlier desktops preserve opaque rows. An empty reply would otherwise tell the asker that nothing matched.
+  if ('recalled' in turn && turn.recalled !== undefined && turn.answer.parts.length === 0) put = { ...put, answer: { quote_only: put.answer } };
   const at = turns.findIndex(kept => kept.id === turn.id);
   if (at < 0) {
     if (known) return;

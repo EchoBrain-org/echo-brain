@@ -345,6 +345,13 @@ test('quotes the original message in place after restart and answers the deliver
   const mixed = run.page.getByTestId('turn').last();
   expect(await mixed.getByTestId('recalled-message').textContent()).toBe(words);
   await expect(mixed.getByTestId('answer')).toContainText('The July inventory sheet was sent to Maya.');
+  await back(run.page);
+  await run.page.getByTestId('sidebar-ask').click();
+  await run.page.getByTestId('turn').last().getByTestId('ask-again').click();
+  const refreshed = run.page.getByTestId('turn').last();
+  await expect(refreshed.getByTestId('answer')).toContainText('Maya confirmed receipt of the July inventory sheet.');
+  expect(await refreshed.getByTestId('recalled-message').textContent()).toBe(words);
+  expect(asks().at(-1)).toMatchObject({ question: 'Was the July inventory sheet sent to Maya?', previous: { purpose: 'ask_again' } });
 });
 
 test('an older implicit subject asks for clarification and a typed reply after restart completes the original question', async () => {

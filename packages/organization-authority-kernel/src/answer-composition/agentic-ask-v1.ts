@@ -470,7 +470,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
                 // Research answers only the live question; only the resolver sees the earlier messages.
                 case "resolved": {
                   recalled = resolution.recalled;
-                  resolvedQuestion = recalled === undefined ? resolution.question : goal.question;
+                  resolvedQuestion = recalled !== undefined && selectedSubjects.length > 0 ? goal.question : resolution.question;
                   researchBrief = Object.freeze({
                     ...brief, goal: Object.freeze({ kind: "question" as const, question: resolution.question }),
                     starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous!, resolution.about),

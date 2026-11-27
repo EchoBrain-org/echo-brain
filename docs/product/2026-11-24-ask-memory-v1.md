@@ -40,7 +40,11 @@ Deploy the Authority before an opting-in desktop or Person client. Clients that 
 
 “What did I say I’d send Maya?” can show the original message, including punctuation and line breaks. **Earlier message** jumps to it in the transcript. “Did I send it?” goes through ordinary research and requires current evidence. A question that asks both can show the earlier words alongside a separately sourced answer about delivery.
 
+**Refresh current facts** checks delivery again and keeps the original quote beside the update. If the person widens a project search, Echo carries only a live question they wrote into the wider scope. The quote stays in the project conversation.
+
 On a follow-up, the desktop picks a small set of the person’s own messages from the selected conversation, including linked turns in the same Home or project. It includes the messages just quoted, then favors words related to the question and recent messages. The resolver can use a previous quote to tell what “it” means in the next question. The existing resolver identifies messages by their place in that list. The desktop quotes their saved wording and keeps local references so the links still work after restart. When none of the supplied messages match, Echo says so. If the original has since been pruned, the transcript says it is unavailable.
+
+Release the recall-capable Authority before this desktop or Person client. Earlier Authority versions reject follow-ups that carry the new message fields.
 
 ## Why
 

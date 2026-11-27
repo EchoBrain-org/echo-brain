@@ -384,9 +384,11 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
     case "open": {
       if (!shown.open) throw new AgenticAskOutputErrorV1("the person has no thread open, so the thread is \"new\" or \"other\"");
       if (recall) {
-        if (shown.messages === undefined || !Array.isArray(body.recalled) || Object.keys(body).some(key => !["thread", "resolution", "recalled", "question", "about"].includes(key))) {
+        if (shown.messages === undefined || !Array.isArray(body.recalled) || Object.keys(body).some(key => !["thread", "resolution", "recalled", "question", "about", "label", "merge"].includes(key))) {
           throw new AgenticAskOutputErrorV1('Return only the recalled message numbers, with an optional live question and its sources');
         }
+        labelOf(body.label, undefined);
+        mergeOf(body.merge, 0);
         const recalled = shownIndexes(body.recalled, shown.messages, '"recalled" must name only offered message numbers');
         const question = body.question === undefined ? undefined : fullQuestion(body.question, '"question"');
         const about = aboutOf(body.about, question === undefined ? 0 : shown.sources);

@@ -447,7 +447,7 @@ describe("exact recall of the person's earlier messages", () => {
       steps: [searchFor(live, "pilot dates"), finishOn(live, ["E1"])], writer: [writerReply([{ text: written, evidence: ["E1"] }])] });
     const { ask, audits } = askV8(desk({ search: async () => result([source]) }), run);
     const response = await ask.answer(sent({ ...SINGLE, messages }, undefined, original));
-    expect(response).toMatchObject({ question: original, outcome: "answered", parts: [{ statements: [{ text: written, citation_indexes: [0] }] }], citations: [{ citation: source.citation }] });
+    expect(response).toMatchObject({ question: live, outcome: "answered", parts: [{ statements: [{ text: written, citation_indexes: [0] }] }], citations: [{ citation: source.citation }] });
     expect(response.recalled).toEqual(kind === "mixed" ? [1] : undefined);
     for (const call of [...run.of("step"), ...run.of("writer")]) {
       expect(JSON.parse(call.user_prompt).question).toBe(live);
@@ -464,6 +464,15 @@ describe("exact recall of the person's earlier messages", () => {
     expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("message");
     const bad = scripted({ resolver: [{ ...form([1]), quote: "invented" }, form([])] });
     expect((await askV8(desk(), bad).ask.answer(sent({ ...SINGLE, messages }, undefined, question))).recalled).toEqual([]);
+  });
+
+  it("keeps a valid quote when the resolver also proposes a conversation label or merge", async () => {
+    const run = scripted({ resolver: [{ ...form([2]), label: "Maya pilot", merge: [1] }] });
+    const response = await askV8(desk(), run).ask.answer(sent({ ...SINGLE, messages }, THREADS, question));
+    expect(response.recalled).toEqual([1]);
+    expect(response).not.toHaveProperty("label");
+    expect(response).not.toHaveProperty("merge");
+    expect(run.inputs).toHaveLength(1);
   });
 
   it("tells the resolver which earlier message was actually quoted when resolving a bare follow-up", async () => {
