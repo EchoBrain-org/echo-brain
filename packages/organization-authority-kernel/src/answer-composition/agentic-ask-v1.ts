@@ -18,6 +18,7 @@ import {
   FOLLOW_UPS_ANSWER_GUIDANCE,
   FOLLOW_UPS_STEP_GUIDANCE,
   SEARCH_ONLY_STEP_PROMPT,
+  SELECTED_SUBJECTS_GUIDANCE,
   STEP_PROMPT,
   TASK_RULE_PROMPT,
 } from "./agentic-ask-v1-model-protocol.js";
@@ -533,7 +534,8 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
 
         // ---- Ask's renderer: the writer and the layout read only the bundle ----
         const writer = createAskRendererV1({
-          answer_prompt: answerPrompt,
+          answer_prompt: selectedSubjects.length ? answerPrompt + "\n\n" + SELECTED_SUBJECTS_GUIDANCE : answerPrompt,
+          ...(selectedSubjects.length ? { selected_subjects: selectedSubjects.map(subject => subject.label) } : {}),
           source_catalog: sourceCatalog, scope, context: context(requestDay), desk_scope: options.desk.scope,
           // An answer to an Ask that carried its previous turn or threads names its question and where it belongs (ADR-0056).
           // An Ask again's writer also says what changed, unless no sentence is left to compare with (ADR-0047).

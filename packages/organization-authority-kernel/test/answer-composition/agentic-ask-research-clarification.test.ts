@@ -159,7 +159,9 @@ describe('clarification discovered during Ask research', () => {
     const res = await h.ask.answer({ question, research_clarification: true, research_subjects: [{ label: selected.label, citation: selected.citation }] });
     expect(h.openCitation).toHaveBeenCalledOnce();
     expect(JSON.parse(h.run.of('step')[0]!.user_prompt)).toMatchObject({ question: wording, opened: [{ title: selected.label }] });
-    expect(JSON.parse(h.run.of('writer')[0]!.user_prompt)).toMatchObject({ question: wording });
+    for (const role of ['step', 'writer'] as const) {
+      expect(JSON.parse(h.run.of(role)[0]!.user_prompt)).toMatchObject({ question: wording, selected_subjects: [selected.label] });
+    }
     expect(res).toMatchObject({ outcome: 'answered', citations: [{ citation: selected.citation }] });
   });
 
