@@ -1291,6 +1291,116 @@ describe('one Ask transcript per scope', () => {
     expect(asked().at(-1)).toMatchObject({ question: launchQuestion, previous: { question: launchQuestion, statements: [], citations: [] } });
   });
 
+  it('renews only the open conversation’s protected answer before expiry and keeps its source pane open', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    const other = turn('Unrelated question?', 2 * DAY);
+    const projectTurn = turn('Another project?', 3 * DAY, { scope: inApollo, subject_citations: [partner.citation] });
+    seed(projectTurn, other, saved);
+    const store = await opened(projectTurn.id);
+    await store.openThread(saved.id);
+    await flush();
+    store.chooseSource(0, null, saved.id);
+    const pane = store.paneTarget();
+    expect(pane).not.toBeNull();
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    const runs = calls('ask.check');
+    expect(runs).toHaveLength(3);
+    const items = runs[2]!.items as { asked_at: string }[];
+    expect(items.map(item => item.asked_at)).toEqual(Array(3).fill(saved.asked_at));
+    expect(store.paneTarget()).toEqual(pane);
+    finish(ok({ items: items.map(() => ({ state: 'same' })) }));
+    await flush();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.paneTarget()).toEqual(pane);
+    expect(store.getState().sources?.open).toBe(0);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+    store.closeAsk();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls('ask.check')).toHaveLength(3);
+  });
+
+  it.each(['unknown', 'unreadable', 'offline'])('honors the current grant and allows an explicit retry when renewal reports %s', async result => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.thread);
+    store.chooseSource(0, null, saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(calls('ask.check')).toHaveLength(2);
+    expect(store.paneTarget()).not.toBeNull();
+    finish(result === 'offline' ? fail('unreachable') : ok({ items: [{ state: 'same' }, { state: 'same' }, { state: result }] }));
+    await flush();
+    expect(store.paneTarget() === null).toBe(result === 'unreadable');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.getState().sources?.open).toBeNull();
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls('ask.check')).toHaveLength(2);
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(1);
+    click(byTestId(await page(store), 'retry-answer-sources')[0]);
+    await flush();
+    expect(calls('ask.check')).toHaveLength(3);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+    expect(asked()).toHaveLength(0);
+  });
+
+  it('restores a protected answer when a check that stalled across the deadline returns', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.id);
+    store.chooseSource(0, null, saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    // A sleeping machine may pass the deadline without running the timer. Its next render and copy reread the clock.
+    vi.setSystemTime(Date.now() + 1);
+    expect(text(byTestId(await page(store), 'answer-unreadable')[0])).toContain('Checking');
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.paneTarget()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.getState().sources?.open).toBeNull();
+    click(byTestId(await page(store), 'retry-answer-sources')[0]);
+    expect(calls('ask.check')).toHaveLength(2);
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+  });
+
+  it('discards an older positive renewal that returns after a newer check revoked its subject', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '10001' ? 'unreadable' : 'same' })) });
+    await store.ask('What changed?');
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.checksOf(saved)?.[2]).toBe('unreadable');
+  });
+
+  it('rechecks the new answer immediately when selected-subject research itself outlives its grant', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const research = held.hold('ask.run');
+    store.chooseClarified(pilot);
+    await flush();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    const finish = held.hold('ask.check');
+    research(answered(asked().at(-1)!));
+    await flush();
+    expect(calls('ask.check')).toHaveLength(1);
+    expect(text(byTestId(await page(store), 'answer-unreadable')[0])).toContain('Checking');
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+  });
+
   it('waits for an explicit retry when a selected subject is no longer accessible', async () => {
     const store = await startStore();
     script = () => offer([pilot, partner]);

@@ -13,10 +13,10 @@ import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
+  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checkingAnswerSources, checksOf, chipName, chooseClarified, chooseSource,
   chooseThread, clarifyThreads, closeDoor, closeSources, copyAnswer, doorRows, entriesInScope, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, newQuestion, nothingLine, openCompose, openDoor, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
-  retryAsk, retryPending, retryEvidence, retryRecord, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, toggleSourceList,
+  retryAnswerSources, retryAsk, retryPending, retryEvidence, retryRecord, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, toggleSourceList,
   toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
@@ -963,7 +963,11 @@ export function AskView({ state }: { state: State }) {
             ? <div class="turn" data-testid="turn" data-turn={turn.id}>
               <Asked text={turn.text} turn={turn.id} selected={thread.opened === turn.id} />
               {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
-              <div class="msg echo answer-empty" data-testid="answer-unreadable">This answer’s sources could not be verified.</div>
+              <div class="msg echo answer-empty" data-testid="answer-unreadable">
+                {checkingAnswerSources(turn.id) ? 'Checking this answer’s sources…' : 'This answer’s sources could not be verified.'}
+              </div>
+              <button type="button" class="link-button" data-testid="retry-answer-sources" disabled={checkingAnswerSources(turn.id)}
+                onClick={() => retryAnswerSources(turn)}>Check sources again</button>
               {askAgainOffered(turn) && <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)}
                 onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>}
             </div> : 'answer' in turn ? (shownInFull(turn, turns, full)

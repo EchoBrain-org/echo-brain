@@ -32,6 +32,8 @@ Each suggested name comes from an approved record, a source passage, a Jira tick
 
 Pending suggestions stay in memory. Reopening the question regenerates them. The account history keeps the person's original wording and any clarification they typed. A completed answer also keeps the source references for the choices it used. Reopening that answer checks those references even when the answer cites other sources for its facts.
 
+The chosen source identifies whom or what the whole reply describes, so its access check covers the entire reply. While Ask is open, the desktop refreshes that check before its five-minute validity ends. Loss of access hides the reply. If Echo cannot renew the check, the reply stays hidden after expiry until a check succeeds. The person can retry from the same message.
+
 Deploy the Authority before an opting-in desktop or Person client. Clients that omit the capability continue to receive their existing answer format.
 
 ## Why

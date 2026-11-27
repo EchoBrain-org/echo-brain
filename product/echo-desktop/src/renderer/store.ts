@@ -730,6 +730,8 @@ function set(patch: Partial<State>): void {
   }
   // A held update click says what to settle only while it is unsettled, here or in main.
   if (state.updateFailure?.code === 'update_held' && !signOutHeld() && !unresolvedWork().unresolved) state = { ...state, updateFailure: null };
+  const enteredAsk = (before.ask === null) !== (state.ask === null) || !sameScope(before.barScope, state.barScope);
+  if (enteredAsk || before.timeline !== state.timeline) scheduleSubjectRenewal(enteredAsk);
   listeners.forEach(listener => listener());
   // A read owed to what shows may have been waiting on this change: a read of its own that landed, the window seen.
   settleOwed();
@@ -3591,9 +3593,9 @@ function freshChecksOf(turn: TimelineTurn, current: State = state): TurnChecks |
 function setTimeline(timeline: State['timeline']): void {
   const sources = state.sources;
   const selected = paneTarget()?.group.indexes[0];
-  if (!sources || sources.open === null || selected === undefined) { set({ timeline }); return; }
+  if (!sources || sources.open === null) { set({ timeline }); return; }
   const next = { ...state, timeline };
-  const open = answerGroups(next).findIndex(group => group.indexes.includes(selected));
+  const open = selected === undefined ? -1 : answerGroups(next).findIndex(group => group.indexes.includes(selected));
   set({ timeline, sources: {
     ...sources, open: open < 0 ? null : open, focus: open < 0 ? null : sources.focus,
     evidence: open < 0 || sources.evidence === null ? null : { ...sources.evidence, group: open },
@@ -3689,8 +3691,36 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   if (Number.isFinite(next)) checksExpire = setTimeout(() => {
     checksExpire = null;
     keepChecks(state.timeline.checks);
-    if (state.ask && askThread().some(turn => turn.subject_citations?.length && !state.timeline.checks[turn.id])) void checkTimeline();
   }, next - now);
+}
+
+/** Start one renewal 30 seconds before a subject grant expires. Expiry still runs independently if the check stalls. */
+const SUBJECT_RENEW_MS = CHECK_FRESH_MS - 30_000;
+let subjectRenewal: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleSubjectRenewal(entered = false): void {
+  clearTimeout(subjectRenewal);
+  if (!state.ask) return;
+  const now = Date.now();
+  const grants = askThread().flatMap(turn => {
+    const check = state.timeline.checks[turn.id];
+    if (!turn.subject_citations?.length || !check || subjectAccess(turn, freshStates(check, now)) !== 'same') return [];
+    const due = check.at + SUBJECT_RENEW_MS;
+    return due > now || entered ? [{ turn, due }] : [];
+  });
+  if (!grants.length) return;
+  const next = Math.min(...grants.map(grant => grant.due));
+  subjectRenewal = setTimeout(() => {
+    const due = grants.filter(grant => grant.due <= Date.now() && !checking.has(grant.turn.id));
+    scheduleSubjectRenewal();
+    if (due.length) void checkTurns(due.map(grant => grant.turn), undefined, true);
+  }, Math.max(0, next - now));
+}
+
+export function checkingAnswerSources(id: string): boolean { return checking.has(id); }
+
+export function retryAnswerSources(turn: TimelineTurn): void {
+  if (state.ask && sameScope(turn.scope, state.barScope) && !checking.has(turn.id)) void checkTurns([turn]);
 }
 
 /** What the person is told when a turn could not be kept on this computer. */
@@ -3832,7 +3862,7 @@ function checkTurn(turn: TimelineTurn): Promise<unknown> {
  * what this check itself found of each turn it spoke for, or null when it
  * failed or spoke for none.
  */
-function checkTurns(turns: readonly TimelineTurn[], openingScope?: string): Promise<Readonly<Record<string, TurnChecks>> | null> {
+function checkTurns(turns: readonly TimelineTurn[], openingScope?: string, renewal = false): Promise<Readonly<Record<string, TurnChecks>> | null> {
   const account = expect();
   if (!account || turns.length === 0) return Promise.resolve(null);
   const plan = checkPlan(turns);
@@ -3843,23 +3873,38 @@ function checkTurns(turns: readonly TimelineTurn[], openingScope?: string): Prom
     if (asked === null) return null;
     const found = checkedOf(plan, asked.results);
     const before = state.timeline.checks;
-    const latest = Object.entries(found).filter(([id]) => (before[id]?.at ?? Number.NEGATIVE_INFINITY) <= at);
-    if (asked.failure !== undefined) {
-      const gone = ACCOUNT_GONE.includes(asked.failure.code);
-      if (gone) accountLost(asked.failure);
-      const hidden = gone ? {} : Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
+    // A newer check owns its turn even if it has already settled or both started in the same millisecond.
+    const latest = Object.entries(found).filter(([id]) => checking.get(id) === run);
+    if (asked.failure !== undefined || Date.now() - at >= CHECK_FRESH_MS) {
+      if (asked.failure && ACCOUNT_GONE.includes(asked.failure.code)) {
+        accountLost(asked.failure);
+        return null;
+      }
+      const hidden = Object.fromEntries(latest.map(([id, states]) => [id, foundUnreadable(states)]));
       keepChecks(checksHiding(state.timeline.checks, hidden));
       keepUnreadable(Object.entries(hidden));
       return null;
     }
     if (openingScope !== undefined) scopeCheckedAt.set(openingScope, at);
-    keepChecks({ ...before, ...Object.fromEntries(latest.map(([id, states]) => [id, { at, states }])) });
+    const updated = latest.map(([id, states]) => {
+      const prior = before[id];
+      const turn = renewal && turnOf(id);
+      // A renewal that cannot establish the subject may only use the remainder of its existing grant.
+      const keep = turn && prior && subjectAccess(turn, freshStates(prior, Date.now())) === 'same' && subjectAccess(turn, states) === 'unknown';
+      return [id, keep ? { at: prior.at, states: { ...prior.states, ...foundUnreadable(states) } } : { at, states }];
+    });
+    keepChecks({ ...before, ...Object.fromEntries(updated) });
     keepUnreadable(latest);
-    return found;
+    return Object.fromEntries(latest);
   };
-  const run = check();
+  const run: Promise<Readonly<Record<string, TurnChecks>> | null> = check();
   for (const id of plan.turns) checking.set(id, run);
-  void run.finally(() => { for (const id of plan.turns) if (checking.get(id) === run) checking.delete(id); }).catch(() => undefined);
+  const hasSubjects = turns.some(turn => turn.subject_citations?.length);
+  if (hasSubjects) set({});
+  void run.finally(() => {
+    for (const id of plan.turns) if (checking.get(id) === run) checking.delete(id);
+    if (hasSubjects) set({});
+  }).catch(() => undefined);
   return run;
 }
 
@@ -4104,6 +4149,7 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   // From here the host has a question to stop: Cancel, or leaving Ask, tells it.
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
+  const sentAt = Date.now();
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId,
     ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }),
     ...(subjects === undefined ? {} : { research_subjects: subjects }) });
@@ -4177,10 +4223,13 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
     ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed, carried,
     ...(joins.length === 0 ? {} : { continues: joins }), ...(labelOf([{ label }], words) === undefined ? {} : { label }),
   };
-  // The Authority just rechecked each selected subject before releasing this answer.
-  if (dependencies) keepChecks({ ...state.timeline.checks, [id]: { at: Date.now(),
-    states: Object.fromEntries(dependencies.map((_, i) => [kept.sources.length + i, 'same' as const])) } });
   keepTurns([turn]);
+  if (dependencies) {
+    // The Authority rechecked these subjects during research. Bound that grant by when the request went.
+    keepChecks({ ...state.timeline.checks, [id]: { at: sentAt,
+      states: Object.fromEntries(dependencies.map((_, i) => [kept.sources.length + i, 'same' as const])) } });
+    if (Date.now() - sentAt >= SUBJECT_RENEW_MS) void checkTurns([turn], undefined, true);
+  }
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - attempt;
   const shown = took >= PROGRESS_AFTER_MS ? { ...current.took, [turn.id]: { receipt, took } } : current.took;
