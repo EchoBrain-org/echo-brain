@@ -415,3 +415,104 @@ describe("a resolution kept between the attempts of one request (ADR-0056)", () 
     expect(second.reported[0]!.key).not.toBe(kept!.key);
   });
 });
+
+describe("exact recall of the person's earlier messages", () => {
+  const messages = ["They called it Silver Finch.", "I called it “Maya’s pilot”.\nI'll send the dates Friday."];
+  const question = "What exactly did I call my pilot?";
+  const form = (recalled: number[], live?: string) => ({ thread: "open", resolution: "recall", recalled, ...(live ? { question: live } : {}) });
+
+  it.each([[[2], [1], "answered"], [[], [], "not_found"]] as const)("releases only requested message indexes, including an explicit miss (%j)", async (found, indexes, outcome) => {
+    const run = scripted({ resolver: [form([...found])] });
+    const port = desk();
+    const { ask, audits } = askV8(port, run);
+    const response = await ask.answer(sent({ ...SINGLE, messages }, undefined, question));
+    expect(response).toMatchObject({ question, outcome, recalled: indexes, parts: [], citations: [] });
+    expect(response).not.toHaveProperty("follow_ups");
+    expect(run.inputs).toHaveLength(1);
+    expect(JSON.parse(run.of("resolver")[0]!.user_prompt).open.messages).toEqual(messages.map((text, at) => ({ n: at + 1, text })));
+    for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
+    expect(port.revalidate).toHaveBeenCalledTimes(3);
+    expect(audits).toEqual([expect.objectContaining({ rounds: 0, model_calls: 1, citation_count: 0, answer_sha256: agenticAskAnswerSha256V1(response) })]);
+    const { recalled: _indexes, ...without } = response;
+    expect(agenticAskAnswerSha256V1(without)).not.toBe(audits[0]!.answer_sha256);
+    expect(JSON.stringify([response, audits])).not.toContain(messages[1]);
+  });
+
+  it.each(["mixed", "live only"] as const)("gets the current status from the changed work record (%s)", async kind => {
+    const live = "Did Maya receive the pilot dates?";
+    const original = kind === "mixed" ? question + " " + live : live;
+    const written = "Maya received the pilot dates on Thursday.";
+    const source = record("receipt", written);
+    const run = scripted({ resolver: [kind === "mixed" ? form([2], live) : { thread: "open", resolution: "same" }],
+      steps: [searchFor(live, "pilot dates"), finishOn(live, ["E1"])], writer: [writerReply([{ text: written, evidence: ["E1"] }])] });
+    const { ask, audits } = askV8(desk({ search: async () => result([source]) }), run);
+    const response = await ask.answer(sent({ ...SINGLE, messages }, undefined, original));
+    expect(response).toMatchObject({ question: live, outcome: "answered", parts: [{ statements: [{ text: written, citation_indexes: [0] }] }], citations: [{ citation: source.citation }] });
+    expect(response.recalled).toEqual(kind === "mixed" ? [1] : undefined);
+    for (const call of [...run.of("step"), ...run.of("writer")]) {
+      expect(JSON.parse(call.user_prompt).question).toBe(live);
+      expect(call.user_prompt).not.toContain("Friday");
+    }
+    expect(audits[0]!.answer_sha256).toBe(agenticAskAnswerSha256V1(response));
+  });
+
+  it("repairs indices outside the offered messages and cannot accept a model-written quote", async () => {
+    const run = scripted({ resolver: [form([3]), form([1])] });
+    const { ask } = askV8(desk(), run);
+    const response = await ask.answer(sent({ ...SINGLE, messages }, undefined, question));
+    expect(response.recalled).toEqual([0]);
+    expect(JSON.parse(run.of("resolver")[1]!.user_prompt).validation_error).toContain("message");
+    const bad = scripted({ resolver: [{ ...form([1]), quote: "invented" }, form([])] });
+    expect((await askV8(desk(), bad).ask.answer(sent({ ...SINGLE, messages }, undefined, question))).recalled).toEqual([]);
+  });
+
+  it("keeps a valid quote when the resolver also proposes a conversation label or merge", async () => {
+    const run = scripted({ resolver: [{ ...form([2]), label: "Maya pilot", merge: [1] }] });
+    const response = await askV8(desk(), run).ask.answer(sent({ ...SINGLE, messages }, THREADS, question));
+    expect(response.recalled).toEqual([1]);
+    expect(response).not.toHaveProperty("label");
+    expect(response).not.toHaveProperty("merge");
+    expect(run.inputs).toHaveLength(1);
+  });
+
+  it("tells the resolver which earlier message was actually quoted when resolving a bare follow-up", async () => {
+    const live = "Did Maya receive the revised pilot dates?";
+    const run = scripted({ resolver: [{ thread: "open", resolution: "resolved", question: live, about: [] }], ...researched(live) });
+    const { ask } = askV8(desk(), run);
+    const prior = { ...SINGLE, question: "Please repeat my exact words.", messages, recalled: [1] };
+    const response = await ask.answer(sent(prior, undefined, "Did I send it?"));
+    expect(JSON.parse(run.of("resolver")[0]!.user_prompt).open.recalled).toEqual([2]);
+    expect(response).not.toHaveProperty("recalled");
+    expect(JSON.parse(run.of("step")[0]!.user_prompt).question).toBe(live);
+    expect(run.of("writer")[0]!.user_prompt).not.toContain(messages[1]);
+  });
+
+  it("stops when even a repaired recall cannot identify a message", async () => {
+    const run = scripted({ resolver: [form([0]), form([messages.length + 1])] });
+    const port = desk();
+    await expect(askV8(port, run).ask.answer(sent({ ...SINGLE, messages }, undefined, question))).rejects.toMatchObject({ code: "unavailable" });
+    expect(run.inputs).toHaveLength(2);
+    for (const read of reads(port)) expect(read).not.toHaveBeenCalled();
+  });
+
+  it("never offers recall to a client that supplied no messages", async () => {
+    const run = scripted({ resolver: [form([1]), { thread: "other", threads: [1] }] });
+    const { ask } = askV8(desk(), run);
+    const response = await ask.answer(sent(SINGLE, THREADS, question));
+    expect(response.thread).toEqual({ kind: "other", threads: [0] });
+    expect(response).not.toHaveProperty("recalled");
+    expect(run.of("resolver")[0]!.system_prompt).toBe(THREAD_RESOLVER_PROMPT);
+    expect(JSON.stringify(run.of("resolver")[0]!.schema)).not.toContain("recall");
+  });
+
+  it("keeps a named older-topic callback and asks about an ambiguous candidate before returning indexes", async () => {
+    for (const reply of [{ thread: "other", threads: [1] }, { thread: "open", resolution: "clarify", choices: CHOICES }]) {
+      const run = scripted({ resolver: [reply] });
+      const { ask } = askV8(desk(), run);
+      const response = await ask.answer(sent({ ...SINGLE, messages, candidate: true }, THREADS, question));
+      expect(response.outcome).toBe("clarify");
+      expect(response).not.toHaveProperty("recalled");
+      expect(run.inputs).toHaveLength(1);
+    }
+  });
+});

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createOpenRouterStructuredGenerationAdapter } from "../src/adapters/answer-composition/openrouter/openrouter-structured-generation-adapter.js";
 import { OpenRouterClient } from "../src/llm/openrouter-client.js";
 
@@ -28,20 +28,27 @@ const repeat = (count: number, ...pieces: string[]) => Array.from({ length: coun
 const done = 'data: {"choices":[{"delta":{"content":"{}"},"finish_reason":"stop"}]}\n\n';
 
 describe("OpenRouter liveness", () => {
+  // Drive the stream and its silence timer on the same clock, independent of runner load.
+  async function withStreamClock(check: () => Promise<unknown>) {
+    vi.useFakeTimers();
+    try { await Promise.all([check(), vi.runAllTimersAsync()]); }
+    finally { vi.useRealTimers(); }
+  }
+
   it("reports only model output as progress, and a reply that keeps producing runs past the silence period", async () => {
     let progress = 0;
     const events = [": OPENROUTER PROCESSING\n\n", 'data: {"choices":[{"delta":{"reasoning":"think"}}]}\n\n',
       'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}\n\n', ": OPENROUTER PROCESSING\n\n", 'data: {"choices":[{"delta":{"content":"true}"},"finish_reason":"stop"}]}\n\n', "data: [DONE]\n\n"];
     // 180 ms in all, events 30 ms apart, under an 80 ms silence period.
-    await expect(adapter(stream(events, 30)).generate({ ...request, max_output_tokens: 100, timeout_ms: 80, on_progress: () => { progress += 1; } })).resolves.toEqual({ ok: true });
+    await withStreamClock(() => expect(adapter(stream(events, 30)).generate({ ...request, max_output_tokens: 100, timeout_ms: 80, on_progress: () => { progress += 1; } })).resolves.toEqual({ ok: true }));
     expect(progress).toBe(3);
   });
 
   it("never stalls one long event that arrives in fragments", async () => {
     const event = `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"StructuredOutput","arguments":"{\\"f0\\":\\"${"x".repeat(60)}\\"}"}}]}}]}\n\n`;
     const pieces = Array.from({ length: 6 }, (_, index) => event.slice(Math.floor(index * event.length / 6), Math.floor((index + 1) * event.length / 6)));
-    await expect(adapter(stream([...pieces, 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'], 40))
-      .generate({ ...request, schema: toolSchema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) });
+    await withStreamClock(() => expect(adapter(stream([...pieces, 'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'], 40))
+      .generate({ ...request, schema: toolSchema, max_output_tokens: 100, timeout_ms: 80 })).resolves.toEqual({ f0: "x".repeat(60) }));
   });
 
   it.each([
@@ -52,7 +59,7 @@ describe("OpenRouter liveness", () => {
     ["usage-only events split across pieces", repeat(20, 'data: {"id":"gen-1","choices":[],"usa', 'ge":{"prompt_tokens":1}}\n\n')],
     ["usage-only events where one piece ends an event and begins the next", ['data: {"choices":[],"usa', ...repeat(40, 'ge":{"prompt_tokens":1}}\n\ndata: {"choices":[],"usa')]],
   ])("stalls on silence from the model: %s are not progress", async (_name, pieces) => {
-    await expect(diagnostic(adapter(stream([...pieces, done], 10)).generate({ ...request, timeout_ms: 80 }))).resolves.toMatchObject({ failure_class: "adapter_timeout" });
+    await withStreamClock(() => expect(diagnostic(adapter(stream([...pieces, done], 10)).generate({ ...request, timeout_ms: 80 }))).resolves.toMatchObject({ failure_class: "adapter_timeout" }));
   });
 });
 

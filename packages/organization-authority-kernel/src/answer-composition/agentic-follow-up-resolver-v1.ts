@@ -13,6 +13,7 @@ import {
   type PersonAnswerScopeV3,
   type PersonAnswerThreadV1,
 } from "@echo-brain/organization-api";
+import { AuthorityOperationError } from "../domain/errors.js";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import { observeCoreModelCorrectionV1 } from "../shared/core-runtime-observation-v1.js";
 import { evidenceDayV1 } from "../shared/temporal-query-v1.js";
@@ -52,12 +53,13 @@ import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from ".
 const RESOLVE_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_resolve" });
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
-const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
+export const OPENABLE_ASK_CITATION_KINDS_V1: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
 
 /** What a follow-up refers to; `about` indexes the open thread's citations as one list (threadCitations). */
 export type AgenticFollowUpResolutionV1 =
   | { readonly resolution: "same" }
-  | { readonly resolution: "resolved"; readonly question: string; readonly about: readonly number[] }
+  | { readonly resolution: "resolved"; readonly question: string; readonly about: readonly number[]; readonly recalled?: readonly number[] }
+  | { readonly resolution: "recall"; readonly recalled: readonly number[] }
   | { readonly resolution: "clarify"; readonly choices: readonly PersonAnswerChoiceV1[] };
 
 /** A resolution, and whether it is the fallback: no usable reply, so the question stands as asked. */
@@ -121,8 +123,8 @@ export interface AgenticFollowUpCarryV1 {
  * The key of everything the resolver is shown: a resolution's indexes point into exactly these, so it holds only while
  * all are the same. A digest, so it carries none of their text.
  */
-export function agenticResolutionKeyV1(asked: Pick<AgenticThreadResolverInputV1, "question" | "previous" | "threads" | "today" | "time_zone">): Sha256Digest {
-  return sha256Digest(JSON.stringify([asked.question, asked.previous ?? null, asked.threads ?? null, asked.today, asked.time_zone]));
+export function agenticResolutionKeyV1(asked: Pick<AgenticThreadResolverInputV1, "question" | "previous" | "threads" | "today" | "time_zone" | "selected_subjects">): Sha256Digest {
+  return sha256Digest(JSON.stringify([asked.question, asked.previous ?? null, asked.threads ?? null, asked.today, asked.time_zone, ...(asked.selected_subjects ?? [])]));
 }
 
 export const FOLLOW_UP_RESOLVER_PROMPT = [
@@ -228,6 +230,23 @@ export const threadPlacementSchema: StructuredGenerationJsonSchema = Object.free
   },
 });
 
+const RECALL_PROMPT = THREAD_RESOLVER_PROMPT + "\n\n" + [
+  "selected_subjects, when present, names the verified subjects the person picked for this question. Use those subjects when selecting earlier messages or resolving the live question.",
+  "open.messages are numbered messages the person actually wrote in the open conversation. Only these support exact recall. Other turns, earlier answers and sources can identify the subject, but are never the person's words.",
+  "open.recalled, when present, names the messages actually quoted in the preceding response. Use those messages to resolve a reference like 'did I send it?'. If several quoted subjects still fit, clarify. Never treat a quoted promise as proof of delivery.",
+  'When the person asks what they themselves wrote, use {"thread":"open","resolution":"recall","recalled":[1]} with only the numbers of the matching messages. If none of the offered messages matches, use []. Never write the quoted text yourself.',
+  'If the same request also asks about what happened, add "question": the remaining live question in full, with "about" for any relevant source numbers. A promise or earlier status is never proof something happened. For a live question alone, use ordinary resolution and research.',
+  "Keep the existing placement and ambiguity rules. If another topic holds the requested message, select that topic before recall. If the intended subject is unclear and choosing changes the answer, clarify.",
+].join("\n");
+
+const recallPlacementSchema: StructuredGenerationJsonSchema = Object.freeze({
+  ...threadPlacementSchema, properties: {
+    ...(threadPlacementSchema.properties as Readonly<Record<string, unknown>>),
+    resolution: { type: "string", enum: [...RESOLUTIONS, "recall"] },
+    recalled: { type: "array", items: { type: "integer" } },
+  },
+});
+
 /** A question the resolver wrote: one line that passes the Ask question rule, so it is asked as it is. The repair hears which rule it broke. */
 function fullQuestion(value: unknown, label: string): string {
   const text = cleanLine(value, Number.MAX_SAFE_INTEGER);
@@ -312,6 +331,7 @@ export function parseFollowUpResolutionV1(value: unknown, sources: number): Agen
  */
 interface ThreadShownV1 {
   readonly open: boolean;
+  readonly messages?: number;
   readonly sources: number;
   readonly others: number | undefined;
   /** The open thread's questions, oldest first, and the new question: the only words a label may use (ADR-0057). */
@@ -348,6 +368,8 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
   const thread = PLACES.find(known => known === named);
   if (thread === undefined) throw new AgenticAskOutputErrorV1("\"thread\" must be \"open\", \"new\" or \"other\"");
   respelled(body.thread, thread);
+  const recall = thread === "open" && body.resolution === "recall";
+  if ("recalled" in body && !recall) throw new AgenticAskOutputErrorV1("Only an open recall may select offered messages");
   if (thread !== "other" && says(body.threads)) {
     throw new AgenticAskOutputErrorV1(`"${thread}" names no other thread: when the question belongs to another thread, the thread is "other"`);
   }
@@ -361,6 +383,17 @@ export function parseThreadPlacementV1(value: unknown, shown: ThreadShownV1): Ag
   switch (thread) {
     case "open": {
       if (!shown.open) throw new AgenticAskOutputErrorV1("the person has no thread open, so the thread is \"new\" or \"other\"");
+      if (recall) {
+        if (shown.messages === undefined || !Array.isArray(body.recalled) || Object.keys(body).some(key => !["thread", "resolution", "recalled", "question", "about", "label", "merge"].includes(key))) {
+          throw new AgenticAskOutputErrorV1('Return only the recalled message numbers, with an optional live question and its sources');
+        }
+        labelOf(body.label, undefined);
+        mergeOf(body.merge, 0);
+        const recalled = shownIndexes(body.recalled, shown.messages, '"recalled" must name only offered message numbers');
+        const question = body.question === undefined ? undefined : fullQuestion(body.question, '"question"');
+        const about = aboutOf(body.about, question === undefined ? 0 : shown.sources);
+        return inOpenThread(question === undefined ? { resolution: "recall", recalled } : { resolution: "resolved", question, about, recalled });
+      }
       const resolution = parseFollowUpResolutionV1(body, shown.sources);
       // Beside choices no merge and no label: the chosen question's answer names them.
       const clarify = resolution.resolution === "clarify";
@@ -401,6 +434,7 @@ interface AgenticFollowUpResolverInputV1 {
 
 /** A resolver input that may carry threads and need not carry a previous turn (ADR-0056). */
 interface AgenticThreadResolverInputV1 extends Omit<AgenticFollowUpResolverInputV1, "previous"> {
+  readonly selected_subjects?: readonly string[];
   /** The open thread's latest turn, with its older turns; absent with no thread open. */
   readonly previous?: PersonAnswerPreviousV1;
   /** Possibly empty; absent (no list) means the request is answered in its own thread, never placed. */
@@ -449,11 +483,12 @@ function threadCitations(previous: PersonAnswerPreviousV1): { readonly citations
   return { citations, places };
 }
 
-function threadResolverInput(input: Pick<AgenticThreadResolverInputV1, "previous" | "threads" | "question" | "today" | "time_zone">, open: ReturnType<typeof threadCitations> | undefined) {
+function threadResolverInput(input: Pick<AgenticThreadResolverInputV1, "previous" | "threads" | "question" | "today" | "time_zone" | "selected_subjects">, open: ReturnType<typeof threadCitations> | undefined) {
   const { previous } = input;
   let sentences = 0;
   return {
     today: input.today,
+    ...(input.selected_subjects === undefined ? {} : { selected_subjects: input.selected_subjects }),
     ...(previous === undefined || open === undefined ? {} : { open: {
       ...(previous.candidate ? { candidate: true } : {}),
       turns: [...(previous.earlier ?? []), previous].map((turn, at) => ({
@@ -462,6 +497,8 @@ function threadResolverInput(input: Pick<AgenticThreadResolverInputV1, "previous
         statements: turn.statements.map(statement => ({ n: ++sentences, text: statement.text, sources: statement.citation_indexes.map(index => open.places[at]![index]! + 1) })),
       })),
       sources: open.citations.map(shownSource),
+      ...(previous.messages === undefined ? {} : { messages: previous.messages.map((text, at) => ({ n: at + 1, text })) }),
+      ...(previous.recalled === undefined ? {} : { recalled: previous.recalled.map(at => at + 1) }),
       // The current label (ADR-0057), so a reply keeps it unless the new question adds something.
       ...(previous.label === undefined ? {} : { label: previous.label }),
     } }),
@@ -502,7 +539,7 @@ export async function resolveAgenticFollowUpV1(input: AgenticFollowUpResolverInp
  */
 export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1): Promise<AgenticThreadResolvedV1> {
   const { previous, threads } = input;
-  if (previous !== undefined && !previous.candidate && previous.earlier === undefined && threads === undefined) {
+  if (previous !== undefined && previous.messages === undefined && !previous.candidate && previous.earlier === undefined && threads === undefined) {
     const followed = await resolveAgenticFollowUpV1({ ...input, previous });
     return followed.fallback ? fallbackPlacement(previous) : Object.freeze({ placement: inOpenThread(followed.resolution), fallback: false });
   }
@@ -510,14 +547,22 @@ export async function resolveAgenticThreadV1(input: AgenticThreadResolverInputV1
   if (previous === undefined && threads !== undefined && threads.length === 0) return Object.freeze({ placement: NEW_THREAD, fallback: false });
   const open = previous === undefined ? undefined : threadCitations(previous);
   const shown: ThreadShownV1 = {
-    open: open !== undefined, sources: open?.citations.length ?? 0, others: threads?.length,
+    open: open !== undefined, ...(previous?.messages === undefined ? {} : { messages: previous.messages.length }), sources: open?.citations.length ?? 0, others: threads?.length,
     questions: [...(previous === undefined ? [] : [...(previous.earlier ?? []).map(turn => turn.question), previous.question]), input.question],
   };
-  return orFallback<AgenticThreadResolvedV1>(input, fallbackPlacement(previous), async () => Object.freeze({
-    placement: await input.gate.withRepair(RESOLVE_CALL, THREAD_RESOLVER_PROMPT, threadResolverInput(input, open), threadPlacementSchema,
-      value => parseThreadPlacementV1(value, shown)),
+  const recall = shown.messages !== undefined;
+  let triedRecall = false;
+  const resolved = await orFallback<AgenticThreadResolvedV1>(input, fallbackPlacement(previous), async () => Object.freeze({
+    placement: await input.gate.withRepair(RESOLVE_CALL, recall ? RECALL_PROMPT : THREAD_RESOLVER_PROMPT, threadResolverInput(input, open),
+      recall ? recallPlacementSchema : threadPlacementSchema, value => {
+        if (recall && object(value)?.resolution === "recall") triedRecall = true;
+        return parseThreadPlacementV1(value, shown);
+      }),
     fallback: false,
   }));
+  // Searching the desk cannot recover an unusable selection of the person's own words.
+  if (triedRecall && resolved.fallback) throw new AuthorityOperationError("unavailable", "Earlier messages could not be selected");
+  return resolved;
 }
 
 /**
@@ -528,7 +573,7 @@ export function agenticFollowUpStartingV1(previous: PersonAnswerPreviousV1, abou
   const { citations } = threadCitations(previous);
   return Object.freeze(about.flatMap(index => {
     const cited = citations[index]?.citation;
-    if (cited === undefined || !OPENABLE.has(cited.kind)) return [];
+    if (cited === undefined || !OPENABLE_ASK_CITATION_KINDS_V1.has(cited.kind)) return [];
     return [Object.freeze({ citation: cited, if_unreadable: "skip" as const })];
   }));
 }

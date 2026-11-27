@@ -1,8 +1,9 @@
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
 import type { PersonAskTimeContextV1, PersonAnswerResponseV8, PersonAnswerPreviousV1, PersonAskReceiptV3 } from "@echo-brain/organization-api";
-import { validatePersonQuestionText } from "@echo-brain/organization-api";
+import { validatePersonAnswerResponseV8, validatePersonQuestionText } from "@echo-brain/organization-api";
 import type { AnswerCompositionGenerationProfileV1 } from "../composition/answer-composition-generation-bundle-v1.js";
 import type { StructuredGenerationPort } from "./structured-generation-v1.js";
+import { AuthorityOperationError } from '../domain/errors.js';
 import type { EvidenceDeskPortV2, EvidenceDeskSourceV2 } from "../shared/evidence-desk-v2.js";
 import { FOLLOW_UP_EVIDENCE_KIND_V1, FOLLOW_UPS_SOURCE_ID_V1 } from "../shared/follow-up-evidence-v1.js";
 import { DOCUMENTS_SOURCE_CAPABILITIES_V1, LOCAL_SOURCE_KINDS_V1, MEETINGS_SOURCE_CAPABILITIES_V1 } from "../shared/source-capabilities-v1.js";
@@ -11,6 +12,7 @@ import { annotateCoreRuntimeV1, observeCoreRuntimeDiagnosticV1 } from "../shared
 import { observeAgenticLifecycleV1 } from './agentic-diagnostics-v1.js';
 import {
   ANSWER_PROMPT,
+  AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1,
   ASK_STEP_PROMPT,
   AgenticAskOutputErrorV1,
   FOLLOW_UPS_ANSWER_GUIDANCE,
@@ -57,7 +59,7 @@ import {
 export { AGENTIC_RESEARCH_BUDGETS_V1, type AgenticResearchResultV1 } from "./agentic-research-v1.js";
 export { AgenticAskStalledErrorV1, AgenticAskGenerationFailureV1 } from "./agentic-model-gate-v1.js";
 // The SDK research driver describes the list tool by the same page bound.
-export { AGENTIC_ASK_LIST_PAGE_ROWS_V1 } from "./agentic-ask-v1-model-protocol.js";
+export { AGENTIC_ASK_LIST_PAGE_ROWS_V1, AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1 } from "./agentic-ask-v1-model-protocol.js";
 export type { AgenticResearchDriverV1, AgenticResearchDriverSessionV1 } from './agentic-research-driver-v1.js';
 export { ASK_FOLLOW_UP_ABOUT_KINDS_V1, askFollowUpItemIdV1, askFollowUpPointerV1, type AskFollowUpDraftV1, type AskFollowUpSinkV1 } from "./ask-follow-ups-v1.js";
 export type { AgenticAskAuditEntryV1, AgenticAskAuditPortV1 } from "./agentic-release-v1.js";
@@ -149,7 +151,7 @@ function askerName(value: { readonly display_name: string } | undefined): string
 }
 
 /** What only an Ask carries: its previous turn, other threads, whether it reads labels, and their resolution kept between attempts. */
-type AskedWithV1 = Pick<AgenticAskProgressInputV3, "previous" | "threads" | "labels" | "follow_up">;
+type AskedWithV1 = Pick<AgenticAskProgressInputV3, "previous" | "threads" | "labels" | "follow_up" | "research_clarification" | "research_subjects">;
 
 /** Ask's question as the API takes it (validatePersonQuestionText), checked by that one rule, or null. */
 function questionText(value: unknown): string | null {
@@ -401,14 +403,34 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
       try {
         // ---- a follow-up (ADR-0047): what it refers to, before research; an Ask again researches the question as asked ----
         // ---- and, with threads or older turns (ADR-0056), where the question belongs ----
+        const selectedSubjects = asked.research_subjects ?? [];
+        const canClarify = !researchOnly && asked.research_clarification === true && previous?.purpose !== 'ask_again';
+        if (selectedSubjects.length > 0 && !canClarify) throw new AuthorityOperationError('invalid_request', 'Research subject selection is unavailable');
+        const researchStep = canClarify ? stepPrompt(prompts.ask.prompt + "\n\n" + AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1)
+          : !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
+        const researching = createAgenticResearchLoopV1({
+          desk, brief,
+          ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
+          ...researchStep, step_span: "ask_planner", ...(canClarify ? { clarification_question: goal.question } : {}),
+          context: context(requestDay), scope, catalog,
+          now, silence_ms: options.generation.timeout_ms, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
+          observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
+          ...(progress === undefined ? {} : { report: progress.research }),
+        });
+        loop = researching;
         let researchBrief = brief;
+        const selectedStarting = selectedSubjects.map(({ citation, label }) => ({ citation, selected_label: label, if_unreadable: "fail" as const }));
+        const resolveSelected = selectedStarting.length > 0 && previous?.messages !== undefined;
+        if (resolveSelected) await researching.openStarting(selectedStarting);
         let resolvedQuestion: string | undefined;
+        let recalled: readonly number[] | undefined;
         let placed: Pick<PersonAnswerResponseV8, "thread" | "merge" | "label"> = {};
         // An Ask again asks one earlier question again where it was asked: nothing resolves or places it.
         if (goal.kind === "question" && (previous?.purpose === "follow_up" || (previous === undefined && threads !== undefined))) {
           // A resolution an earlier attempt already paid for is reused only when made from exactly this (agenticResolutionKeyV1).
           const asking = {
             question: goal.question, today: requestDay, time_zone: temporal?.time_zone ?? "UTC",
+            ...(resolveSelected ? { selected_subjects: selectedSubjects.map(subject => subject.label) } : {}),
             ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }),
           };
           const key = agenticResolutionKeyV1(asking);
@@ -417,7 +439,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           if (kept === undefined) followUp?.on_resolved?.(Object.freeze({ key, value: resolved }));
           const { placement } = resolved;
           placed = agenticThreadFieldsV1(placement, asked.labels === true);
-          /** An answer that asks instead of answering: released as every answer is, with no research. */
+          /** A resolver result released before research, through the normal access check and audit. */
           const ask = async (response: PersonAnswerResponseV8): Promise<RequestOutput> => {
             phase = "final";
             const { released, ...receipt } = await release(response.outcome, 0, response, agenticAskAnswerSha256V1(response));
@@ -431,11 +453,24 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
               const { resolution } = placement;
               switch (resolution.resolution) {
                 // Several things fit: the answer asks which one, with no merge until the chosen question's answer.
-                case "clarify": return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices));
-                // Exactly one thing fits: research answers the full question that names it, starting from what it is about.
+                case "clarify": {
+                  // A selected research subject can settle the same resolver choice, but cannot settle a different ambiguity.
+                  const matching = resolution.choices.filter(choice => selectedSubjects.some(subject => subject.label.toLowerCase() === choice.label.toLowerCase()));
+                  if (matching.length !== 1) return await ask(agenticClarifyResponseV1(options.desk.scope, goal.question, resolution.choices));
+                  // Preserve the full intent the resolver found. Its subject is checked in the starting read before reuse.
+                  researchBrief = { ...brief, goal: { kind: "question", question: matching[0]!.question } };
+                  break;
+                }
+                case "recall": {
+                  const recalled = resolution.recalled;
+                  return await ask(validatePersonAnswerResponseV8({ schema_version: 8, kind: "echo-clean-person-answer-v8",
+                    scope: options.desk.scope, outcome: recalled.length > 0 ? "answered" : "not_found", parts: [], citations: [],
+                    question: goal.question, recalled, ...placed }));
+                }
+                // Research answers only the live question; only the resolver sees the earlier messages.
                 case "resolved": {
-                  // Only a request with a previous turn is placed in the open thread, so `previous` is here.
-                  resolvedQuestion = resolution.question;
+                  recalled = resolution.recalled;
+                  resolvedQuestion = recalled !== undefined && selectedSubjects.length > 0 ? goal.question : resolution.question;
                   researchBrief = Object.freeze({
                     ...brief, goal: Object.freeze({ kind: "question" as const, question: resolution.question }),
                     starting: options.desk.openCitation === undefined ? [] : agenticFollowUpStartingV1(previous!, resolution.about),
@@ -454,19 +489,9 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         }
 
         // ---- research: the loop owns its state; the runner reads its progress and its bundle ----
-        const researchStep = !researchOnly ? prompts.ask : brief.options.list === false ? prompts.search_only_task : prompts.task;
-        const researching = createAgenticResearchLoopV1({
-          desk, brief: researchBrief,
-          ...(options.research_driver === undefined ? {} : { driver: options.research_driver }),
-          ...researchStep, step_span: "ask_planner",
-          context: context(requestDay), scope, catalog,
-          now, silence_ms: options.generation.timeout_ms, signal: activeSignal, assert_live: assertLive, ...(options.wall_ms === undefined ? {} : { wall_now: options.wall_ms }),
-          observed: () => ({ checked_at: checkedAt, model_ms: stepModelMs, desk_ms: deskMs }),
-          ...(progress === undefined ? {} : { report: progress.research }),
-        });
-        loop = researching;
+        if (!resolveSelected && selectedStarting.length) researchBrief = { ...researchBrief, starting: [...researchBrief.starting, ...selectedStarting] };
         // The loop never sees the trigger; its name is a label for the audit and the evaluation.
-        const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => researching.run(gate), value => {
+        const { schema_version, kind, ...gathered } = await observeAgenticLifecycleV1('research', 'research_loop', {}, () => researching.run(gate, researchBrief), value => {
           annotateCoreRuntimeV1({ research_stop_reason: value.stop.reason });
           return { research: trimAgenticEvidenceBundleV1({ ...value, trigger: input.trigger }) };
         });
@@ -496,6 +521,13 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           return Object.freeze({ ...(render === undefined ? {} : { rendered: released }), research: researched, writer_evidence: Object.freeze([]) });
         }
 
+        const responseToClarify = researching.clarification;
+        if (responseToClarify) {
+          phase = "final";
+          const { released, ...receipt } = await release(responseToClarify.outcome, 0, responseToClarify, agenticAskAnswerSha256V1(responseToClarify));
+          return { response: released, research: researched, writer_evidence: [], ...receipt };
+        }
+
         // Research is over; its cost bundle excludes renderer and finalization work.
         phase = "answer";
 
@@ -506,6 +538,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
           // An answer to an Ask that carried its previous turn or threads names its question and where it belongs (ADR-0056).
           // An Ask again's writer also says what changed, unless no sentence is left to compare with (ADR-0047).
           ...(previous === undefined && threads === undefined ? {} : { answers: resolvedQuestion ?? goal.question, placed }),
+          ...(recalled === undefined ? {} : { recalled }),
           ...(previous?.purpose === "ask_again" && previous.statements.length > 0 ? { earlier: earlierAnswer(previous, temporal?.time_zone ?? "UTC") } : {}),
           // Only a request that saves follow-ups drafts them (ADR-0053).
           ...(options.follow_ups === undefined ? {} : { follow_ups: { request_id: options.follow_ups.request_id } }),
@@ -514,7 +547,7 @@ export function createAgenticAskV5(options: CreateAgenticAskOptions) {
         progress?.stage("writing");
         const rendered = await observeAgenticLifecycleV1('renderer', 'research_output', { output_kind: 'answer' }, () => writer.render({
           // The writer answers the resolved question; only the words the person typed (the brief's) vouch for a follow-up's task.
-          bundle, trigger_input: { question: resolvedQuestion ?? goal.question, typed_question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
+          bundle, trigger_input: { question: bundle.goal.kind === "question" ? bundle.goal.question : goal.question, typed_question: goal.question }, gate, signal: activeSignal, prompt_budget: promptBudget,
           on_context: selected => {
             selectedEvidence = selected;
             // Counted as answer context only once the writer call starts (its span).

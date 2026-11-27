@@ -54,7 +54,7 @@ interface Contract {
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
   validatePersonAnswerRequestV3(value: unknown): {
-    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string }; threads?: readonly { readonly questions: readonly string[] }[];
+    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string; readonly messages?: readonly string[] }; threads?: readonly { readonly questions: readonly string[] }[]; research_clarification?: true; research_subjects?: readonly { readonly label: string }[];
   };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
   validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
@@ -757,8 +757,8 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       thermTicket('ECHO-7', 'Jira launch', '10007'),
     ];
   };
-  /** Every Ask streams (ADR-0039): an answer at once, with nothing looked through. */
-  const answered = (response: unknown): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: 0, elapsed_ms: 0, rows: [] } }),
+  /** Every Ask streams (ADR-0039), even one that answers at once. */
+  const answered = (response: unknown, lookedThrough = 0): Response => new Response(api.formatPersonAskProgressEventV3({ type: 'answer', response, receipt: { looked_through: lookedThrough, elapsed_ms: 0, rows: [] } }),
     { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' } });
   /**
    * A streamed Ask: research progress, then its answer and receipt once the test writes `release-ask`. A client that stops
@@ -1815,6 +1815,25 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // `ask-threads-checked` the source check answers too (timelineCheck), and a question about what was drafted is
       // answered from a follow-up, the one source that check never finds readable.
       if (mode === 'ask-threads' || mode === 'ask-threads-checked') {
+        const deliveryQuestion = 'Was the July inventory sheet sent to Maya?';
+        const refreshDelivery = question === deliveryQuestion && request.previous?.purpose === 'ask_again';
+        if (refreshDelivery || (request.previous?.messages && ['What exactly did I say I would send Maya?', 'Did I send it?', 'What did I say I would send Maya, and was it sent?'].includes(question))) {
+          const index = request.previous?.messages?.findIndex(message => message.startsWith('I’ll send Maya')) ?? -1;
+          const recalled = index < 0 ? [] : [index];
+          if (refreshDelivery || question === 'Did I send it?' || question.endsWith('was it sent?')) {
+            const ticket = thermTicket('PILOT-9', 'July inventory delivery', '10009');
+            const statement = cites([ticket], refreshDelivery ? 'Maya confirmed receipt of the July inventory sheet.' : 'The July inventory sheet was sent to Maya.', [0]);
+            return answered({ ...timelineV8(deliveryQuestion, scope, [ticket], [statement]), question: deliveryQuestion,
+              ...(question.endsWith('was it sent?') ? { recalled } : {}), ...(refreshDelivery ? { since: { statements: [statement] } } : {}) });
+          }
+          return answered({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, question, recalled,
+            outcome: recalled.length ? 'answered' : 'not_found', parts: [], citations: [] }, 0);
+        }
+        if (request.research_clarification && !request.research_subjects && question === 'Who owns the launch?') {
+          return answered({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'clarify', parts: [], citations: [], question,
+            choices: [{ label: 'Pilot launch', question: 'Who owns the pilot launch?', citation: thermTicket('PILOT-1', 'Pilot launch', '10001').citation },
+              { label: 'Partner launch', question: 'Who owns the partner launch?', citation: thermTicket('PARTNER-2', 'Partner launch', '10002').citation }] }, 2);
+        }
         const [part] = desktop.answer.parts as Record<string, unknown>[];
         const plain = mode === 'ask-threads-checked' && /\bdrafted\b/iu.test(question)
           ? timelineV8(question, scope, [TRACE_FOLLOW_UP], [cites([TRACE_FOLLOW_UP], 'Confirm the trace is still open.', [0])])

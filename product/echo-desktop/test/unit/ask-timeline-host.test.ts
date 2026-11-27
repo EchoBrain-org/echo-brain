@@ -24,13 +24,13 @@ vi.mock('node:fs', async original => {
   return { ...fs, writeSync: vi.fn(writeSync), fsyncSync: vi.fn(fs.fsyncSync), renameSync: vi.fn(fs.renameSync) };
 });
 import type { AskPrevious, Expect, TimelineTurn } from '../../src/shared/protocol.js';
-import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS, THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
+import { ASK_RUN_SILENCE_MS, HOST_TIMEOUT_MS } from '../../src/shared/protocol.js';
 import { PERSON_ASK_PROGRESS_HEARTBEAT_MS_V1 } from '@echo-brain/organization-api';
 import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThreads } from '../../src/host/ask.js';
 import { askText } from '../../src/shared/query.js';
 import {
-  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, removeTimeline, TIMELINE_FILE_FRAME_BYTES,
-  timelinePath, timelineTurn, TimelineWriteUnsure,
+  deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES,
+  timelineEntry, timelinePath, timelineTurn, TimelineWriteUnsure,
 } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -81,6 +81,64 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([first]);
   });
 
+  it('binds a recall response to the messages this request actually sent and saves only local references', () => {
+    const prior = turn(1, { clarification: 'One.\nTwo.', clarification_breaks: [4] });
+    const result = (recalled: number[]) => askLine({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: prior.scope,
+      question: 'What did I ask?', outcome: recalled.length ? 'answered' : 'not_found', parts: [], citations: [], recalled });
+    const view = (indexes: number[], messages?: string[]) => answerView(result(indexes), prior.scope, undefined, true, false, false, messages);
+    expect(view([], []).recalled).toEqual([]);
+    expect(view([0], ['My question']).recalled).toEqual([0]);
+    expect(() => view([], undefined)).toThrow();
+    expect(() => view([1], ['My question'])).toThrow();
+    const stored = turn(0, { recalled: [{ turn: prior.id, clarification: 2 }] });
+    putTimeline(person, ARI, prior);
+    putTimeline(person, ARI, stored);
+    expect(readTimeline(person, ARI)).toEqual([prior, stored]);
+    expect(timelineTurn({ ...prior, clarification_breaks: [3] })).toBeNull();
+    for (const ref of [{ turn: 'missing id' }, { turn: prior.id, text: 'generated text' }, { turn: prior.id, clarification: false }]) {
+      expect(timelineTurn({ ...stored, recalled: [ref] })).toBeNull();
+    }
+  });
+
+  it('keeps quote-only replies opaque to earlier readers while mixed replies keep their live parts', () => {
+    const mixed = turn(1, { recalled: [{ turn: randomUUID() }] });
+    const quote = { ...turn(), recalled: mixed.recalled, answer: { scope: mixed.scope, outcome: 'answered' as const, sources: [], parts: [] } };
+    const miss = { ...quote, id: randomUUID(), recalled: [], answer: { ...quote.answer, outcome: 'not_found' as const } };
+    const protectedQuote = { ...quote, id: randomUUID(), subject_citations: [ticketCitation] };
+    for (const entry of [quote, miss, protectedQuote, mixed]) putTimeline(person, ARI, entry);
+    const rows = JSON.parse(readFileSync(timelinePath(person, ARI), 'utf8')).turns;
+    for (const row of rows.slice(0, 3)) {
+      expect(row.answer).not.toHaveProperty('reply'); // The previous desktop would unwrap a subject-protected reply.
+      expect(timelineEntry(row)).toBeNull();
+    }
+    expect(rows[3]).toEqual(mixed);
+    expect(readTimeline(person, ARI)).toEqual([quote, miss, protectedQuote, mixed]);
+  });
+
+  it('keeps a selected answer unreadable to the ordinary v1 row parser while preserving it through other writes', () => {
+    const first = turn(1);
+    const protectedTurn = { ...first, subject_citations: [ticketCitation], unreadable: [first.answer.sources.length] };
+    putTimeline(person, ARI, protectedTurn);
+    const path = timelinePath(person, ARI);
+    const disk = () => JSON.parse(readFileSync(path, 'utf8')).turns[0];
+    const envelope = disk();
+    expect(envelope.answer).toEqual({ subject_citations: [ticketCitation], reply: first.answer });
+    expect(timelineEntry(envelope)).toBeNull();
+    expect(readTimeline(person, ARI)).toEqual([protectedTurn]);
+    putTimeline(person, ARI, turn());
+    expect(disk()).toEqual(envelope);
+    expect(readTimeline(person, ARI)[0]).toEqual(protectedTurn);
+  });
+
+  it('persists the selected source revision’s coordinates without its optional display label', () => {
+    const coordinates = { kind: 'source_revision' as const, source_id: `source:${'3'.repeat(64)}` as const, revision_id: 'r1', source_sha256: sha('4'),
+      representation_sha256: sha('5'), anchor_sha256: sha('6') };
+    putTimeline(person, ARI, { ...turn(), subject_citations: [{ ...coordinates, label: 'Restricted personnel review' }] });
+    const file = readFileSync(timelinePath(person, ARI), 'utf8');
+    expect(file).not.toContain('Restricted personnel review');
+    expect(readTimeline(person, ARI)[0]).toMatchObject({ subject_citations: [coordinates] });
+  });
+
   it('reopens unfinished questions and fills the original row even when another question finished first', () => {
     const first = turn(3), last = turn(1);
     const pending = { id: first.id, asked_at: first.asked_at, text: first.text, scope: first.scope, follows: null };
@@ -106,98 +164,40 @@ describe('the timeline file (C5)', () => {
     expect(readdirSync(folder()).filter(name => name.endsWith('.tmp'))).toEqual([]);
   });
 
-  it('takes back only the turn ECHO just placed, in one compare-and-set write: the newest of an active thread that no kept turn names (ADR-0057, R12, R15)', () => {
-    const [first, placed] = [turn(2), turn(1)];
-    putTimeline(person, ARI, { ...first, thread: first.id });
-    putTimeline(person, ARI, { ...placed, thread: first.id, follows: first.id });
-    const before = readFileSync(timelinePath(person, ARI), 'utf8');
-    vi.mocked(renameSync).mockClear();
-    // Not the newest of its thread, and named by a later turn: nothing is written.
-    expect(removeTimeline(person, ARI, first.id, NOW)).toEqual({ removed: false });
-    // Named by any kept turn, however: its follows, again_of, carried or continues. Each refusal writes nothing.
-    for (const names of [{ follows: placed.id }, { again_of: placed.id }, { carried: [placed.id] }, { continues: [placed.id] }]) {
-      const other = turn(0, names);
-      putTimeline(person, ARI, { ...other, thread: other.id });
-      const held = readFileSync(timelinePath(person, ARI), 'utf8');
-      vi.mocked(renameSync).mockClear();
-      expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: false });
-      expect(renameSync).not.toHaveBeenCalled();
-      expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(held);
-      // That turn is itself the newest of its own thread, named by none: it goes, in one write.
-      expect(removeTimeline(person, ARI, other.id, NOW)).toEqual({ removed: true });
-      expect(renameSync).toHaveBeenCalledTimes(1);
-    }
-    expect(readFileSync(timelinePath(person, ARI), 'utf8')).toBe(before);
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-    // A turn the file does not hold is not held: nothing to remove, and nothing written.
-    vi.mocked(renameSync).mockClear();
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    expect(renameSync).not.toHaveBeenCalled();
-  });
-
-  it('never takes a turn out of a joined thread: one asked 7 days ago or more, by this computer\'s clock, or one that names no thread (R11, R12)', () => {
-    const old = turn(8);
-    putTimeline(person, ARI, { ...old, thread: old.id });
-    const asked = Date.parse(old.asked_at);
-    expect(removeTimeline(person, ARI, old.id, asked + THREAD_ACTIVE_MS)).toEqual({ removed: false });
-    expect(removeTimeline(person, ARI, old.id, asked + THREAD_ACTIVE_MS - 1)).toEqual({ removed: true });
-    // Saved before threads: in no thread the file knows of.
-    const legacy = turn(0);
-    putTimeline(person, ARI, legacy);
-    expect(removeTimeline(person, ARI, legacy.id, NOW)).toEqual({ removed: false });
-    expect(readTimeline(person, ARI)).toEqual([legacy]);
-  });
-
-  it('reads the file strictly for a removal: one it cannot read, or that is not a timeline file, fails it and is left as it was; a missing file holds nothing', () => {
-    const first = turn(1);
-    expect(removeTimeline(person, ARI, first.id, NOW)).toEqual({ removed: true });
+  it('updates source visibility in place only for a turn already in the file', () => {
+    const [first, second] = [turn(2), turn(1)];
+    const marked = { ...first, unreadable: [0] };
+    putTimeline(person, ARI, marked, true);
     expect(existsSync(timelinePath(person, ARI))).toBe(false);
-    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, first);
+    vi.mocked(renameSync).mockClear();
+    putTimeline(person, ARI, { ...second, unreadable: [0] }, true);
+    expect(renameSync).not.toHaveBeenCalled();
+    expect(readTimeline(person, ARI)).toEqual([first]);
+    putTimeline(person, ARI, second);
+    putTimeline(person, ARI, marked, true);
+    expect(readTimeline(person, ARI)).toEqual([marked, second]);
+  });
+
+  it('leaves invalid or unreadable history untouched on a source visibility update', () => {
+    const first = turn(1);
+    const marked = { ...first, unreadable: [0] };
+    putTimeline(person, ARI, first);
     const path = timelinePath(person, ARI);
     for (const text of ['not json', '[]', JSON.stringify({ schema_version: 2, kind: 'echo-desktop-ask-timeline-v1', turns: [] })]) {
       writeFileSync(path, text, { mode: 0o600 });
-      expect(() => removeTimeline(person, ARI, first.id, NOW)).toThrow();
+      expect(() => putTimeline(person, ARI, marked, true)).toThrow();
       expect(readFileSync(path, 'utf8')).toBe(text);
     }
-    // A file no one may read: a removal fails, where a read or a put takes it as empty.
-    putTimeline(person, ARI, { ...first, thread: first.id });
+    putTimeline(person, ARI, first);
     chmodSync(path, 0o000);
     try {
-      expect(() => removeTimeline(person, ARI, first.id, NOW)).toThrow();
+      expect(() => putTimeline(person, ARI, marked, true)).toThrow();
       expect(readTimeline(person, ARI)).toEqual([]);
     } finally {
       chmodSync(path, 0o600);
     }
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-  });
-
-  it('makes a change to a kept turn only in its place: one Undo took out meanwhile is not brought back, and nothing is written (R15)', () => {
-    const [first, placed] = [turn(2), turn(1)];
-    putTimeline(person, ARI, { ...first, thread: first.id });
-    putTimeline(person, ARI, { ...placed, thread: first.id });
-    const marked = { ...placed, thread: first.id, unreadable: [0] };
-    putTimeline(person, ARI, marked, true);
-    expect(readTimeline(person, ARI)[1]).toEqual(marked);
-    expect(removeTimeline(person, ARI, placed.id, NOW)).toEqual({ removed: true });
-    vi.mocked(renameSync).mockClear();
-    putTimeline(person, ARI, marked, true);
-    expect(renameSync).not.toHaveBeenCalled();
-    expect(readTimeline(person, ARI)).toEqual([{ ...first, thread: first.id }]);
-    // The first save of a turn still keeps it at the end.
-    putTimeline(person, ARI, marked);
-    expect(readTimeline(person, ARI)[1]).toEqual(marked);
-    // A change is read strictly: a file that cannot be read fails it and is left as it was, where a first save replaces it.
-    const path = timelinePath(person, ARI);
-    writeFileSync(path, 'not json', { mode: 0o600 });
-    expect(() => putTimeline(person, ARI, marked, true)).toThrow();
-    expect(readFileSync(path, 'utf8')).toBe('not json');
-    putTimeline(person, ARI, marked);
-    expect(readTimeline(person, ARI)).toEqual([marked]);
-    // With no file there is nothing to change, and none is made.
-    rmSync(path);
-    putTimeline(person, ARI, marked, true);
-    expect(existsSync(path)).toBe(false);
+    expect(readTimeline(person, ARI)).toEqual([first]);
   });
 
   it('leaves out a saved label that is not in form and shows its turn: a label that fails is dropped, never the answer it came with (R2)', () => {
@@ -229,7 +229,7 @@ describe('the timeline file (C5)', () => {
     // A write that fails before the new file has its name leaves the file as it was, and says so plainly.
     vi.mocked(renameSync).mockImplementationOnce(() => { throw new Error('EIO'); });
     let thrown: unknown;
-    try { removeTimeline(person, ARI, second.id, NOW); } catch (error) { thrown = error; }
+    try { putTimeline(person, ARI, turn()); } catch (error) { thrown = error; }
     expect(thrown).toBeInstanceOf(Error);
     expect(thrown).not.toBeInstanceOf(TimelineWriteUnsure);
     expect(readTimeline(person, ARI)).toHaveLength(2);
@@ -496,7 +496,7 @@ describe('what the page sends with an Ask and a check', () => {
       + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
     expect(new Set(question.match(/[\p{L}\p{N}]+/gu)!.map(word => word.toLowerCase())).size).toBeGreaterThan(32);
     expect(question.length).toBeGreaterThan(240);
-    expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress', '--labels']);
+    expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress', '--research-clarification', '--labels']);
   });
 
   it('waits on liveness: an Ask\'s silence outlasts the client\'s own 40 s stall and two session refreshes; a cited passage its 15 s read and 15 s session', () => {

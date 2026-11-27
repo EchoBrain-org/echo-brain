@@ -16,6 +16,7 @@ import {
   isPersonAnswerLabelV1,
   personAnswerLabelFitsV1,
   type PersonAnswerChoiceV1,
+  type PersonAnswerResearchSubjectV1,
   type PersonAnswerEarlierTurnV1,
   type PersonAnswerPreviousStatementV1,
   type PersonAnswerPreviousV1,
@@ -87,6 +88,10 @@ export interface PersonAnswerRequestV3 {
   readonly threads?: readonly PersonAnswerThreadV1[];
   /** The client reads labels (ADR-0057): only then may the answer carry one, so an older client never meets a key it refuses. */
   readonly labels?: true;
+  /** The client accepts clarification choices discovered during research, including on a first Ask. */
+  readonly research_clarification?: true;
+  /** Subjects the asker chose in this open clarification, with their source citations. */
+  readonly research_subjects?: readonly PersonAnswerResearchSubjectV1[];
 }
 
 export interface PersonAnswerStatementV4 {
@@ -329,12 +334,16 @@ function boundedRequest<T>(result: T, label: string, maximumBytes = MAX_ORGANIZA
 
 export function validatePersonAnswerRequestV3(value: unknown): PersonAnswerRequestV3 {
   const input = object(value, 'Ask request');
-  assertExactKeys(input, ['schema_version', 'question', ...['project_id', 'previous', 'threads', 'labels'].filter(key => Object.hasOwn(input, key))], 'Ask request');
+  assertExactKeys(input, ['schema_version', 'question', ...['project_id', 'previous', 'threads', 'labels', 'research_clarification', 'research_subjects'].filter(key => Object.hasOwn(input, key))], 'Ask request');
   if (input.schema_version !== 3) fail('Ask request schema_version is unsupported');
   if (Object.hasOwn(input, 'labels') && input.labels !== true) fail('Ask request labels must be true');
+  if (Object.hasOwn(input, 'research_clarification') && input.research_clarification !== true) fail('Ask request research_clarification must be true');
   const question = validatePersonQuestionText(input.question);
   const request = { schema_version: 3 as const, question, ...(Object.hasOwn(input, 'project_id') ? { project_id: validateProjectIdV1(input.project_id, 'Ask request project_id') } : {}), ...(Object.hasOwn(input, 'previous') ? { previous: validatePersonAnswerPreviousV1(input.previous, question) } : {}), ...(Object.hasOwn(input, 'threads') ? { threads: validatePersonAnswerThreadsV1(input.threads) } : {}),
-    ...(input.labels === true ? { labels: true as const } : {}) };
+    ...(input.labels === true ? { labels: true as const } : {}),
+    ...(input.research_clarification === true ? { research_clarification: true as const } : {}),
+    ...(Object.hasOwn(input, 'research_subjects') ? { research_subjects: validatePersonAnswerResearchSubjectsV1(input.research_subjects) } : {}) };
+  if (request.research_subjects && (!request.research_clarification || request.previous?.purpose === 'ask_again')) fail('Research subjects require an opted-in Ask other than Ask again');
   // An Ask again asks one earlier question again where it was asked: nothing places it, and nothing labels it (ADR-0057).
   if (request.threads !== undefined && request.previous?.purpose === 'ask_again') fail('Ask again carries no threads');
   if (request.labels !== undefined && request.previous?.purpose === 'ask_again') fail('Ask again reads no labels');
@@ -395,11 +404,18 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   const input = object(value, 'Ask previous');
   const candidate = Object.hasOwn(input, 'candidate');
   const older = Object.hasOwn(input, 'earlier');
+  const hasMessages = Object.hasOwn(input, 'messages');
+  const hasRecalled = Object.hasOwn(input, 'recalled');
   const labelled = Object.hasOwn(input, 'label');
-  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : []), ...(labelled ? ['label'] : []), ...(candidate ? ['candidate'] : [])], 'Ask previous');
+  assertExactKeys(input, ['purpose', 'question', 'asked_at', 'statements', 'citations', ...(older ? ['earlier'] : []), ...(labelled ? ['label'] : []), ...(candidate ? ['candidate'] : []), ...(hasMessages ? ['messages'] : []), ...(hasRecalled ? ['recalled'] : [])], 'Ask previous');
   const purpose = oneOf(input.purpose, ['follow_up', 'ask_again'], 'Ask previous purpose');
   // Only a follow-up continues a thread (ADR-0056): an Ask again compares with the one earlier answer.
   if (candidate && (purpose !== 'follow_up' || input.candidate !== true)) fail('Invalid Ask previous candidate');
+  if (hasMessages && purpose !== 'follow_up') fail('Ask again carries no messages');
+  const messages = hasMessages ? Object.freeze(boundedList(input.messages, 'Ask previous messages', Number.MAX_SAFE_INTEGER)
+    .map(message => fullQuestion(message, 'Ask previous message'))) : undefined;
+  const recalled = hasRecalled ? requestIndexes(input.recalled, 'Ask previous recalled', 0) : undefined;
+  if (!personAnswerRecallFitsV1(recalled, messages)) fail('Ask previous recalled must refer to the messages supplied');
   if (older && purpose !== 'follow_up') fail('Ask again carries no earlier turns');
   if (labelled && purpose !== 'follow_up') fail('Ask again carries no label');
   const earlier = older ? Object.freeze(boundedList(input.earlier, 'Ask previous earlier', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
@@ -410,7 +426,7 @@ function previousTurn(value: unknown): PersonAnswerPreviousV1 {
   // Its label (ADR-0057) is checked in form only: a turn's question here may be a model's rewrite, so only the client,
   // which holds the typed words, can check the label's words.
   return Object.freeze({ purpose, ...earlierTurn(input, 'Ask previous'), ...(candidate ? { candidate: true as const } : {}), ...(earlier === undefined ? {} : { earlier }),
-    ...(labelled ? { label: answerLabel(input.label, 'Ask previous label') } : {}) });
+    ...(messages === undefined ? {} : { messages }), ...(recalled === undefined ? {} : { recalled }), ...(labelled ? { label: answerLabel(input.label, 'Ask previous label') } : {}) });
 }
 
 /** Shared by the previous turn and its thread's older turns (ADR-0056); `label` names which. */
@@ -433,23 +449,37 @@ function earlierTurn(input: Record<string, unknown>, label: string): PersonAnswe
   return { question, asked_at: input.asked_at as string, statements, citations };
 }
 
+/** The explicit selections carried by one request. A source can distinguish more than one subject. */
+export function validatePersonAnswerResearchSubjectsV1(value: unknown): readonly PersonAnswerResearchSubjectV1[] {
+  const subjects = boundedList(value, 'Ask research subjects', Number.MAX_SAFE_INTEGER, 1).map(raw => {
+    const item = object(raw, 'Ask research subject');
+    assertExactKeys(item, ['label', 'citation'], 'Ask research subject');
+    return Object.freeze({ label: boundedLine(item.label, 'Ask research subject label'), citation: validatePersonAnswerEvidenceCitationV8(item.citation) });
+  });
+  assertUnique(subjects.map(subject => JSON.stringify([subject.label, personAnswerCitationKeyV8(subject.citation)])), 'Ask research subjects');
+  return Object.freeze(subjects);
+}
+
 /** A clarify answer's choices (ADR-0047): at least one, each a one-line label and a full question, each different. */
 function answerChoices(value: unknown): readonly PersonAnswerChoiceV1[] {
   const choices = Object.freeze(boundedList(value, 'Ask response choices', Number.MAX_SAFE_INTEGER, 1).map((raw) => {
     const input = object(raw, 'Ask response choice');
-    assertExactKeys(input, ['label', 'question'], 'Ask response choice');
+    const cited = Object.hasOwn(input, 'citation');
+    assertExactKeys(input, ['label', 'question', ...(cited ? ['citation'] : [])], 'Ask response choice');
     return Object.freeze({
       label: boundedLine(input.label, 'Ask response choice label', Number.MAX_SAFE_INTEGER),
       question: fullQuestion(input.question, 'Ask response choice question'),
+      ...(cited ? { citation: validatePersonAnswerEvidenceCitationV8(input.citation) } : {}),
     });
   }));
   if (new Set(choices.map(choice => choice.question)).size !== choices.length || new Set(choices.map(choice => choice.label)).size !== choices.length) fail('Ask response choices contains duplicates');
+  if (choices.some(choice => (choice.citation === undefined) !== (choices[0]!.citation === undefined))) fail('Ask response choices must all cite research or all omit citations');
   return choices;
 }
 
-/** Indexes into the request's threads (ADR-0056): no upper bound here, since only the client knows what it sent. */
-function threadIndexes(value: unknown, label: string): readonly number[] {
-  const indexes = boundedList(value, label, Number.MAX_SAFE_INTEGER, 1).map((index) => {
+/** References into a request list. The client checks the upper bound against the list it actually sent. */
+function requestIndexes(value: unknown, label: string, minimum = 1): readonly number[] {
+  const indexes = boundedList(value, label, Number.MAX_SAFE_INTEGER, minimum).map((index) => {
     if (!Number.isSafeInteger(index) || (index as number) < 0) fail(`${label} is invalid`);
     return index as number;
   });
@@ -461,7 +491,7 @@ function answerThread(value: unknown): PersonAnswerThreadPlacementV1 {
   const input = object(value, 'Ask response thread');
   const kind = oneOf(input.kind, ['new', 'other'], 'Ask response thread kind');
   assertExactKeys(input, kind === 'new' ? ['kind'] : ['kind', 'threads'], 'Ask response thread');
-  return Object.freeze(kind === 'new' ? { kind } : { kind, threads: threadIndexes(input.threads, 'Ask response thread threads') });
+  return Object.freeze(kind === 'new' ? { kind } : { kind, threads: requestIndexes(input.threads, 'Ask response thread threads') });
 }
 
 /** What is different since the earlier answer (ADR-0047): its statements, each citing the answer's citations; the response's bytes bound them. */
@@ -489,9 +519,8 @@ function answerFollowUps(value: unknown): readonly string[] {
 /** The Ask answer, `/v7`'s (research tool contract v1): the only one, since the V4 to V7 answers were retired with their routes. */
 export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResponseV8 {
   const input = object(value, 'Ask response');
-  // Only an answer to a request that carried the previous turn (ADR-0047) names its question, says what is different
-  // since, or offers choices.
-  const previous = ['question', 'since', 'choices'].filter(key => Object.hasOwn(input, key));
+  // The client checks these fields against its request after decoding the response.
+  const previous = ['question', 'since', 'choices', 'recalled'].filter(key => Object.hasOwn(input, key));
   // Only an answer whose writer drafted follow-ups (ADR-0053) lists them, so an answer with none keeps its earlier shape.
   const drafted = Object.hasOwn(input, 'follow_ups');
   // Only an answer to a request that carried the asker's threads (ADR-0056) places the question or names a merge.
@@ -502,7 +531,7 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   // A clarify outcome (ADR-0047) asks which one instead of answering: no part and no citation.
   const clarify = input.outcome === 'clarify';
   // An answer has no count of citations of its own (ADR-0051): its bytes bound it.
-  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length < 1)) fail('Ask response is invalid');
+  if (input.schema_version !== 8 || input.kind !== 'echo-clean-person-answer-v8' || !(PERSON_ANSWER_OUTCOMES_V8 as readonly unknown[]).includes(input.outcome) || !Array.isArray(input.citations) || !Array.isArray(input.parts) || (clarify ? input.parts.length !== 0 : input.parts.length === 0 && !previous.includes('recalled'))) fail('Ask response is invalid');
   if (Object.hasOwn(input, 'notice')) text(input.notice, 'Ask response notice', Number.MAX_SAFE_INTEGER, true);
   const citations = input.citations.map(item => answerCitation(item, 8));
   const citationKeys = new Set<string>();
@@ -514,12 +543,18 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
     ...(Object.hasOwn(input, 'notice') ? { notice: input.notice as string } : {}),
     ...(previous.includes('question') ? { question: fullQuestion(input.question, 'Ask response question') } : {}),
     ...(previous.includes('since') ? { since: answerSince(input.since, citations) } : {}),
+    ...(previous.includes('recalled') ? { recalled: requestIndexes(input.recalled, 'Ask response recalled', 0) } : {}),
     ...(previous.includes('choices') ? { choices: answerChoices(input.choices) } : {}),
     ...(drafted ? { follow_ups: answerFollowUps(input.follow_ups) } : {}),
     ...(placed.includes('thread') ? { thread: answerThread(input.thread) } : {}),
-    ...(placed.includes('merge') ? { merge: threadIndexes(input.merge, 'Ask response merge') } : {}),
+    ...(placed.includes('merge') ? { merge: requestIndexes(input.merge, 'Ask response merge') } : {}),
     ...(labelled ? { label: answerLabel(input.label, 'Ask response label') } : {}),
   };
+  if (result.recalled !== undefined) {
+    if (clarify || result.since !== undefined || result.thread !== undefined) fail('Ask response recall is inconsistent');
+    if (result.parts.length === 0 && (result.outcome !== (result.recalled.length > 0 ? 'answered' : 'not_found')
+      || result.citations.length !== 0 || result.direct !== undefined || drafted || result.notice !== undefined)) fail('Quote-only Ask response is inconsistent');
+  }
   // A clarify outcome only asks which one: it drafts nothing.
   if (clarify && drafted) fail('Clarify outcome is inconsistent');
   // A label names the conversation an ordinary answer continues: never beside a clarify, a placement elsewhere or an Ask again's "since".
@@ -549,18 +584,25 @@ export function validatePersonAnswerResponseV8(value: unknown): PersonAnswerResp
   return Object.freeze(result) as PersonAnswerResponseV8;
 }
 
+/** Whether a decoded answer refers only to messages supplied on this follow-up. */
+export function personAnswerRecallFitsV1(recalled: readonly number[] | undefined, messages: readonly string[] | undefined): boolean {
+  return recalled === undefined || (messages !== undefined && recalled.every(index => index < messages.length));
+}
+
 /**
  * T2 (ADR-0056, ADR-0057): what an answer may say of the threads its Ask sent (`threads`: how many; undefined, not empty,
  * for no list). `unsent`: it names a thread not sent. `unplaced`: it omits its question or, with no `previous` to
- * continue, where the question belongs. `unasked`: it carries a label its Ask did not ask for (`labels`), or had no
+ * continue, where the question belongs unless research is waiting for the asker to choose. `unasked`: it carries a label its Ask did not ask for (`labels`), or had no
  * `previous` conversation to label.
  */
-export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge' | 'label'>, threads: number | undefined,
-  previous: boolean, labels = false): 'unsent' | 'unplaced' | 'unasked' | null {
+export function personAnswerThreadsProblemV1(answer: Pick<PersonAnswerResponseV8, 'question' | 'thread' | 'merge' | 'label' | 'choices'>, threads: number | undefined,
+  previous: boolean, labels = false, researchClarification = false): 'unsent' | 'unplaced' | 'unasked' | 'unexpected_choices' | null {
   const named = [...(answer.thread?.kind === 'other' ? answer.thread.threads : []), ...(answer.merge ?? [])];
   if (threads === undefined ? answer.thread !== undefined || answer.merge !== undefined : named.some(index => index >= threads)) return 'unsent';
   if (answer.label !== undefined && !(labels && previous)) return 'unasked';
-  if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined))) return 'unplaced';
+  const awaitingChoice = answer.choices?.[0]?.citation !== undefined;
+  if (answer.choices && (awaitingChoice ? !researchClarification : !previous)) return 'unexpected_choices';
+  if (threads !== undefined && (answer.question === undefined || (!previous && answer.thread === undefined && !awaitingChoice))) return 'unplaced';
   return null;
 }
 

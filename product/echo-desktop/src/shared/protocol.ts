@@ -1,6 +1,6 @@
 import type {
   PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
-  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1, PersonAnswerThreadPlacementV1, PersonAnswerThreadV1,
+  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerResearchSubjectV1, PersonAnswerTableRowV1, PersonAnswerThreadPlacementV1, PersonAnswerThreadV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -272,7 +272,16 @@ export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly k
  * original's passage, a follow-up, a ticket, a page or a project). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
-  const citation = source.cited?.citation;
+  return checkCitation(source.cited?.citation);
+}
+
+export function subjectCitation(citation: PersonAnswerEvidenceCitationV8): PersonAnswerEvidenceCitationV8 {
+  if (citation.kind !== 'source_revision') return citation;
+  const { label: _label, ...coordinates } = citation;
+  return coordinates;
+}
+
+export function checkCitation(citation: PersonAnswerEvidenceCitationV8 | undefined): CheckCitation | undefined {
   return citation !== undefined && (CHECK_KINDS as readonly string[]).includes(citation.kind) ? citation as CheckCitation : undefined;
 }
 
@@ -340,6 +349,7 @@ export interface AnswerPart {
 
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
 export type AskChoice = PersonAnswerChoiceV1;
+export type AskResearchSubject = PersonAnswerResearchSubjectV1;
 
 /** An Agentic Ask answer. */
 export interface Answer {
@@ -354,6 +364,8 @@ export interface Answer {
   readonly receipt: AskReceipt;
   /** Only for an Ask that carried `previous` or `threads`: the full question the answer answers ("Who owns THERM-482?"). */
   readonly question?: string;
+  /** Indexes of the person’s earlier messages selected for an exact quote in this answer. */
+  readonly recalled?: readonly number[];
   /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
   /** Only with outcome `clarify`: two to four things the question could mean. */
@@ -377,20 +389,26 @@ export interface Answer {
  * one?"'s choices, where it belongs) and what the turn keeps itself (the full
  * question, Ask again's "since", the label) are not kept twice.
  */
-export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge' | 'label'>;
+export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge' | 'label' | 'recalled'>;
 
 /**
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
  * it in the account's file on this device. Never sent to the Authority.
  */
-export interface PendingTurn {
+interface TurnClarification {
+  /** Only the person's typed replies. Optional offsets identify the newlines inserted between distinct submissions. */
+  readonly clarification?: string;
+  readonly clarification_breaks?: readonly number[];
+}
+
+export interface PendingTurn extends TurnClarification {
+  /** Whether the original question was typed, rather than selected or replayed. Older entries have no marker. */
+  readonly authored?: boolean;
   readonly id: string;
   readonly asked_at: string;
   readonly text: string;
   readonly scope: AskScope;
   readonly follows: string | null;
-  /** Only the person's own clarification is retained. Source-derived choices are resolved afresh on retry. */
-  readonly clarification?: string;
   readonly needs_clarification?: true;
   /** Repeat the same placement decision when a person resumes an interrupted question. */
   readonly action?: 'again' | 'everywhere';
@@ -400,8 +418,18 @@ export interface PendingTurn {
 
 export type TimelineEntry = PendingTurn | TimelineTurn;
 
-export interface TimelineTurn {
-  readonly clarification?: string;
+export interface RecalledMessageRef {
+  readonly turn: string;
+  /** A sole clarification, or its one-based position when the person sent more than one. */
+  readonly clarification?: true | number;
+}
+
+export interface TimelineTurn extends TurnClarification {
+  readonly authored?: boolean;
+  /** References to local authored messages. An empty list records an explicit recall with no match. */
+  readonly recalled?: readonly RecalledMessageRef[];
+  /** Evidence the person selected to identify the subject. Access to each governs the whole answer. */
+  readonly subject_citations?: readonly PersonAnswerEvidenceCitationV8[];
   /** A UUID the page gave it. */
   readonly id: string;
   /** When it was asked, by this computer's clock (ISO 8601). */
@@ -470,8 +498,7 @@ export interface TimelineTurn {
 }
 
 /**
- * How long a thread stays active after its newest turn (ADR-0057, R11): the founder's rule, a week. Nothing is stored:
- * the page and the host both work it out from the turns' own times. A literal, as the sandboxed renderer imports this file.
+ * The page considers a thread active for one week after its newest turn (ADR-0057, R11).
  */
 export const THREAD_ACTIVE_MS = 7 * 24 * 60 * 60_000;
 
@@ -789,19 +816,14 @@ export interface HostMethods {
     result: Receipt;
   };
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). `threads`: the asker's other threads (ADR-0056). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[]; research_subjects?: readonly AskResearchSubject[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineEntry[] } };
   /**
    * Keeps one turn (new at the end, or in its place, in the thread the file has it in); then the oldest past the bounds go.
-   * `known`: a change to a turn already kept, so only in its place: one Undo took out meanwhile stays out (ADR-0057, R15).
+   * With `known`, updates only a turn the file still holds.
    */
   'timeline.put': { params: { expect: Expect; turn: TimelineEntry; known?: true }; result: Record<string, never> };
-  /**
-   * Undo of a placement (ADR-0057, R15): takes one turn out of the file in a compare-and-set write, only while it is the
-   * newest turn of an active thread and no kept turn names it. `removed`: the file does not hold it now.
-   */
-  'timeline.remove': { params: { expect: Expect; turn: string }; result: { removed: boolean } };
   /** Whether you can still read the sources old answers cited (C1): content-free, in the items' order. */
   'ask.check': { params: { expect: Expect; items: AskCheckItem[] }; result: { items: AskCheckResult[] } };
   /** Per project you are in, the newest arrival from someone else you can read (C2). */
@@ -909,7 +931,7 @@ export const HOST_TIMEOUT_MS: Readonly<Record<HostMethodName, number>> = {
   'tools.meetings': 90_000, 'runs': 45_000, 'tools.connect': 45_000, 'tools.status': 45_000, 'tools.cancel': 45_000, 'tools.disconnect': 45_000,
   'reviews': 90_000,
   // The timeline is this computer's own file; a check waits out the Authority's 15 s budget; activity is one read, as the change check.
-  'timeline.read': 15_000, 'timeline.put': 15_000, 'timeline.remove': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
+  'timeline.read': 15_000, 'timeline.put': 15_000, 'ask.check': 30_000, 'projects.activity': 15_000,
 };
 export const MAIN_METHODS: readonly (keyof MainMethods)[] = [
   'source.openExternal', 'dialog.openDocument', 'clipboard.writeText', 'dialog.openInvitation', 'app.setUnresolved', 'app.retryHost', 'menu.account',
@@ -935,7 +957,7 @@ export function isWriteCall(method: string, params: unknown): boolean {
 }
 /** A call that may change what is kept, the Authority's or this computer's timeline: one no host took is known not made. */
 export function mayChange(method: string, params: unknown): boolean {
-  return isWriteCall(method, params) || method === 'timeline.put' || method === 'timeline.remove';
+  return isWriteCall(method, params) || method === 'timeline.put';
 }
 /** Every runs operation the page sends: only these reach the log by name. */
 const RUNS_OPERATIONS: ReadonlySet<string> = new Set<PersonRunsRequestV1['operation']>(

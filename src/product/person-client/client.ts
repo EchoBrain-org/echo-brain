@@ -3,7 +3,7 @@ import {
   PERSON_DOCUMENT_TRANSFER_DEADLINE_MS, isCanonicalPersonEmail, isExpectedPersonEmail, validateOrganizationPersonSession, validatePersonDocumentAssociateV1,
   validatePersonDocumentDissociateV1, validatePersonDocumentIdV1, validatePersonDocumentSearchV2, validatePersonListRequestV1, validatePersonOpenRequestV1,
   personQuestionToSend, validatePersonSourceEvidenceReadRequestV1, validatePersonUpdateRequestId, validateProjectIdV1,
-  type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerThreadV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
+  type OrganizationDirectorySearchV1, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerResearchSubjectV1, type PersonAnswerThreadV1, type PersonAskCheckRequestV1, type PersonAskCheckV1,
   type PersonChangesV1, type PersonDocumentAssociateV1,
   type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1, type PersonOpenRequestV1, type PersonProjectActivityV1,
   type PersonResearchEvalReadResponseV1, type PersonResearchEvalStartReceiptV1, type PersonResearchEvalStartRequestV1, type PersonRunsRequestV1,
@@ -488,8 +488,8 @@ export class PersonClient {
    * steps unread.
    */
   async askWithLiveSources(question: string, scope?: ProjectIdV1, signal?: AbortSignal, previous?: PersonAnswerPreviousV1,
-    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonAnswerV8> {
-    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, undefined, threads, labels)).result;
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean, researchClarification?: boolean, researchSubjects?: readonly PersonAnswerResearchSubjectV1[]): Promise<PersonAnswerV8> {
+    return (await this.askWithLiveProgress(question, scope, signal, () => undefined, previous, undefined, threads, labels, researchClarification, researchSubjects)).result;
   }
 
   /**
@@ -507,7 +507,7 @@ export class PersonClient {
    */
   async askWithLiveProgress(question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void,
-    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonLiveAnswerV3> {
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean, researchClarification?: boolean, researchSubjects?: readonly PersonAnswerResearchSubjectV1[]): Promise<PersonLiveAnswerV3> {
     validateAskInput(question, scope);
     return this.withSession(async stored => {
       const authority = this.authority(stored.authority_origin);
@@ -521,7 +521,7 @@ export class PersonClient {
         if (!sameAccount(current, stored)) throw new Error("Person tool operation did not match the current account");
         onProgress(event);
       };
-      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat, threads, labels);
+      const answer = await authority.askV7WithProgress(token, question, scope, signal, forward, previous, onHeartbeat, threads, labels, researchClarification, researchSubjects);
       this.assertCurrentSession(stored);
       return answer;
     }, signal, ASK_SESSION_HEADROOM_MS);

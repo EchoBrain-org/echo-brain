@@ -17,11 +17,9 @@ it('sizes each bound a whole answer passes through above the one beneath it', ()
   expect(MAX_COPY_CHARACTERS).toBe(MAX_TIMELINE_PUT_BYTES);
   // The CLI prints every step and the answer: more than a whole Ask stream.
   expect(MAX_OUTPUT_BYTES).toBeGreaterThan(PERSON_ASK_PROGRESS_STREAM_MAX_BYTES_V1);
-  // A call that carries one whole answer (a timeline put, Copy answer) may take one; a removal names one turn, and takes
-  // the ordinary bound.
+  // Saving or copying a turn may carry the whole answer.
   expect(paramsLimit('timeline.put')).toBe(MAX_TIMELINE_PUT_BYTES);
   expect(paramsLimit('clipboard.writeText')).toBe(MAX_TIMELINE_PUT_BYTES);
-  expect(paramsLimit('timeline.remove')).toBe(MAX_REQUEST_BYTES);
 });
 
 it('refuses what a structured clone carries but JSON does not', () => {

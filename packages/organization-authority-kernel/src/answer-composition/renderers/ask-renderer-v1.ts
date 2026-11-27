@@ -189,6 +189,8 @@ export interface CreateAskRendererV1Options {
    * Without it the response names none.
    */
   readonly answers?: string;
+  /** User message indexes beside a mixed answer; only live evidence reaches its writer. */
+  readonly recalled?: readonly number[];
   /**
    * For an Ask that carried threads (ADR-0056): what the response says of them, as resolved, and the open thread's label
    * for an Ask that reads labels (ADR-0057); the writer never sees it.
@@ -938,6 +940,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
           ...followUpIds,
           // Only an answer to a request that carried the asker's threads says where its question belongs (ADR-0056).
           ...options.placed,
+          ...(options.recalled === undefined ? {} : { recalled: options.recalled }),
         });
         // What of the reply survived the check, before byte fitting: a statement, a list it placed that code filled (its rows,
         // a selection that matched none, or a hand-pick of none: the writer saying no member answers), something it did not

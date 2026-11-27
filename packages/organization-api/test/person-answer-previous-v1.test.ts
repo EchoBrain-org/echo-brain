@@ -26,6 +26,53 @@ const previous = (overrides: Record<string, unknown> = {}) => ({
 const ask = (value: unknown) => ({ schema_version: 3, question: 'what are the details on that ticket?', previous: value });
 
 describe('the previous turn on the Ask request (ADR-0047)', () => {
+  it('allows a first Ask to opt in to research clarification', () => {
+    const request = { schema_version: 3, question: 'Who owns the gate?' };
+    expect(validatePersonAnswerRequestV3(request)).toEqual(request);
+    const optedIn = { ...request, research_clarification: true };
+    expect(validatePersonAnswerRequestV3(optedIn)).toEqual(optedIn);
+    for (const invalid of [false, 'true', null]) {
+      expect(() => validatePersonAnswerRequestV3({ ...request, research_clarification: invalid })).toThrow();
+    }
+  });
+
+  it('accepts each selected subject once and only during opted-in research', () => {
+    const request = { schema_version: 3, question: 'Who owns the gate?', research_clarification: true };
+    const subject = { label: 'Service rollout', citation: ticket.citation };
+    const exact = { ...request, research_subjects: [subject, { ...subject, label: 'Regional rollout' }, { ...subject, citation: decision.citation }] };
+    expect(validatePersonAnswerRequestV3(exact)).toEqual(exact);
+    for (const invalid of [
+      { ...request, research_subjects: [] }, { ...request, research_subjects: [subject, subject] },
+      { ...request, research_subjects: [{ ...subject, citation: { kind: 'unknown' } }] },
+      { ...request, research_subjects: [{ ...subject, label: 'bad\nlabel' }] },
+      { schema_version: 3, question: request.question, research_subjects: [subject] },
+      { ...request, research_subjects: [subject], previous: previous({ purpose: 'ask_again', question: request.question }) },
+    ]) expect(() => validatePersonAnswerRequestV3(invalid)).toThrow();
+  });
+
+  it('carries whole user messages only on a follow-up, in order and without rewriting', () => {
+    const messages = ['A question?\nWith a second line.', 'A question?\nWith a second line.'];
+    expect(validatePersonAnswerRequestV3(ask(previous({ messages }))).previous?.messages).toEqual(messages);
+    expect(validatePersonAnswerRequestV3(ask(previous({ messages: [] }))).previous?.messages).toEqual([]);
+    for (const invalid of [[''], [' padded '], ['cafe\u0301'], ['x\u0007'], ['a', 1], 'text']) {
+      expect(() => validatePersonAnswerRequestV3(ask(previous({ messages: invalid })))).toThrow();
+    }
+    const again = { ...previous({ purpose: 'ask_again' }), messages };
+    expect(() => validatePersonAnswerRequestV3({ ...ask(again), question: again.question })).toThrow();
+    const { purpose: _purpose, ...older } = previous({ messages });
+    expect(() => validatePersonAnswerRequestV3(ask(previous({ earlier: [older] })))).toThrow();
+  });
+
+  it('identifies wording quoted in the preceding answer only within the messages offered now', () => {
+    const messages = ['Friday afternoon.', 'Before the launch.'];
+    const previousWith = (fields: Record<string, unknown>) => validatePersonAnswerRequestV3(ask(previous(fields))).previous;
+    expect(previousWith({ messages, recalled: [1, 0] })?.recalled).toEqual([1, 0]);
+    for (const fields of [{ recalled: [] }, { messages: [], recalled: [0] },
+      ...[[1, 1], [2], [-1], [0.5]].map(recalled => ({ messages, recalled }))]) {
+      expect(() => previousWith(fields)).toThrow();
+    }
+  });
+
   it('carries a follow-up or an Ask again, exactly as sent, and leaves a request without it unchanged', () => {
     expect(validatePersonAnswerRequestV3(ask(previous()))).toEqual(ask(previous()));
     expect(validatePersonAnswerRequestV3(ask(previous({ candidate: true }))).previous?.candidate).toBe(true);
@@ -106,6 +153,22 @@ const clarified = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe('what an answer to the previous turn carries (ADR-0047)', () => {
+  it('accepts quote-only matches, misses, and quotes alongside ordinary cited research', () => {
+    const quote = answered({ recalled: [2, 0], parts: [], citations: [] });
+    const miss = { ...quote, outcome: 'not_found', recalled: [] };
+    for (const valid of [quote, miss, answered({ recalled: [1] }), answered({ recalled: [] }), { ...quote, merge: [0] }]) {
+      expect(validatePersonAnswerResponseV8(valid)).toEqual(valid);
+    }
+    for (const invalid of [
+      { ...quote, recalled: [] }, { ...miss, recalled: [1] }, { ...quote, citations: [ticket] },
+      { ...quote, outcome: 'partial' }, answered({ parts: [], citations: [] }),
+      clarified({ recalled: [] }), answered({ recalled: [0], since: { statements: [] } }),
+      { ...quote, thread: { kind: 'new' } }, { ...miss, thread: { kind: 'new' } },
+      { ...quote, outcome: 'clarify', thread: { kind: 'other', threads: [0] } },
+      ...[[0, 0], [-1], [0.5], ['1'], null].map(recalled => answered({ recalled })),
+    ]) expect(() => validatePersonAnswerResponseV8(invalid)).toThrow();
+  });
+
   it('names the question it answers, and for an Ask again what is different since, each cited', () => {
     expect(validatePersonAnswerResponseV8(answered()).question).toBe('What are the details on THERM-482?');
     const since = { statements: [{ text: 'The DVT review on Oct 24 kept the gate on hold.', citation_indexes: [1], private: false }] };
@@ -147,6 +210,10 @@ describe('what an answer to the previous turn carries (ADR-0047)', () => {
     expect(Object.isFrozen(accepted.choices![0])).toBe(true);
     const four = Array.from({ length: 4 }, (_, index) => ({ label: `Ticket ${index}`, question: `What are the details on THERM-${index}?` }));
     expect(validatePersonAnswerResponseV8(clarified({ choices: four })).choices).toHaveLength(4);
+    const cited = four.map(choice => ({ ...choice, citation: ticket.citation }));
+    expect(validatePersonAnswerResponseV8(clarified({ choices: cited })).choices).toEqual(cited);
+    expect(() => validatePersonAnswerResponseV8(clarified({ choices: [cited[0], four[1]] }))).toThrow();
+    expect(() => validatePersonAnswerResponseV8(clarified({ choices: [{ ...four[0], citation: { extra: 1 } }] }))).toThrow();
     expect(validatePersonAnswerResponseV8(clarified({ choices: [{ label: 'L'.repeat(600), question: 'What is A?' }, { label: 'B', question: 'What is B?' }] })).choices).toHaveLength(2);
     expect(validatePersonAnswerResponseV8(clarified({ choices: [...four, { label: 'Five', question: 'What is five?' }] })).choices).toHaveLength(5);
     expect(validatePersonAnswerResponseV8(clarified({ choices: four.slice(0, 1) })).choices).toHaveLength(1);

@@ -6,23 +6,23 @@ import type {
 } from '../../shared/protocol.js';
 import {
   answerGaps, answerLead, answerSays, answerSentences, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement,
-  shownArranged, shownItems, shownTitles, statementGroups, tableDay, type AnswerLead, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
+  missingEarlierMessage, shownArranged, shownItems, shownTitles, statementGroups, tableDay, type AnswerLead, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedStamp, askedWhen, meetingTime, stamped } from '../format.js';
 import { message } from '../messages.js';
 import { ownerAndStatus } from '../needs.js';
 import { announceAfter, announcement, duration, headline, lookedThrough, PROGRESS_AFTER_MS, type AskProgress } from '../progress.js';
 import {
-  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checksOf, chipName, chooseClarified, chooseSource,
+  activeTurn, askAgain, askAgainOffered, askBusy, askEverywhere, askNewQuestion, askThread, barSuggestions, cancelAsk, canAskEverywhere, checkingAnswerSources, checksOf, chipName, chooseClarified, chooseSource,
   chooseThread, clarifyThreads, closeDoor, closeSources, copyAnswer, doorRows, entriesInScope, foundNothingInProject, fullTurns,
   fullPageOffered, litAtoms, newQuestion, nothingLine, openCompose, openDoor, openFullPage, openExternalSource, openThread, pageCovered, paneTarget, pickSuggestion,
-  retryAsk, retryPending, retryEvidence, retryRecord, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, toggleSourceList,
+  retryAnswerSources, retryAsk, retryPending, retryEvidence, retryRecord, setBarText, sheetUp, sourceName, submitBar, suggestionsShown, toggleSourceList,
   toggleTurn, turnOf, widenScope,
   UNTITLED,
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, sameScope, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, clarificationParts, originalQuestion, recalledMessages, recallOnly, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, UNREADABLE_ANSWER, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -603,7 +603,7 @@ function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
   state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean; fold?: boolean;
 }) {
   const count = view.groups.length;
-  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? lookedThrough(took.receipt) : null;
+  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took && !recallOnly(turn) ? lookedThrough(took.receipt) : null;
   const label = [what, took ? duration(took.took) : null].filter(Boolean).join(' · ');
   const listed = state.sources?.listed.includes(view.id) === true;
   if (label === '' && !again && !copy && !fold) return null;
@@ -617,7 +617,7 @@ function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
         ) : <span data-testid="foot-label">{label}</span>)}
         <span class="foot-actions">
           {again && (
-            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>
+            <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)} onClick={() => askAgain(turn.id)}><Refresh />{turn.recalled === undefined ? 'Ask again' : 'Refresh current facts'}</button>
           )}
           {copy && <CopyAnswer turn={turn} />}
           {fold && <button type="button" class="foot-action" data-testid="timeline-fold" aria-expanded="true" onClick={() => toggleTurn(turn.id)}>Show less</button>}
@@ -633,14 +633,39 @@ function againAt(state: State, turn: TimelineTurn): string | null {
   return turn.again_of === undefined ? null : turnOf(turn.again_of, state)?.asked_at ?? null;
 }
 
-/** What a reply says when every sentence of it cites a source you can no longer read (ADR-0047): the answer is left out, never blank. */
-const UNREADABLE = 'You can no longer read what this answer cited.';
-
 /** A question as the person asked it: a message on the right. */
-function Asked({ text, testid = 'question', turn, selected }: { text: string; testid?: string; turn?: string; selected?: boolean }) {
-  return turn ? <button type="button" class="msg you selectable" data-testid={testid} aria-label={`Follow up on: ${text}`}
+function Asked({ text, testid = 'question', turn, selected, clarificationOf }: { text: string; testid?: string; turn?: string; selected?: boolean; clarificationOf?: string }) {
+  return turn ? <button id={`ask-original-${turn}`} type="button" class="msg you selectable" data-testid={testid} aria-label={`Follow up on: ${text}`}
     aria-pressed={selected} onClick={() => toggleTurn(turn, true)}>{text}</button>
-    : <div class="msg you selectable" data-testid={testid}>{text}</div>;
+    : <div id={clarificationOf && `ask-clarification-${clarificationOf}`} tabIndex={clarificationOf ? -1 : undefined} class="msg you selectable" data-testid={testid}>{text}</div>;
+}
+
+function ClarificationMessages({ turn }: { turn: TimelineTurn }) {
+  if (!turn.clarification) return null;
+  const parts = clarificationParts(turn);
+  if (!parts.length) return <Asked text={turn.clarification} testid="clarification-reply" />;
+  return <>{parts.map((text, i) => <Asked key={i} text={text} testid="clarification-reply"
+    clarificationOf={parts.length === 1 ? turn.id : `${turn.id}-${i + 1}`} />)}</>;
+}
+
+function EarlierMessages({ turn, state }: { turn: TimelineTurn; state: State }) {
+  if (turn.recalled === undefined) return null;
+  const messages = recalledMessages(turn, state.timeline.entries);
+  const missing = missingEarlierMessage(turn.recalled.length, messages.length);
+  return <div class="msg echo recalled">
+    {messages.map(message => {
+      const target = message.clarification ? `ask-clarification-${message.turn}${message.clarification === true ? '' : '-' + message.clarification}` : `ask-original-${message.turn}`;
+      return <figure class="answer-quote" key={target}>
+        <blockquote class="selectable" data-testid="recalled-message">{message.text}</blockquote>
+        <figcaption><button type="button" class="foot-action" onClick={() => {
+          const original = document.getElementById(target);
+          original?.focus({ preventScroll: true });
+          original?.scrollIntoView({ block: 'center' });
+        }}>Earlier message</button></figcaption>
+      </figure>;
+    })}
+    {missing && <p class="answer-empty">{missing}</p>}
+  </div>;
 }
 
 /**
@@ -654,27 +679,28 @@ function Asked({ text, testid = 'question', turn, selected }: { text: string; te
  */
 function FullTurn({ state, turn, took, current, last }: { state: State; turn: TimelineTurn; took: AskTook | undefined; current: boolean; last: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
-  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const omitted = allOmitted(turn, view.checks);
   const widen = !omitted && !state.ask?.failed && last && canAskEverywhere(turn, state);
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
-      <Asked text={turn.text} turn={turn.id} selected={state.ask?.opened === turn.id && state.ask.openedAt === state.ask.asked.length} />
-      {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+      <Asked text={originalQuestion(turn)} turn={turn.id} selected={state.ask?.opened === turn.id && state.ask.openedAt === state.ask.asked.length} />
+      <ClarificationMessages turn={turn} />
+      <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
-        : <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE_ANSWER}</div>
+        : !recallOnly(turn) && <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
           {foundNothingInProject(turn) && <span>{nothingLine(turn, state)}</span>}
           {/* Offered on the thread's latest turn only, as the next step; never under a question that failed. */}
           {widen && (
-            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>Ask across everything you can see</button>
+            <button type="button" class="link-button" data-testid="ask-everywhere" disabled={askBusy(state)} onClick={() => askEverywhere(turn.id)}>{turn.recalled === undefined ? 'Ask across everything you can see' : 'Check current facts across everything you can see'}</button>
           )}
         </div>
       )}
       {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted || turn.recalled !== undefined} />
     </div>
   );
 }
@@ -690,15 +716,17 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
  */
 function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn; opened: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
-  const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const omitted = allOmitted(turn, view.checks);
+  const messages = turn.recalled && recalledMessages(turn, state.timeline.entries);
   const first = view.lead?.statement.text ?? answerSentences(turn.answer).find(([, sentence]) => view.shows(sentence.citation_indexes))?.[1].text;
+  const preview = messages?.[0]?.text ?? missingEarlierMessage(turn.recalled?.length, messages?.length ?? 0);
   return (
     <div class="folded-turn" data-turn={turn.id}>
-      <Asked text={turn.text} testid="timeline-question" turn={turn.id} selected={opened && state.ask?.openedAt === state.ask?.asked.length} />
-      {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+      <Asked text={originalQuestion(turn)} testid="timeline-question" turn={turn.id} selected={opened && state.ask?.openedAt === state.ask?.asked.length} />
+      <ClarificationMessages turn={turn} />
       {opened ? <OpenedTurn state={state} turn={turn} view={view} omitted={omitted} /> : (
         <button type="button" class="msg echo folded" data-testid="timeline-row" aria-expanded="false" onClick={() => toggleTurn(turn.id)}>
-          <span class="short">{omitted ? UNREADABLE : first ?? nothingLine(turn, state)}</span>
+          <span class="short">{preview ?? (omitted ? UNREADABLE_ANSWER : first ?? nothingLine(turn, state))}</span>
         </button>
       )}
     </div>
@@ -713,11 +741,12 @@ function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn;
 function OpenedTurn({ state, turn, view, omitted }: { state: State; turn: TimelineTurn; view: TurnView; omitted: boolean }) {
   return (
     <div class="opened" data-testid="opened-turn">
+      <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
-      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
-        : <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
+      {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE_ANSWER}</div>
+        : !recallOnly(turn) && <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} fold />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again={turn.recalled === undefined || askAgainOffered(turn, state)} copy={!omitted || turn.recalled !== undefined} fold />
     </div>
   );
 }
@@ -959,7 +988,18 @@ export function AskView({ state }: { state: State }) {
       {rows.map((turn, index) => (
         <Fragment key={turn.id}>
           {stamped(turn.asked_at, rows[index - 1]?.asked_at) && <Stamp at={turn.asked_at} />}
-          {'answer' in turn ? (shownInFull(turn, turns, full)
+          {'answer' in turn && subjectAccess(turn, checksOf(turn, state)) !== 'same'
+            ? <div class="turn" data-testid="turn" data-turn={turn.id}>
+              <Asked text={originalQuestion(turn)} turn={turn.id} selected={thread.opened === turn.id} />
+              <ClarificationMessages turn={turn} />
+              <div class="msg echo answer-empty" data-testid="answer-unreadable">
+                {checkingAnswerSources(turn.id) ? 'Checking this answer’s sources…' : 'This answer’s sources could not be verified.'}
+              </div>
+              <button type="button" class="link-button" data-testid="retry-answer-sources" disabled={checkingAnswerSources(turn.id)}
+                onClick={() => retryAnswerSources(turn)}>Check sources again</button>
+              {askAgainOffered(turn) && <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)}
+                onClick={() => askAgain(turn.id)}><Refresh />{turn.recalled === undefined ? 'Ask again' : 'Refresh current facts'}</button>}
+            </div> : 'answer' in turn ? (shownInFull(turn, turns, full)
             ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={turn.id === turns.at(-1)?.id} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />)
             : <div class="turn" data-turn={turn.id} data-testid={failed?.id === turn.id ? 'ask-failed' : 'pending-turn'}>
@@ -968,7 +1008,8 @@ export function AskView({ state }: { state: State }) {
               {asking?.id === turn.id ? <Asking progress={asking.progress} /> : clarify?.id === turn.id ? <Clarify state={state} clarify={clarify} />
                 : failed?.id === turn.id ? <>
                   <div class="msg echo error" data-testid="ask-error">{message(failed.failure)}</div>
-                  {failed.failure.retryable && <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>Try again</button>}
+                  {(failed.failure.retryable || failed.how.researchSubjects) && <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>
+                    {failed.how.researchSubjects ? 'Refresh choices' : 'Try again'}</button>}
                 </> : <>
                   <div class="msg echo">{'needs_clarification' in turn && turn.needs_clarification ? 'Which subject did you mean?' : 'This question was interrupted.'}</div>
                   <button type="button" class="link-button" data-testid="resume-turn" disabled={askBusy(state)} onClick={() => retryPending(turn.id)}>Resume question</button>

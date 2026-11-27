@@ -762,7 +762,11 @@ describe('an answer on the Ask timeline, and the two reads beside it (ADR-0047)'
   it('reads "Which one?": its choices and the question asked, and no part', () => {
     const choices = [{ label: 'THERM-482 · Sensor drift', question: 'Who owns THERM-482?' }, { label: 'THERM-490 · DVT retest', question: 'Who owns THERM-490?' }];
     const clarify = line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices });
-    expect(answerView(clarify, scope)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'Who owns it?', choices });
+    expect(answerView(clarify, scope, undefined, true)).toEqual({ scope, sources: [], parts: [], outcome: 'clarify', receipt: { looked_through: 0 }, question: 'Who owns it?', choices });
+    const researchChoices = choices.map((choice, index) => ({ ...choice, citation: index === 0 ? ticket.citation : record }));
+    const first = line({ outcome: 'clarify', citations: [], parts: [], question: 'Who owns it?', choices: researchChoices });
+    expect(answerView(first, scope, 0, false, true, true).choices).toEqual(researchChoices);
+    expect(() => answerView(first, scope, 0, false, true)).toThrow(ViewError);
   });
 
   it('reads where an answer says the question belongs among the threads the Ask sent, and refuses one that does not fit what it sent (ADR-0056, T2)', () => {

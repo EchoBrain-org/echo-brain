@@ -1,14 +1,10 @@
-// Ask threads (ADR-0056) and the conversations they make (ADR-0057), in the rules and in the store: which thread a turn
-// belongs to, a thread's home and name, a conversation (chain) and its label, what an Ask carries of the other
-// conversations and of its own older turns and how that is cut to fit; where an answer lands, a joined thread never
-// changing, "Which one?" and "New question"; what ECHO just did and its Undo; links; the door; and the way out of every
-// wait (cancel, failure, another account, a page change, closing Ask, the timeline read again).
+// Ask context selection, thread links, clarification, and how the store resumes a saved conversation.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskScope, AskThread, PendingTurn, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
 import {
-  askCarries, chainsOf, continuedThread, doorChains, earlierOf, homeTurns, labelOf, otherChains, ownWords, sameScope, threadActive, threadIds, threadsOf,
+  askCarries, chainsOf, continuedThread, doorChains, earlierOf, homeTurns, labelOf, otherChains, ownWords, recalledMessages, sameScope, threadActive, threadIds, threadsOf,
   type AskEarlierTurn, type Chain, type Thread,
 } from '../../src/renderer/timeline.js';
 import { paragraphs } from '../fixtures/authority.js';
@@ -93,6 +89,7 @@ beforeEach(() => {
     'app.status': () => ok(app),
     'ask.run': params => script?.(params) ?? answered(params),
     'ask.check': params => (checks ? checks(params.items as never) : fail('not_supported')),
+    'clipboard.writeText': () => ok(null),
     'ask.record': () => fail('not_found'),
     'open.ref': () => fail('not_found'),
     'projects.read': params => { const found = [...active, ...archived].find(item => item.project_id === params.project_id); return found ? ok(found) : fail('not_found'); },
@@ -1192,6 +1189,411 @@ describe('the door: the title opens every conversation (ADR-0057)', () => {
 });
 
 describe('one Ask transcript per scope', () => {
+
+  const launchQuestion = 'Who owns the launch?';
+  const pilot = { label: 'Pilot launch', question: 'Who owns the pilot launch?', citation: ticket('PILOT-1', '10001').cited!.citation };
+  const partner = { label: 'Partner launch', question: 'Who owns the partner launch?', citation: ticket('PARTNER-2', '10002').cited!.citation };
+  const selected = { label: pilot.label, citation: pilot.citation };
+  const offer = (choices: typeof pilot[]) => ok({ scope: GLOBAL, outcome: 'clarify', question: launchQuestion, parts: [], sources: [],
+    choices, receipt: { looked_through: choices.length } });
+
+  it.each(['typed', 'choice'])('completes first-turn research clarification after restart with a %s reply', async reply => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const pending = kept()[0]!;
+    expect(pending).toMatchObject({ text: launchQuestion, needs_clarification: true, follows: null });
+    expect(JSON.stringify(pending)).not.toContain(pilot.label);
+    await readAgain(store);
+    await store.returnToAsk();
+    expect(asked()).toHaveLength(1);
+    expect(text(await page(store))).not.toContain(pilot.label);
+    const detail = 'The summer launch, please.';
+    if (reply === 'choice') {
+      store.retryPending(pending.id);
+      await flush();
+      expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+      expect(byTestId(await page(store), 'choice').map(text)).toEqual([pilot.label, partner.label]);
+      script = params => answered(params, { question: pilot.question, label: pilot.label, parts: [
+        { question: pilot.question, status: 'partial', statements: [], gap: pilot.label, gap_details: { not_found: pilot.label, interrupted: true } }] });
+      store.chooseClarified(pilot);
+    } else {
+      script = null;
+      await store.ask(detail);
+    }
+    await flush();
+    const own = reply === 'typed' ? [launchQuestion, detail].join('\n') : launchQuestion;
+    expect(asked().at(-1)).toMatchObject({ question: own });
+    expect(asked().at(-1)).not.toHaveProperty('previous');
+    expect(kept()).toHaveLength(1);
+    expect(kept()[0]).toMatchObject({ id: pending.id, text: launchQuestion, typed: own, question: own, answer: { outcome: 'answered' } });
+    if (reply === 'typed') {
+      expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+      expect(kept()[0]).toHaveProperty('clarification', detail);
+    } else {
+      expect(asked().at(-1)!.research_subjects).toEqual([selected]);
+      expect(asked()).toHaveLength(3);
+      expect(kept()[0]).toMatchObject({ subject_citations: [pilot.citation], answer: { parts: [
+        { question: pilot.question, gap: pilot.label, gap_details: { not_found: pilot.label, interrupted: true } }] } });
+      expect(kept()[0]).not.toHaveProperty('label');
+      expect(kept()[0]).not.toHaveProperty('research_subjects');
+    }
+  });
+
+  it.each(['research first', 'intent first'])('keeps the access-checked intent wording when choices arrive %s', async order => {
+    const earlier = turn('Which launch briefs are available?', DAY);
+    seed(earlier);
+    const store = await startStore();
+    const intent = { label: 'Readiness brief', question: 'Who owns the readiness brief?' };
+    const intents = ok({ scope: GLOBAL, outcome: 'clarify', parts: [], sources: [], receipt: { looked_through: 0 },
+      question: launchQuestion, choices: [intent, { label: 'Supplier update', question: 'Who owns the supplier update?' }] });
+    script = params => {
+      if (params.question === intent.question && params.research_subjects) return answered(params);
+      if (params.question === intent.question) return offer([pilot, partner]);
+      return params.research_subjects || order === 'intent first' ? intents : offer([pilot, partner]);
+    };
+    await store.ask(launchQuestion);
+    const row = kept()[1]!;
+    store.chooseClarified(order === 'research first' ? pilot : intent);
+    await flush();
+    store.chooseClarified(order === 'research first' ? intent : pilot);
+    await flush();
+    expect(asked()).toHaveLength(3);
+    expect(asked()[2]).toMatchObject({ question: intent.question, research_subjects: [selected] });
+    expect(kept()[1]).toMatchObject({ id: row.id, text: launchQuestion, typed: launchQuestion, question: launchQuestion, answer: { outcome: 'answered' } });
+  });
+
+  it('hides the whole saved reply and stops copying or carrying it after losing the selected source, even while its fact is readable', async () => {
+    const statement = said('The restricted pilot ships on Friday.', [0]);
+    const date = ticket('DATE-3', '10003');
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation], answer: answerOf(launchQuestion, GLOBAL, {
+      sources: [date], parts: [{ question: pilot.label, status: 'partial', statements: [statement],
+        blocks: [{ kind: 'text', title: 'Restricted pilot schedule', statements: [0] }], gap_details: { not_found: 'Restricted pilot budget is missing.' } }] }) });
+    seed(saved);
+    const store = await startStore();
+    await store.returnToAsk();
+    await flush();
+    const message = () => page(store).then(text);
+    expect(await message()).toContain(statement.text);
+    expect(await message()).toContain('Restricted pilot schedule');
+
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '10001' ? 'unreadable' : 'same' })) });
+    await readAgain(store);
+    await store.returnToAsk();
+    await flush();
+    const hidden = await message();
+    expect(hidden).not.toContain('Restricted pilot');
+    expect(hidden).not.toContain(statement.text);
+    expect(kept()[0]).toMatchObject({ unreadable: [1] });
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.answerGroups()).toEqual([]);
+    click(byTestId(await page(store), 'ask-again')[0]);
+    await flush();
+    expect(asked().at(-1)).toMatchObject({ question: launchQuestion, previous: { question: launchQuestion, statements: [], citations: [] } });
+  });
+
+  it('renews only the open conversation’s protected answer before expiry and keeps its source pane open', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    const other = turn('Unrelated question?', 2 * DAY);
+    const projectTurn = turn('Another project?', 3 * DAY, { scope: inApollo, subject_citations: [partner.citation] });
+    seed(projectTurn, other, saved);
+    const store = await opened(projectTurn.id);
+    await store.openThread(saved.id);
+    await flush();
+    store.chooseSource(0, null, saved.id);
+    const pane = store.paneTarget();
+    expect(pane).not.toBeNull();
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    const runs = calls('ask.check');
+    expect(runs).toHaveLength(3);
+    const items = runs[2]!.items as { asked_at: string }[];
+    expect(items.map(item => item.asked_at)).toEqual(Array(3).fill(saved.asked_at));
+    expect(store.paneTarget()).toEqual(pane);
+    finish(ok({ items: items.map(() => ({ state: 'same' })) }));
+    await flush();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.paneTarget()).toEqual(pane);
+    expect(store.getState().sources?.open).toBe(0);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+    store.closeAsk();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls('ask.check')).toHaveLength(3);
+  });
+
+  it.each(['unknown', 'unreadable', 'offline'])('honors the current grant and allows an explicit retry when renewal reports %s', async result => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.thread);
+    store.chooseSource(0, null, saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    expect(calls('ask.check')).toHaveLength(2);
+    expect(store.paneTarget()).not.toBeNull();
+    finish(result === 'offline' ? fail('unreachable') : ok({ items: [{ state: 'same' }, { state: 'same' }, { state: result }] }));
+    await flush();
+    expect(store.paneTarget() === null).toBe(result === 'unreadable');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.getState().sources?.open).toBeNull();
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(calls('ask.check')).toHaveLength(2);
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(1);
+    click(byTestId(await page(store), 'retry-answer-sources')[0]);
+    await flush();
+    expect(calls('ask.check')).toHaveLength(3);
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+    expect(asked()).toHaveLength(0);
+  });
+
+  it('restores a protected answer when a check that stalled across the deadline returns', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.id);
+    store.chooseSource(0, null, saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    // A sleeping machine may pass the deadline without running the timer. Its next render and copy reread the clock.
+    vi.setSystemTime(Date.now() + 1);
+    expect(text(byTestId(await page(store), 'answer-unreadable')[0])).toContain('Checking');
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.paneTarget()).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(store.getState().sources?.open).toBeNull();
+    click(byTestId(await page(store), 'retry-answer-sources')[0]);
+    expect(calls('ask.check')).toHaveLength(2);
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+  });
+
+  it('discards an older positive renewal that returns after a newer check revoked its subject', async () => {
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation] });
+    seed(saved);
+    const store = await opened(saved.id);
+    const finish = held.hold('ask.check');
+    await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '10001' ? 'unreadable' : 'same' })) });
+    await store.ask('What changed?');
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.checksOf(saved)?.[2]).toBe('unreadable');
+  });
+
+  it('rechecks the new answer immediately when selected-subject research itself outlives its grant', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const research = held.hold('ask.run');
+    store.chooseClarified(pilot);
+    await flush();
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    const finish = held.hold('ask.check');
+    research(answered(asked().at(-1)!));
+    await flush();
+    expect(calls('ask.check')).toHaveLength(1);
+    expect(text(byTestId(await page(store), 'answer-unreadable')[0])).toContain('Checking');
+    finish(ok({ items: Array(3).fill({ state: 'same' }) }));
+    await flush();
+    expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+  });
+
+  it('recalls a specific authored message at or before the opened turn, storing its local reference through restart', async () => {
+    const first = turn('What about the cafe\u0301?', 9 * DAY);
+    const detail = 'The red  pilot. On Friday?';
+    const prompt = turn('Which pilot?', 7 * DAY, { typed: 'Which pilot?\n' + detail, clarification: detail, continues: [first.id] });
+    const choice = turn('Generated private choice', 5 * DAY, { typed: 'What about that one?', thread: prompt.id, follows: prompt.id });
+    const replay = turn(choice.question, 4 * DAY, { thread: prompt.id, typed: choice.typed, follows: choice.id, again_of: choice.id });
+    const unclear = turn('Legacy generated title', 3 * DAY, { thread: prompt.id, typed: undefined, follows: undefined });
+    const anchor = turn('Which pilot?', 2 * DAY, { thread: prompt.id, follows: choice.id });
+    const after = turn('Written after the anchor', DAY, { thread: prompt.id, follows: anchor.id });
+    seed(first, prompt, choice, replay, unclear, turn('Different topic', DAY), anchor, after);
+    const store = await startStore();
+    await store.openThread(prompt.id, anchor.id);
+    await flush();
+    script = params => answered(params, { parts: [], sources: [], recalled: [0, 2] });
+    await store.ask('What exact words did I use about the pilot and the café?');
+    expect(asked().at(-1)).toMatchObject({ previous: { messages: ['What about the café?', 'Which pilot?', detail, 'What about that one?', 'Which pilot?'] } });
+    const saved = kept().at(-1)!;
+    expect(saved.recalled).toEqual([{ turn: first.id }, { turn: prompt.id, clarification: true }]);
+    expect(saved.answer).not.toHaveProperty('recalled');
+    expect(store.askAgainOffered(saved)).toBe(false);
+    store.askAgain(saved.id);
+    expect(asked()).toHaveLength(1);
+    await readAgain(store);
+    expect(recalledMessages(saved, store.getState().timeline.entries).map(message => message.text)).toEqual([first.text, detail]);
+    expect(recalledMessages(saved, store.getState().timeline.entries.filter(row => row.id !== first.id)).map(message => message.text)).toEqual([detail]);
+  });
+
+  it('links a quote from a legacy choice to the message the person typed', async () => {
+    const first = turn('What moved?', 3 * DAY);
+    const source = turn('Where did the THERM-490 launch land?', 2 * DAY, { typed: 'what about that one?', follows: first.id, thread: first.id });
+    const recall = turn('What did I ask?', DAY, { follows: source.id, thread: first.id, recalled: [{ turn: source.id }],
+      answer: answerOf('What did I ask?', GLOBAL, { parts: [], sources: [] }) });
+    seed(first, source, recall);
+    const store = await opened(first.id);
+    const tree = await page(store);
+    const target = elements(tree).find(node => node.props.id === 'ask-original-' + source.id);
+    expect(byTestId(tree, 'recalled-message').map(text)).toEqual([source.typed]);
+    expect(text(target)).toBe(source.typed);
+  });
+
+  it('copies the visible loss-of-access explanation alongside an independently available quote', async () => {
+    const source = turn('I promised to send the July sheet.', 2 * DAY);
+    const mixed = turn('What did I promise and did I do it?', DAY, { recalled: [{ turn: source.id }], follows: source.id, thread: source.id });
+    seed(source, mixed);
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
+    const store = await opened(source.id);
+    const notice = byTestId(await page(store), 'answer-unreadable').map(text);
+    expect(notice).toEqual(['You can no longer read what this answer cited.']);
+    expect(await store.copyAnswer(mixed.id)).toBe(true);
+    expect(calls('clipboard.writeText').at(-1)?.text).toBe('> ' + source.text + '\n\n' + notice[0]);
+  });
+
+  it('keeps a resumed and re-placed lookup before its own submission in the transcript', async () => {
+    const billing = turn('What happened on billing?', 4 * DAY);
+    const first = turn('I will send Maya the July sheet.', 3 * DAY);
+    seed(billing, first);
+    const store = await opened(billing.id);
+    script = () => offer([pilot, partner]);
+    await store.ask('What did I say about Maya?');
+    const pending = kept().at(-1)!;
+    await store.openThread(first.id);
+    script = params => answered(params);
+    await store.ask('I sent Maya the June sheet.');
+    script = params => (params.previous as AskPrevious).question === billing.question ? elsewhere(params, [placeOf(params, first.question)])
+      : answered(params, { parts: [], sources: [], recalled: [0] });
+    store.retryPending(pending.id);
+    await flush(150);
+    expect(asked()).toHaveLength(4);
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([first.text]);
+    expect(byTestId(await page(store), 'recalled-message').map(text)).toEqual([first.text]);
+  });
+
+  it('distinguishes typing a meeting question from picking the identical starter, including a typed clarification', async () => {
+    const starter = 'What did we decide in Project Magic?';
+    const legacy = turn(starter, 4 * DAY);
+    seed(legacy);
+    const store = await startStore();
+    store.askSuggestion(starter);
+    await flush();
+    const clicked = kept().at(-1)!;
+    await store.ask(starter);
+    const typed = kept().at(-1)!;
+    await store.ask('What did I say about Magic?');
+    const last = kept().at(-1)!;
+    const entries = store.getState().timeline.entries;
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([starter]);
+    const refs = [legacy, clicked, typed].map(row => ({ turn: row.id }));
+    expect(recalledMessages({ ...last, recalled: refs }, entries)).toEqual([{ turn: typed.id, text: starter }]);
+    const detail = 'I meant the June meeting.';
+    const withDetail = { ...clicked, clarification: detail, typed: starter + '\n' + detail };
+    expect(recalledMessages({ ...last, recalled: [{ turn: clicked.id }, { turn: clicked.id, clarification: true }] },
+      entries.map(row => row.id === clicked.id ? withDetail : row))).toEqual([{ turn: clicked.id, clarification: true, text: detail }]);
+  });
+
+  it('identifies the recently quoted promise for a pronoun follow-up after many similar messages', async () => {
+    const promise = turn('I will send Maya the July inventory sheet.', 40 * DAY);
+    const others = Array.from({ length: 24 }, (_, i) => turn('I will send Maya the other sheet ' + i + '.', (30 - i) * DAY,
+      { thread: promise.id, follows: promise.id }));
+    const recall = turn('What was the wording of that first commitment?', DAY, { thread: promise.id, follows: others.at(-1)!.id,
+      recalled: [{ turn: promise.id }], answer: answerOf('What was the wording?', GLOBAL, { parts: [], sources: [] }) });
+    seed(promise, ...others, recall);
+    const store = await opened(recall.thread);
+    await store.ask('Did I send it?');
+    const previous = asked().at(-1)!.previous as AskPrevious;
+    expect(previous.recalled?.map(index => previous.messages![index])).toEqual([promise.text]);
+    expect(previous.messages!.length).toBeLessThan(others.length);
+    expect(previous.statements).toEqual([]);
+  });
+
+  it('quotes separately submitted clarifications individually after restart, preserving line breaks within a single submission', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const first = 'The June pilot.';
+    const second = 'The one in Paris.\nMaya will know.';
+    await store.ask(first);
+    script = params => answered(params);
+    await store.ask(second);
+    const answeredTurn = kept()[0]!;
+    await readAgain(store);
+    await store.returnToAsk();
+    script = params => answered(params, { parts: [], sources: [], recalled: [2, 1] });
+    await store.ask('Which clarifications did I write?');
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([launchQuestion, first, second]);
+    const recall = kept().at(-1)!;
+    expect(recall.recalled).toEqual([{ turn: answeredTurn.id, clarification: 2 }, { turn: answeredTurn.id, clarification: 1 }]);
+    const entries = store.getState().timeline.entries;
+    expect(recalledMessages(recall, entries).map(row => row.text)).toEqual([second, first]);
+    const { clarification_breaks: _cuts, ...old } = answeredTurn;
+    expect(recalledMessages(recall, entries.map(row => row.id === old.id ? old : row))).toEqual([]);
+  });
+
+  it('reserves space for an older topical message when ordinary context drops it', async () => {
+    const old = turn('Uranium budget? ' + 'extended '.repeat(1800).trimEnd(), 30 * DAY);
+    const ordinary = Array.from({ length: 24 }, (_, i) => turn('Other update ' + i + '?', (24 - i) * DAY,
+      { thread: old.id, follows: old.id, answer: answerOf('Other update?', GLOBAL, { direct: said('z'.repeat(55_000), [0]) }) }));
+    seed(old, ...ordinary);
+    const store = await opened(old.id);
+    await store.ask('What was my wording about the uranium budget?');
+    const request = asked().at(-1)!;
+    const previous = request.previous as AskPrevious;
+    expect(previous.messages).toContain(old.text);
+    expect(previous.messages!.length).toBeLessThan(ordinary.length);
+    expect(previous.earlier?.map(row => row.question)).not.toContain(old.text);
+    expect(Buffer.byteLength(JSON.stringify(request))).toBeLessThan(MAX_REQUEST_BYTES);
+    await store.openThread(old.id, ordinary.at(-1)!.id);
+    await store.ask('Any changes?');
+    const normal = asked().at(-1)!.previous as AskPrevious;
+    expect(Buffer.byteLength(JSON.stringify(normal.messages))).toBeLessThanOrEqual(8 * 1024);
+    expect(normal.messages).not.toContain(old.text);
+  });
+
+  it('waits for an explicit retry when a selected subject is no longer accessible', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const id = kept()[0]!.id;
+    script = () => fail('forbidden');
+    store.chooseClarified(pilot);
+    await flush();
+    expect(asked()).toHaveLength(2);
+    expect(asked()[1]).toMatchObject({ question: launchQuestion, research_subjects: [selected] });
+    expect(byTestId(await page(store), 'ask-retry').map(text)).toEqual(['Refresh choices']);
+    expect(kept()[0]).toMatchObject({ id, needs_clarification: true });
+    script = () => offer([partner]);
+    store.retryAsk();
+    await flush();
+    expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+    expect(byTestId(await page(store), 'choice').map(text)).toEqual([partner.label]);
+    expect(JSON.stringify(kept())).not.toContain(pilot.label);
+  });
+
+  it.each(['typed', 'choice'])('keeps the first selected subject while the person clarifies a second time by %s', async reply => {
+    const store = await startStore();
+    const summer = { ...partner, label: 'Summer', question: 'Who owns the summer pilot?' };
+    script = params => !params.research_subjects ? offer([pilot, partner]) : offer([summer]);
+    await store.ask(launchQuestion);
+    store.chooseClarified(pilot);
+    await flush();
+    expect(asked()).toHaveLength(2);
+    expect(byTestId(await page(store), 'choice').map(text)).toEqual([summer.label]);
+    script = params => answered(params);
+    if (reply === 'typed') await store.ask('The summer team.');
+    else store.chooseClarified(summer);
+    await flush();
+    expect(asked()).toHaveLength(3);
+    expect(asked()[2]).toMatchObject(reply === 'typed'
+      ? { question: launchQuestion + '\nThe summer team.', research_subjects: [selected] }
+      : { question: launchQuestion, research_subjects: [selected, { label: summer.label, citation: summer.citation }] });
+    expect(kept()).toHaveLength(1);
+  });
+
   it('preserves the restored prompt and composer draft until the returning account’s history arrives', async () => {
     const store = await startStore();
     script = params => ok({ scope: GLOBAL, outcome: 'clarify', parts: [], sources: [], receipt: { looked_through: 0 },

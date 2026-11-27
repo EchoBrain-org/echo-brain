@@ -1072,7 +1072,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     // Its own check failed, and so did the one the follow-up made: nothing it said is known to be readable now.
     const ofOld = () => calls('ask.check').filter(call => (call.items as { asked_at: string }[]).some(item => item.asked_at === old.asked_at));
     expect(ofOld()).toHaveLength(2);
-    expect(calls('ask.run')[0]!.previous).toEqual({ purpose: 'follow_up', question: old.question, asked_at: old.asked_at, statements: [], citations: [] });
+    expect(calls('ask.run')[0]!.previous).toEqual({ purpose: 'follow_up', question: old.question, asked_at: old.asked_at, statements: [], citations: [], messages: [old.question] });
     // Ask again of it, the same.
     store.askAgain(old.id);
     await flush();
@@ -1126,7 +1126,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       requests[1]!(allSame(calls('ask.check')[before + 1]!.items as never));
       await slow;
       expect(calls('ask.check')).toHaveLength(before + 2);
-      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [] });
+      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [], messages: [typed] });
       // The same check answered in time: the resolved question goes, with the sentence found readable.
       store.toggleTurn(earlier.id);
       await store.ask('and since when?');
@@ -1859,5 +1859,83 @@ describe('a number chosen after a check hid a source before it', () => {
     const reads = rpc.mock.calls.slice(before).filter(([method]) => method === 'ask.record')
       .map(([, params]) => (params as { record: { record_sha256: string } }).record.record_sha256);
     expect(reads).toEqual([sha('r2')]);
+  });
+});
+
+describe('refreshing the current facts beside an earlier quote', () => {
+  const promise = 'I will send Maya the pilot dates on Friday.';
+  const live = 'Did Maya receive the pilot dates?';
+  const question = 'What did I promise Maya, and did she get them?';
+  const checked = () => { checks = items => ok({ items: items.map(() => ({ state: 'same' })) }); };
+  function mixed(original = question, saved = live) {
+    const first = turn(promise, DAY, status(), { scope: inApollo, authored: true });
+    const answer = answerOf(live, [ticket('THERM-482', '20482')], [['Maya was waiting on Tuesday.', [0]]], { scope: inApollo });
+    return [first, turn(original, HOUR, answer, { scope: inApollo, question: saved, authored: true, follows: first.id, recalled: [{ turn: first.id }] })] as const;
+  }
+  it.each(['current', 'older'] as const)('rechecks the live question, compares the earlier fact, and preserves the local quote (%s saved format)', async version => {
+    checked();
+    const [first, prior] = mixed(question, version === 'current' ? live : question);
+    seed(first, prior);
+    const store = await startStore(); await reopen(store);
+    expect(askedSuggestions([prior], inApollo)[0]?.question).toBe(question);
+    expect(store.askAgainOffered(prior)).toBe(true);
+    store.askAgain(prior.id); await flush();
+    const request = calls('ask.run')[0]!;
+    expect(request).toMatchObject({ question: live, previous: { purpose: 'ask_again', question: live, statements: [{ text: 'Maya was waiting on Tuesday.' }] } });
+    expect(request.previous).not.toHaveProperty('messages');
+    expect(kept().at(-1)).toMatchObject({ text: question, question: live, again_of: prior.id, recalled: prior.recalled, authored: false });
+  });
+  it.each(['own words', 'selected subject', 'derived wording'] as const)('checks the mixed replay past a source-free prior quote (%s)', async mode => {
+    checked();
+    const [first, mixedTurn] = mixed();
+    const wording = 'What exactly did I promise?';
+    const earlier = turn(wording, 2 * HOUR, answerOf(wording, [], [], { parts: [], scope: inApollo }), {
+      scope: inApollo, follows: first.id, recalled: [{ turn: first.id }],
+      ...(mode === 'selected subject' ? { subject_citations: [ticket('THERM-482', '20482').cited!.citation] } : {}),
+      ...(mode === 'derived wording' ? { question: 'Which pilot did I promise to ship?' } : {}),
+    });
+    const prior = { ...mixedTurn, follows: earlier.id, carried: [first.id, earlier.id] };
+    seed(first, earlier, prior);
+    const store = await startStore(); await reopen(store);
+    expect(store.askAgainOffered(prior)).toBe(mode === 'own words');
+    store.askAgain(prior.id); await flush();
+    expect(calls('ask.run').map(request => request.question)).toEqual(mode === 'own words' ? [live] : []);
+  });
+  it('omits a refresh when the live wording cannot be verified or the chosen source is required', async () => {
+    const [first, prior] = mixed();
+    seed(first, prior);
+    const store = await startStore(); await reopen(store);
+    expect(store.askAgainOffered(prior)).toBe(false);
+    store.askAgain(prior.id); await flush();
+    expect(calls('ask.run')).toEqual([]);
+    const selected = { ...prior, subject_citations: [ticket('THERM-482', '20482').cited!.citation] };
+    expect(store.askAgainOffered(selected)).toBe(false);
+    expect(store.canAskEverywhere(selected)).toBe(false);
+  });
+  it('stops a checked replay if access changes before the new request', async () => {
+    checked();
+    const [first, prior] = mixed();
+    seed(first, prior);
+    const store = await startStore(); await reopen(store);
+    expect(store.askAgainOffered(prior)).toBe(true);
+    checks = items => ok({ items: items.map(() => ({ state: 'unreadable' })) });
+    store.askAgain(prior.id); await flush();
+    expect(calls('ask.run')).toHaveLength(0);
+    expect(store.askAgainOffered(prior)).toBe(false);
+    expect(kept()).toHaveLength(2);
+  });
+  it('carries only an authored live clause into Home and leaves the quoted project message in its original scope', async () => {
+    const [first, prior] = mixed('What was my exact wording? ' + live);
+    const gap = { ...prior, answer: { ...prior.answer, sources: [], outcome: 'not_found' as const,
+      parts: [{ question: live, status: 'not_found' as const, statements: [], gap: 'No receipt.' }] } };
+    seed(first, gap);
+    const store = await startStore(); await reopen(store);
+    expect(store.canAskEverywhere(gap)).toBe(true);
+    expect(store.canAskEverywhere({ ...gap, text: question, typed: question })).toBe(false);
+    store.askEverywhere(gap.id); await flush();
+    expect(calls('ask.run')[0]).toMatchObject({ scope: { kind: 'global' }, question: live });
+    expect(calls('ask.run')[0]).not.toHaveProperty('previous');
+    expect(kept().at(-1)).toMatchObject({ text: live, authored: false });
+    expect(kept().at(-1)).not.toHaveProperty('recalled');
   });
 });

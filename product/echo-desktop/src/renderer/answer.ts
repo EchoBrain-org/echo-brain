@@ -449,3 +449,9 @@ export function answerText(answer: TimelineAnswer, shows: Shows, since?: CopiedS
     ...(followUps.length > 0 ? ['Follow-ups', ...followUps] : [])]
     .filter(line => line !== '').join('\n');
 }
+/** An explicit wording lookup that came up empty, or an original message since pruned from this device. */
+export function missingEarlierMessage(requested: number | undefined, available: number): string | undefined {
+  if (requested === 0) return 'I couldn’t find that wording in the earlier messages I checked.';
+  if (requested !== undefined && available < requested) return 'An earlier message is no longer available in this chat.';
+  return undefined;
+}

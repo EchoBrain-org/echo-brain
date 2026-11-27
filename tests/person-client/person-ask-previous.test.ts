@@ -94,6 +94,23 @@ describe('the previous turn on the Person client (ADR-0047)', () => {
     }
   });
 
+  it('sends full user messages with --previous and checks recall indexes against that exact list', async () => {
+    const previous = { ...PREVIOUS, messages: ['Ship the pilot.\nThen call operations.', 'What did I say about shipping?'] };
+    const answer = answered({ question: QUESTION, recalled: [1, 0], parts: [], citations: [] });
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, '--progress', `--previous=${JSON.stringify(previous)}`])).toBe(0);
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body)).previous).toEqual(previous);
+    expect(lines(run.output.stdout).at(-1)).toMatchObject({ result: answer });
+
+    for (const [recalled, context] of [[[], PREVIOUS], [[2], previous], [[0], { ...previous, purpose: 'ask_again' }]] as const) {
+      const invalid = answered({ recalled });
+      const mock = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: invalid, receipt: RECEIPT }]));
+      await expect(client(mock).askWithLiveSources(context.purpose === 'ask_again' ? PREVIOUS.question : QUESTION, undefined, undefined, context))
+        .rejects.toMatchObject({ code: 'invalid_response' });
+    }
+  });
+
   it('refuses an answer that names a question, a since or choices when the Ask did not send the turn', async () => {
     for (const answer of [answered({ question: RESOLVED }), answered({ question: RESOLVED, since: { statements: [] } }), clarified]) {
       const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(stream([{ type: 'answer', response: answer, receipt: RECEIPT }]));

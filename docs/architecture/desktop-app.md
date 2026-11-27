@@ -67,7 +67,7 @@ copy that a unit test proves equivalent.
 | --- | --- | --- |
 | Home | `screens/home.tsx`, `screens/altitude.tsx` | What needs you, grouped by kind, then your projects; zoom into a project or a person. Home always opens at its top. |
 | Decision | `screens/decision.tsx`, `card.tsx`, `impact-card.tsx` | Approve a meeting, route each item, see its impact checks |
-| Ask | `screens/ask.tsx` | Question bar with suggestions, one thread under its name, the list of threads, the source pane |
+| Ask | `screens/ask.tsx` | Question bar, chronological conversation for the selected scope, inline clarification and source pane |
 | Project | `screens/project.tsx`, `items.tsx`, `project-settings.tsx`, `people.tsx` | The project feed, settings, Tools mappings and members |
 | Only me | `screens/only-me.tsx`, `only-me-row.tsx` | Items locked to you |
 | Follow-ups | `screens/follow-ups.tsx` | Follow-up lists and the item page |
@@ -107,41 +107,23 @@ copy that a unit test proves equivalent.
   old turn runs `ask.check`, a content-free check that its sources are still
   readable.
 
-  Threads ([ADR-0056](../decisions/ADR-0056-ask-threads.md), proposed) are
-  labels on turns in that same file: each turn names its thread by the id of
-  the thread's first turn, and a turn saved before the label belongs to the
-  thread of the turn it followed in the same place. Ask shows one thread, and
-  the list under the thread's name is the way to another: a row, the open
-  thread's own included, jumps to a thread at its home (Home, or its
-  project's page), and Merge relabels a thread's turns into the open one.
-  Every turn of a thread was asked in its home: a thread is asked in only
-  there, and only threads of one home, every turn of them asked there,
-  merge. A merge or its Undo is one compare-and-set `timeline.move`: groups
-  of turns with the thread the page has them in, which the host, reading the
-  file strictly, moves in one write only while the file has every named turn
-  there, answering where it has each; nothing shows moved before that
-  answer, and until it comes nothing else asks, jumps, merges or undoes. A
-  move the host refused moves nothing and the page says so (and shows where
-  the file has the turns, when they had moved); one with no answer to go by
-  (none in time, or none at all) changes nothing on the page, takes away any
-  Undo, and says ECHO could not confirm it, since only reading the file
-  again, as a restart does, says what it holds. `timeline.put` keeps the
-  thread the file has a turn in, so a turn saved whole never takes a move
-  back. A person is in a
-  thread once they have asked in it or picked it since Ask opened, its own row
-  in the list included; the
-  sidebar's Ask only shows the thread they last used. In a thread, `ask.run`
-  carries the previous turn, the thread's older turns and the other threads,
-  as the questions the person typed. Otherwise it carries no previous turn and
-  every thread the question may be placed in, the one shown included. The
-  answer says when the question belongs to another thread or starts one, and
-  the host refuses one that leaves out what an Ask with threads is owed: its
-  question, and with no previous turn, where it belongs. Each turn records
-  what its request carried (`carried`), and its full question, which a model
-  may have written, is sent again only while a fresh check finds every turn
-  that could have informed it still kept and readable: the turns it followed
-  and every turn each of those carried, wherever they are filed now.
-  Otherwise the typed words go.
+  The renderer shows all turns in submission order for the selected scope
+  (Home or one project). Topics link related turns in the account file.
+  The Ask title opens a searchable list for choosing a conversation.
+  Before research starts, the renderer saves the pending question with
+  `timeline.put`. A retry, clarification or completed answer updates that turn
+  by ID, so an interrupted question can be resumed in place.
+
+  Only completed turns supply research context. An explicitly opened turn
+  anchors the next question. Otherwise the desktop selects recent context and
+  offers the resolver other topics from the same scope. It marks an implicit
+  context at least seven days old, or a topic picked automatically from another
+  conversation, with `previous.candidate`. The resolver can continue a named
+  subject directly or ask for clarification in the transcript when choosing a
+  subject would change the research. Each turn records the IDs that informed
+  its request in `carried`. Before reusing model-written wording, the desktop
+  checks that the contributing turns and their sources are still readable.
+  If that check fails, it sends the person's own words. [Ask memory milestone](../product/2026-11-24-ask-memory-v1.md#november-27-milestone)
 
 ## Updates
 
