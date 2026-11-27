@@ -176,6 +176,7 @@ CLI's and the desktop's, asks
 and the scope rules here apply to it. The CLI accepts
 `person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>] [--labels] [--research-clarification] [--research-subjects <json>]`.
 `--research-clarification` permits research to ask which subject the person means, including on the first question. A client can continue with the original question and the selected labels and citations in `--research-subjects`. [Clarification during research](../product/2026-11-24-ask-memory-v1.md#milestone-2-clarification-during-research)
+A follow-up's `--previous` can include `messages`, the person's earlier wording from this conversation. The answer's `recalled` indexes point back into that list. A follow-up after a quote can include the corresponding indexes in `previous.recalled`. Current facts still need readable source evidence.
 `--labels` asks for the label of the conversation a follow-up continues, and a
 thread or a follow-up's previous turn may carry its `label`
 ([ADR-0057](../decisions/ADR-0057-ask-memory.md)).

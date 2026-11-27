@@ -316,6 +316,37 @@ test('a first-question research choice is regenerated after restart and finishes
     .toContainEqual(expect.objectContaining({ citation: expect.objectContaining({ ticket_id: '10002' }) }));
 });
 
+test('quotes the original message in place after restart and answers the delivery question from a current record', async () => {
+  run = await launch('ask-threads-checked');
+  const words = 'I’ll send Maya the July inventory sheet.  Keep the “pilot” notes attached.';
+  const question = 'What exactly did I say I would send Maya?';
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await ask(run.page, words);
+  await ask(run.page, question);
+  const recalled = () => run.page.getByTestId('recalled-message');
+  await expect(recalled()).toBeVisible();
+  expect(await recalled().textContent()).toBe(words);
+  await expect(run.page.getByTestId('turn').last().getByTestId('ask-everywhere')).toHaveCount(0);
+  const [source, reply] = file();
+  expect(reply).toMatchObject({ recalled: [{ turn: source!.id }] });
+  const disk = readFileSync(join(run.home, TIMELINE_FILE), 'utf8');
+  await run.close();
+  run = await launch('ask-threads-checked', { [TIMELINE_FILE]: disk });
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await run.page.getByTestId('sidebar-ask').click();
+  expect(await recalled().textContent()).toBe(words);
+  await run.page.getByRole('button', { name: 'Earlier message', exact: true }).click();
+  await expect(run.page.locator(`[data-turn="${source!.id}"] .msg.you`).first()).toBeFocused();
+  await ask(run.page, 'Did I send it?');
+  const current = run.page.getByTestId('turn').last();
+  await expect(current.getByTestId('recalled-message')).toHaveCount(0);
+  await expect(current.getByTestId('answer')).toContainText('The July inventory sheet was sent to Maya.');
+  await ask(run.page, 'What did I say I would send Maya, and was it sent?');
+  const mixed = run.page.getByTestId('turn').last();
+  expect(await mixed.getByTestId('recalled-message').textContent()).toBe(words);
+  await expect(mixed.getByTestId('answer')).toContainText('The July inventory sheet was sent to Maya.');
+});
+
 test('an older implicit subject asks for clarification and a typed reply after restart completes the original question', async () => {
   // A conversation last asked in eight days ago, as this computer's file kept it.
   const old = '11111111-1111-4111-8111-111111111111';

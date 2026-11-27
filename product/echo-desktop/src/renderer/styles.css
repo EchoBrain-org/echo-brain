@@ -515,6 +515,7 @@ button.marker:not(.on):hover { color: var(--text); background: transparent; }
 .answer-fact.on { background: var(--selected); }
 .answer-quote { display: flex; flex-direction: column; gap: 4px; margin: 2px 0; padding: 2px 0 2px 16px; border-left: 2px solid var(--control); }
 .answer-quote blockquote { margin: 0; font-size: 15px; line-height: 1.65; }
+.recalled blockquote { white-space: pre-wrap; overflow-wrap: anywhere; }
 .answer-quote figcaption { font-size: 13px; line-height: 1.45; color: var(--muted); }
 .answer-quote.on { border-radius: 0 8px 8px 0; background: var(--selected); }
 .asking .link-button { margin-left: 8px; }

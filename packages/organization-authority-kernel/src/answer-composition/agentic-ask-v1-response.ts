@@ -120,6 +120,7 @@ export function compactAndValidateAgenticAskResponseV1(result: PersonAnswerRespo
 export function agenticAskAnswerSha256V1(response: PersonAnswerResponseV8, drafts?: readonly AskFollowUpDraftV1[]): Sha256Digest {
   const previous = {
     ...(response.question === undefined ? {} : { question: response.question }), ...(response.since === undefined ? {} : { since: response.since }),
+    ...(response.recalled === undefined ? {} : { recalled: response.recalled }),
     ...(response.choices === undefined ? {} : { choices: response.choices }),
   };
   const followUps = response.follow_ups === undefined ? {} : { follow_ups: drafts ?? response.follow_ups };

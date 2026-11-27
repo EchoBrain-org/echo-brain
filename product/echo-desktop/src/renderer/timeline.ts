@@ -4,9 +4,9 @@
 // suggests from it, its threads (ADR-0056) and the conversations they make
 // (ADR-0057). Pure, for the store and its tests; the store keeps the state
 // and makes the calls.
-import { isPersonAnswerLabelV1, personAnswerLabelFitsV1 } from '@echo-brain/organization-api/person-answer-previous-v1';
+import { isPersonAnswerLabelV1, personAnswerLabelFitsV1, personAnswerLabelWordsV1 } from '@echo-brain/organization-api/person-answer-previous-v1';
 import type {
-  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskResearchSubject, AskScope, AskThread, CheckCitation, TimelineTurn,
+  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskResearchSubject, AskScope, AskThread, CheckCitation, RecalledMessageRef, TimelineEntry, TimelineTurn,
 } from '../shared/protocol.js';
 import { checkCitation, checkOf, subjectCitation, MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
@@ -552,9 +552,101 @@ export function earlierOf(turns: readonly TimelineTurn[], before: TimelineTurn, 
   return earlierTurns(turns, before).map(turn => carried(turn, sentWords(turn)!, readableStatements(turn, found?.[turn.id] ?? null)));
 }
 
+type LocalMessage = RecalledMessageRef & { readonly text: string };
+
+/** Exact submitted clarification messages. Older joined text does not identify which newlines separated messages. */
+export function clarificationParts(turn: Pick<TimelineTurn, 'clarification' | 'clarification_breaks'>): string[] {
+  const { clarification, clarification_breaks: cuts } = turn;
+  if (!clarification) return [];
+  if (!cuts) return clarification.includes('\n') ? [] : [clarification];
+  return [...cuts, clarification.length].map((end, i) => clarification.slice(i === 0 ? 0 : cuts[i - 1]! + 1, end));
+}
+
+/** Recover what this turn’s person actually submitted. Ask again and cross-scope replays inherit another turn’s wording. */
+function authoredMessages(turn: TimelineTurn, byId: ReadonlyMap<string, TimelineEntry>): LocalMessage[] {
+  const words = ownWords(turn);
+  if (!words || turn.again_of !== undefined) return [];
+  const detail = turn.clarification;
+  if (detail && words !== turn.text + '\n' + detail) return [];
+  const original = detail ? turn.text : words;
+  const parent = turn.follows && byId.get(turn.follows);
+  // Earlier writers treated the bar’s meeting and week suggestions as typing, and a widened Ask copied its earlier turn.
+  const starter = /^(?:What did we decide (?:this week|in .+)|What changed in .+ this week)\?$/u.test(original);
+  const authored = turn.authored ?? (!starter && (!turn.follows || (!!parent && sameScope(parent.scope, turn.scope))));
+  const messages: LocalMessage[] = authored ? [{ turn: turn.id, text: original }] : [];
+  if (detail) clarificationParts(turn).forEach((text, i, parts) => messages.push({ turn: turn.id, clarification: parts.length === 1 ? true : i + 1, text }));
+  return messages;
+}
+
+/** The selected conversation in transcript order through the anchor, including repeated submissions. */
+export function messagesThrough(turns: readonly TimelineTurn[], anchor: TimelineTurn, account: readonly TimelineTurn[]): LocalMessage[] {
+  const byId = new Map(account.map(turn => [turn.id, turn]));
+  return turns.slice(0, turns.findIndex(turn => turn.id === anchor.id) + 1)
+    .flatMap(turn => sameScope(turn.scope, anchor.scope) ? authoredMessages(turn, byId) : []);
+}
+
+/** Resolve local references at display time. Pruned rows and messages without known authorship have no quotable text. */
+export function recalledMessages(turn: TimelineTurn, entries: readonly TimelineEntry[]): LocalMessage[] {
+  if (!turn.recalled?.length) return [];
+  const end = entries.findIndex(entry => entry.id === turn.id);
+  if (end < 0) return [];
+  const prior = new Map(entries.slice(0, end).map(entry => [entry.id, entry]));
+  return turn.recalled.flatMap(ref => {
+    const source = prior.get(ref.turn);
+    if (!source || !('answer' in source) || !sameScope(source.scope, turn.scope)) return [];
+    return authoredMessages(source, prior).filter(message => message.clarification === ref.clarification);
+  });
+}
+
+export function recallOnly(turn: TimelineTurn): boolean {
+  return turn.recalled !== undefined && turn.answer.parts.length === 0 && turn.answer.direct === undefined;
+}
+
+const MAX_RECALL_MESSAGES = 16;
+const RECALL_ROOM = 8 * 1024;
+
+function sameMessage(left: RecalledMessageRef, right: RecalledMessageRef): boolean {
+  return left.turn === right.turn && left.clarification === right.clarification;
+}
+
+/** Carry the preceding answer’s quotes, distinctive matching words and recent messages, in transcript order. */
+function selectMessages(question: string, messages: readonly LocalMessage[], room: number, preceding: readonly RecalledMessageRef[]): LocalMessage[] {
+  const terms = new Set(personAnswerLabelWordsV1(question));
+  const counts = new Map<string, number>();
+  const budget = Math.min(32 * 1024, room);
+  const candidates = messages.flatMap((message, at) => {
+    const text = askText(message.text);
+    const bytes = jsonBytes(text) + 1;
+    if (!text || bytes > budget) return [];
+    const hits = [...new Set(personAnswerLabelWordsV1(text))].filter(term => terms.has(term));
+    for (const hit of hits) counts.set(hit, (counts.get(hit) ?? 0) + 1);
+    return [{ message, text, bytes, hits, at }];
+  });
+  const newest = candidates.reverse();
+  const score = (hits: readonly string[]) => hits.reduce((sum, hit) => sum + 1 / counts.get(hit)!, 0);
+  const topical = newest.filter(item => item.hits.length).map(item => ({ item, score: score(item.hits) }))
+    .sort((a, b) => b.score - a.score).slice(0, 12).map(match => match.item);
+  const selected: typeof candidates = [];
+  const quoted = newest.filter(item => preceding.some(ref => sameMessage(ref, item.message)));
+  const best = topical[0];
+  // Ordinary follow-ups spend at most 8 KiB here. A uniquely matching term can bring one longer message along whole.
+  const long = best && best.bytes > RECALL_ROOM && best.hits.some(term => term.length >= 4 && counts.get(term) === 1);
+  const quotedBytes = quoted.reduce((sum, item) => sum + item.bytes, 0);
+  let remaining = Math.min(budget, RECALL_ROOM + Math.max(quotedBytes, long ? best.bytes : 0));
+  for (const item of new Set([...quoted, ...topical, ...newest])) {
+    if (item.bytes > remaining) continue;
+    selected.push(item);
+    remaining -= item.bytes;
+    if (selected.length === MAX_RECALL_MESSAGES) break;
+  }
+  return selected.sort((left, right) => left.at - right.at).map(({ message, text }) => ({ ...message, text }));
+}
+
 /** What an Ask carries beside its question, with which conversations were sent. */
 export interface AskCarries {
   readonly previous?: AskPrevious;
+  /** Local references in the same order as the messages sent to the resolver. */
+  readonly messages?: readonly RecalledMessageRef[];
   /** Present, though it may be empty, on a question to be placed: one entry for each conversation (R14). */
   readonly threads?: AskThread[];
   /** The conversations sent, each by its newest thread's id then, in the order sent: an answer names one by its place here. */
@@ -566,7 +658,18 @@ export interface AskCarries {
  * least recently asked first, then older turns from the oldest. `others` null: not to be placed, no list; to be placed,
  * a list goes even when empty, so the answer can say the question starts a thread.
  */
-export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Chain[] | null, subjects?: readonly AskResearchSubject[]): AskCarries {
+export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Chain[] | null, subjects?: readonly AskResearchSubject[], authored?: readonly LocalMessage[], preceding: readonly RecalledMessageRef[] = []): AskCarries {
+  let refs: readonly RecalledMessageRef[] | undefined;
+  if (authored && previous?.purpose === 'follow_up') {
+    const indexes = preceding.length ? { recalled: preceding.map(() => MAX_RECALL_MESSAGES - 1) } : {};
+    const room = BODY_ROOM - bodyBytes(question, scope, { ...previous, messages: [], ...indexes }, subjects);
+    if (room >= 0) {
+      const selected = selectMessages(question, authored, room, preceding);
+      const recalled = preceding.map(ref => selected.findIndex(message => sameMessage(ref, message))).filter(index => index >= 0);
+      previous = { ...previous, messages: selected.map(message => message.text), ...(recalled.length ? { recalled } : {}) };
+      refs = selected.map(({ text: _text, ...ref }) => ref);
+    }
+  }
   const threads = (others ?? []).map(({ questions, asked_at, sent }): AskThread => ({ questions, asked_at, ...(sent === undefined ? {} : { label: sent }) }));
   // Each entry with the comma before the next, and each list that goes with its key and brackets.
   const sizes = (entries: readonly unknown[]) => entries.map(entry => jsonBytes(entry) + 1);
@@ -580,7 +683,7 @@ export function askCarries(question: string, scope: AskScope, previous: AskPrevi
   const older = previous === null ? [] : earlier.slice(from);
   return {
     ...(previous === null ? {} : { previous: older.length > 0 ? { ...previous, earlier: older } : previous }),
-    ...(others === null ? {} : { threads: threads.slice(0, kept) }),
+    ...(others === null ? {} : { threads: threads.slice(0, kept) }), ...(refs === undefined ? {} : { messages: refs }),
     sent: (others ?? []).slice(0, kept).map(chain => chain.id),
   };
 }

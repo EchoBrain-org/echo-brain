@@ -4,7 +4,7 @@ import type { PersonAnswerCitationV8 } from '@echo-brain/organization-api';
 import type { Answer, AnswerSource, AnswerStatement, AppStatus, AskPrevious, AskScope, AskThread, PendingTurn, TimelineTurn } from '../../src/shared/protocol.js';
 import { MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../../src/shared/protocol.js';
 import {
-  askCarries, chainsOf, continuedThread, doorChains, earlierOf, homeTurns, labelOf, otherChains, ownWords, sameScope, threadActive, threadIds, threadsOf,
+  askCarries, chainsOf, continuedThread, doorChains, earlierOf, homeTurns, labelOf, otherChains, ownWords, recalledMessages, sameScope, threadActive, threadIds, threadsOf,
   type AskEarlierTurn, type Chain, type Thread,
 } from '../../src/renderer/timeline.js';
 import { paragraphs } from '../fixtures/authority.js';
@@ -1399,6 +1399,113 @@ describe('one Ask transcript per scope', () => {
     finish(ok({ items: Array(3).fill({ state: 'same' }) }));
     await flush();
     expect(byTestId(await page(store), 'answer-unreadable')).toHaveLength(0);
+  });
+
+  it('recalls a specific authored message at or before the opened turn, storing its local reference through restart', async () => {
+    const first = turn('What about the cafe\u0301?', 9 * DAY);
+    const detail = 'The red  pilot. On Friday?';
+    const prompt = turn('Which pilot?', 7 * DAY, { typed: 'Which pilot?\n' + detail, clarification: detail, continues: [first.id] });
+    const choice = turn('Generated private choice', 5 * DAY, { typed: 'What about that one?', thread: prompt.id, follows: prompt.id });
+    const replay = turn(choice.question, 4 * DAY, { thread: prompt.id, typed: choice.typed, follows: choice.id, again_of: choice.id });
+    const unclear = turn('Legacy generated title', 3 * DAY, { thread: prompt.id, typed: undefined, follows: undefined });
+    const anchor = turn('Which pilot?', 2 * DAY, { thread: prompt.id, follows: choice.id });
+    const after = turn('Written after the anchor', DAY, { thread: prompt.id, follows: anchor.id });
+    seed(first, prompt, choice, replay, unclear, turn('Different topic', DAY), anchor, after);
+    const store = await startStore();
+    await store.openThread(prompt.id, anchor.id);
+    await flush();
+    script = params => answered(params, { parts: [], sources: [], recalled: [0, 2] });
+    await store.ask('What exact words did I use about the pilot and the café?');
+    expect(asked().at(-1)).toMatchObject({ previous: { messages: ['What about the café?', 'Which pilot?', detail, 'What about that one?', 'Which pilot?'] } });
+    const saved = kept().at(-1)!;
+    expect(saved.recalled).toEqual([{ turn: first.id }, { turn: prompt.id, clarification: true }]);
+    expect(saved.answer).not.toHaveProperty('recalled');
+    expect(store.askAgainOffered(saved)).toBe(false);
+    store.askAgain(saved.id);
+    expect(asked()).toHaveLength(1);
+    await readAgain(store);
+    expect(recalledMessages(saved, store.getState().timeline.entries).map(message => message.text)).toEqual([first.text, detail]);
+    expect(recalledMessages(saved, store.getState().timeline.entries.filter(row => row.id !== first.id)).map(message => message.text)).toEqual([detail]);
+  });
+
+  it('distinguishes typing a meeting question from picking the identical starter, including a typed clarification', async () => {
+    const starter = 'What did we decide in Project Magic?';
+    const legacy = turn(starter, 4 * DAY);
+    seed(legacy);
+    const store = await startStore();
+    store.askSuggestion(starter);
+    await flush();
+    const clicked = kept().at(-1)!;
+    await store.ask(starter);
+    const typed = kept().at(-1)!;
+    await store.ask('What did I say about Magic?');
+    const last = kept().at(-1)!;
+    const entries = store.getState().timeline.entries;
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([starter]);
+    const refs = [legacy, clicked, typed].map(row => ({ turn: row.id }));
+    expect(recalledMessages({ ...last, recalled: refs }, entries)).toEqual([{ turn: typed.id, text: starter }]);
+    const detail = 'I meant the June meeting.';
+    const withDetail = { ...clicked, clarification: detail, typed: starter + '\n' + detail };
+    expect(recalledMessages({ ...last, recalled: [{ turn: clicked.id }, { turn: clicked.id, clarification: true }] },
+      entries.map(row => row.id === clicked.id ? withDetail : row))).toEqual([{ turn: clicked.id, clarification: true, text: detail }]);
+  });
+
+  it('identifies the recently quoted promise for a pronoun follow-up after many similar messages', async () => {
+    const promise = turn('I will send Maya the July inventory sheet.', 40 * DAY);
+    const others = Array.from({ length: 24 }, (_, i) => turn('I will send Maya the other sheet ' + i + '.', (30 - i) * DAY,
+      { thread: promise.id, follows: promise.id }));
+    const recall = turn('What was the wording of that first commitment?', DAY, { thread: promise.id, follows: others.at(-1)!.id,
+      recalled: [{ turn: promise.id }], answer: answerOf('What was the wording?', GLOBAL, { parts: [], sources: [] }) });
+    seed(promise, ...others, recall);
+    const store = await opened(recall.thread);
+    await store.ask('Did I send it?');
+    const previous = asked().at(-1)!.previous as AskPrevious;
+    expect(previous.recalled?.map(index => previous.messages![index])).toEqual([promise.text]);
+    expect(previous.messages!.length).toBeLessThan(others.length);
+    expect(previous.statements).toEqual([]);
+  });
+
+  it('quotes separately submitted clarifications individually after restart, preserving line breaks within a single submission', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const first = 'The June pilot.';
+    const second = 'The one in Paris.\nMaya will know.';
+    await store.ask(first);
+    script = params => answered(params);
+    await store.ask(second);
+    const answeredTurn = kept()[0]!;
+    await readAgain(store);
+    await store.returnToAsk();
+    script = params => answered(params, { parts: [], sources: [], recalled: [2, 1] });
+    await store.ask('Which clarifications did I write?');
+    expect((asked().at(-1)!.previous as AskPrevious).messages).toEqual([launchQuestion, first, second]);
+    const recall = kept().at(-1)!;
+    expect(recall.recalled).toEqual([{ turn: answeredTurn.id, clarification: 2 }, { turn: answeredTurn.id, clarification: 1 }]);
+    const entries = store.getState().timeline.entries;
+    expect(recalledMessages(recall, entries).map(row => row.text)).toEqual([second, first]);
+    const { clarification_breaks: _cuts, ...old } = answeredTurn;
+    expect(recalledMessages(recall, entries.map(row => row.id === old.id ? old : row))).toEqual([]);
+  });
+
+  it('reserves space for an older topical message when ordinary context drops it', async () => {
+    const old = turn('Uranium budget? ' + 'extended '.repeat(1800).trimEnd(), 30 * DAY);
+    const ordinary = Array.from({ length: 24 }, (_, i) => turn('Other update ' + i + '?', (24 - i) * DAY,
+      { thread: old.id, follows: old.id, answer: answerOf('Other update?', GLOBAL, { direct: said('z'.repeat(55_000), [0]) }) }));
+    seed(old, ...ordinary);
+    const store = await opened(old.id);
+    await store.ask('What was my wording about the uranium budget?');
+    const request = asked().at(-1)!;
+    const previous = request.previous as AskPrevious;
+    expect(previous.messages).toContain(old.text);
+    expect(previous.messages!.length).toBeLessThan(ordinary.length);
+    expect(previous.earlier?.map(row => row.question)).not.toContain(old.text);
+    expect(Buffer.byteLength(JSON.stringify(request))).toBeLessThan(MAX_REQUEST_BYTES);
+    await store.openThread(old.id, ordinary.at(-1)!.id);
+    await store.ask('Any changes?');
+    const normal = asked().at(-1)!.previous as AskPrevious;
+    expect(Buffer.byteLength(JSON.stringify(normal.messages))).toBeLessThanOrEqual(8 * 1024);
+    expect(normal.messages).not.toContain(old.text);
   });
 
   it('waits for an explicit retry when a selected subject is no longer accessible', async () => {

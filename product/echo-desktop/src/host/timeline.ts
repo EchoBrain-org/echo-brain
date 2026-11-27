@@ -340,17 +340,24 @@ function retired(turn: unknown): boolean {
     || parts.some(part => record(part) && (Object.hasOwn(part, 'layout') || (part.blocks === undefined && Array.isArray(part.statements) && part.statements.length > 0)));
 }
 
+function validClarification({ clarification, clarification_breaks: cuts }: Json): boolean {
+  if (clarification !== undefined && !string(clarification)) return false;
+  return cuts === undefined || (string(clarification) && indexes(cuts) && cuts.every((at, i) => at > (i ? cuts[i - 1]! + 1 : 0)
+    && at < clarification.length - 1 && clarification[at] === '\n'));
+}
+
 /** A pending submission has no answer or thread assignment. Other unknown shapes stay hidden. */
 export function timelineEntry(value: unknown): TimelineEntry | null {
-  if (!record(value) || (value.clarification !== undefined && !string(value.clarification))) return null;
+  if (!record(value) || !validClarification(value) || (value.authored !== undefined && typeof value.authored !== 'boolean')) return null;
   if ('answer' in value) return timelineTurn(value);
   if ('thread' in value || 'question' in value || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !value.text.trim()
       || !scope(value.scope) || !(value.follows === null || (string(value.follows) && ID.test(value.follows)))
       || (value.action !== undefined && (value.follows === null || (value.action !== 'again' && value.action !== 'everywhere')))
       || ![value.needs_clarification, value.fixed, value.candidate].every(flag => flag === undefined || flag === true)) return null;
   return { id: value.id, asked_at: value.asked_at, text: value.text, scope: value.scope as AskScope, follows: value.follows,
-    ...(value.clarification === undefined ? {} : { clarification: value.clarification }),
-    ...(value.action === 'again' || value.action === 'everywhere' ? { action: value.action } : {}),
+    ...(typeof value.clarification === 'string' ? { clarification: value.clarification } : {}),
+    ...(indexes(value.clarification_breaks) ? { clarification_breaks: value.clarification_breaks } : {}),
+    ...(value.action === 'again' || value.action === 'everywhere' ? { action: value.action } : {}), ...(value.authored === undefined ? {} : { authored: value.authored }),
     ...(value.fixed === true ? { fixed: true } : {}), ...(value.candidate === true ? { candidate: true } : {}),
     ...(value.needs_clarification === true ? { needs_clarification: true } : {}) };
 }
@@ -358,11 +365,14 @@ export function timelineEntry(value: unknown): TimelineEntry | null {
 /** A completed turn as a put writes it. */
 export function timelineTurn(value: unknown): TimelineTurn | null {
   if (!record(value) || !string(value.id) || !ID.test(value.id) || !time(value.asked_at) || !string(value.text) || !string(value.question)
-      || !scope(value.scope) || !answer(value.answer)) return null;
+      || !scope(value.scope) || !answer(value.answer) || !validClarification(value)) return null;
+  if (value.recalled !== undefined && !(Array.isArray(value.recalled) && value.recalled.every(ref => record(ref) && string(ref.turn) && ID.test(ref.turn)
+      && (ref.clarification === undefined || ref.clarification === true || (index(ref.clarification) && ref.clarification > 0)) && Object.keys(ref).every(key => key === 'turn' || key === 'clarification')))) return null;
   if (value.since !== undefined && !statements(value.since)) return null;
   if (value.again_of !== undefined && !(string(value.again_of) && ID.test(value.again_of))) return null;
   if (value.citations_complete !== undefined && value.citations_complete !== true) return null;
   if (value.typed !== undefined && !string(value.typed)) return null;
+  if (value.authored !== undefined && typeof value.authored !== 'boolean') return null;
   if (value.follows !== undefined && value.follows !== null && !(string(value.follows) && ID.test(value.follows))) return null;
   // Its thread is a turn's id; `carried` holds turns and `continues` threads, each once (ADR-0056, ADR-0057).
   if (value.thread !== undefined && !(string(value.thread) && ID.test(value.thread))) return null;

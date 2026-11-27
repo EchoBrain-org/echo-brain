@@ -1072,7 +1072,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
     // Its own check failed, and so did the one the follow-up made: nothing it said is known to be readable now.
     const ofOld = () => calls('ask.check').filter(call => (call.items as { asked_at: string }[]).some(item => item.asked_at === old.asked_at));
     expect(ofOld()).toHaveLength(2);
-    expect(calls('ask.run')[0]!.previous).toEqual({ purpose: 'follow_up', question: old.question, asked_at: old.asked_at, statements: [], citations: [] });
+    expect(calls('ask.run')[0]!.previous).toEqual({ purpose: 'follow_up', question: old.question, asked_at: old.asked_at, statements: [], citations: [], messages: [old.question] });
     // Ask again of it, the same.
     store.askAgain(old.id);
     await flush();
@@ -1126,7 +1126,7 @@ describe('follow-ups, "Which one?" and Ask again (C3)', () => {
       requests[1]!(allSame(calls('ask.check')[before + 1]!.items as never));
       await slow;
       expect(calls('ask.check')).toHaveLength(before + 2);
-      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [] });
+      expect(sent(0).previous).toEqual({ purpose: 'follow_up', question: typed, asked_at: earlier.asked_at, statements: [], citations: [], messages: [typed] });
       // The same check answered in time: the resolved question goes, with the sentence found readable.
       store.toggleTurn(earlier.id);
       await store.ask('and since when?');

@@ -53,12 +53,16 @@ export interface PersonAnswerPreviousV1 {
   readonly citations: readonly PersonAnswerCitationV8[];
   /** Only on a follow-up (ADR-0056): the older turns of the thread it continues, oldest first, under the previous turn's rules. */
   readonly earlier?: readonly PersonAnswerEarlierTurnV1[];
+  /** Whole user-authored messages offered for wording recall on this follow-up, in the client's order. */
+  readonly messages?: readonly string[];
+  /** Indexes into these messages for the wording quoted by the preceding answer. */
+  readonly recalled?: readonly number[];
   /** Only on a follow-up (ADR-0057): the label of the conversation it continues, in form (isPersonAnswerLabelV1). */
   readonly label?: string;
 }
 
 /** One older turn of the thread a follow-up continues (ADR-0056). */
-export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label' | 'candidate'>;
+export type PersonAnswerEarlierTurnV1 = Omit<PersonAnswerPreviousV1, 'purpose' | 'earlier' | 'label' | 'candidate' | 'messages' | 'recalled'>;
 
 /** One of the asker's other threads (ADR-0056): their typed questions, oldest first, only their own words (R2), never stored. */
 export interface PersonAnswerThreadV1 {

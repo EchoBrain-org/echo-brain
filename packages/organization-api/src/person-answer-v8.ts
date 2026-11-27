@@ -85,6 +85,8 @@ export interface PersonAnswerResponseV8 {
   readonly since?: PersonAnswerSinceV1;
   /** A follow-up choice supplies the next question. A cited research choice continues the original Ask with its selected subject. */
   readonly choices?: readonly PersonAnswerChoiceV1[];
+  /** Indexes into this follow-up’s user-authored messages. An explicit lookup with no match returns an empty array. */
+  readonly recalled?: readonly number[];
   /**
    * Only on an answer whose writer drafted follow-ups (ADR-0053): their open-item ids, in the writer's order. Each is saved
    * with the answer, unsent, in the asker's own list; a client reads it with the runs `item` operation. Never with `clarify`.

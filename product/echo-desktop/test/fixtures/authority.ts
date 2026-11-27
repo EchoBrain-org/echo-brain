@@ -54,7 +54,7 @@ interface Contract {
   validatePersonOpenRequestV1(value: unknown): { ref: string; cursor?: string };
   validatePersonOpenResponseV1(value: unknown): unknown;
   validatePersonAnswerRequestV3(value: unknown): {
-    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string }; threads?: readonly { readonly questions: readonly string[] }[]; research_clarification?: true; research_subjects?: readonly { readonly label: string }[];
+    question: string; project_id?: string; previous?: { readonly purpose: string; readonly question: string; readonly messages?: readonly string[] }; threads?: readonly { readonly questions: readonly string[] }[]; research_clarification?: true; research_subjects?: readonly { readonly label: string }[];
   };
   /** The Ask timeline's reads (ADR-0047): the source check's request and answer, and what arrived in your projects. */
   validatePersonAskCheckRequestV1(value: unknown): { items: { citation: Record<string, unknown> }[] };
@@ -1815,6 +1815,17 @@ export function installTestAuthority(home: string, fixturesDirectory: string, Se
       // `ask-threads-checked` the source check answers too (timelineCheck), and a question about what was drafted is
       // answered from a follow-up, the one source that check never finds readable.
       if (mode === 'ask-threads' || mode === 'ask-threads-checked') {
+        if (request.previous?.messages && ['What exactly did I say I would send Maya?', 'Did I send it?', 'What did I say I would send Maya, and was it sent?'].includes(question)) {
+          const index = request.previous.messages.findIndex(message => message.startsWith('I’ll send Maya'));
+          const recalled = index < 0 ? [] : [index];
+          if (question === 'Did I send it?' || question.endsWith('was it sent?')) {
+            const ticket = thermTicket('PILOT-9', 'July inventory delivery', '10009');
+            return answered({ ...timelineV8(question, scope, [ticket], [cites([ticket], 'The July inventory sheet was sent to Maya.', [0])]), question,
+              ...(question === 'Did I send it?' ? {} : { recalled }) });
+          }
+          return answered({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, question, recalled,
+            outcome: recalled.length ? 'answered' : 'not_found', parts: [], citations: [] }, 0);
+        }
         if (request.research_clarification && !request.research_subjects && question === 'Who owns the launch?') {
           return answered({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope, outcome: 'clarify', parts: [], citations: [], question,
             choices: [{ label: 'Pilot launch', question: 'Who owns the pilot launch?', citation: thermTicket('PILOT-1', 'Pilot launch', '10001').citation },

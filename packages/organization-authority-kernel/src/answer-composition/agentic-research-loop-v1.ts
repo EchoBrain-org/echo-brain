@@ -191,8 +191,10 @@ export interface AgenticResearchLoopV1 {
   progress(): AgenticResearchProgressV1;
   /** Present only when the planner requested clarification using research it actually saw. */
   readonly clarification?: PersonAnswerResponseV8;
+  /** Open selected evidence before the resolver uses its subject. Subsequent research keeps these reads. */
+  openStarting(starting: AgenticBriefV1['starting']): Promise<readonly (string | null)[]>;
   /** Runs research once, calling the model only through `gate`, and returns everything it gathered. The runner adds the trigger's name. */
-  run(gate: AgenticModelGateV1): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
+  run(gate: AgenticModelGateV1, resolved?: Pick<AgenticBriefV1, 'goal' | 'starting'>): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
 }
 
 /** One scratchpad entry. `short` is the only id a model ever sees. */
@@ -1260,6 +1262,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const containsLabel = (label: string, title: string, text?: string): boolean =>
     [title, text].some(field => field !== undefined && cleanLine(field).includes(label));
+  const selectedLabels: string[] = [];
   const clarifyFrom = (args: unknown, observed: readonly SubjectEvidence[], alone = true): PersonAnswerResponseV8 => {
     const input = object(args);
     const question = options.clarification_question;
@@ -1280,7 +1283,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (new Set(choices.map(choice => choice.label.toLowerCase())).size !== choices.length) {
       throw new AgenticAskOutputErrorV1('Choose distinct subject labels');
     }
-    if (choices.some(choice => brief.starting.some(start => start.selected_label?.toLowerCase() === choice.label.toLowerCase()))) {
+    if (choices.some(choice => selectedLabels.some(label => label.toLowerCase() === choice.label.toLowerCase()))) {
       throw new AgenticAskOutputErrorV1('The person already chose that subject; continue the research');
     }
     // Each standalone choice includes the original question. Refuse an oversized proposal before copying it.
@@ -1366,8 +1369,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const absenceUnconfirmed = (parts: readonly PartState[]): boolean =>
     ask && availabilityFailures > 0 && parts.some(part => part.needs.some(need => need.status === 'not_found'));
 
-  /** The research phase: starting reads, then the loop until a stop rule fires. */
-  const research = async (gate: AgenticModelGateV1): Promise<void> => {
+  const openStarting = async (starting: AgenticBriefV1['starting']): Promise<readonly (string | null)[]> => {
     // ---- starting evidence: read fresh through the access-checked desk ----
     // The reads run together, a few at a time in brief order, and are registered in brief order, so ids, receipts and
     // failures are those of reading one at a time: a failure that stops research stops only the reads after it, and the
@@ -1375,12 +1377,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const staleSelection = () => new AuthorityOperationError("stale_access_state", "The selected subject is no longer available");
     type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true } | { readonly skipped: true };
     assertLive();
-    const stopReads = brief.starting.map(() => new AbortController());
+    const stopReads = starting.map(() => new AbortController());
     let reading = 0;
     const waiting: (() => void)[] = [];
     /** What each starting read released, by brief index, kept the moment the desk returns it. */
     const released: (EvidenceDeskResultV2 | undefined)[] = [];
-    const settled = await Promise.allSettled(brief.starting.map(async ({ citation, selected_label: selectedLabel, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
+    const settled = await Promise.allSettled(starting.map(async ({ citation, selected_label: selectedLabel, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
       const signal = AbortSignal.any([activeSignal, stopReads[index]!.signal]);
       if (reading >= STARTING_READS_AT_ONCE) await new Promise<void>(resolve => { waiting.push(resolve); });
       reading += 1;
@@ -1427,7 +1429,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const startingIds: (string | null)[] = [];
     for (const [index, outcome] of settled.entries()) {
       const read = (outcome as PromiseFulfilledResult<StartingRead>).value;
-      const { citation } = brief.starting[index]!;
+      const { citation } = starting[index]!;
       // Nothing was released, and nothing is covered or reported: only a question skips, and its goal has no slot to fill.
       if ("skipped" in read) { startingIds.push(null); continue; }
       if ("unreadable" in read) {
@@ -1450,11 +1452,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       if (anchor.text !== undefined && anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
-    if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds) });
-    else {
-      const labels = brief.starting.flatMap(start => start.selected_label ?? []);
-      if (labels.length > 0) goal = { kind: "question", question: `${brief.goal.question} (${labels.join(', ')})` };
-    }
+    selectedLabels.push(...starting.flatMap(start => start.selected_label ?? []));
+    return startingIds;
+  };
+
+  const research = async (gate: AgenticModelGateV1, resolved: Pick<AgenticBriefV1, 'goal' | 'starting'>): Promise<void> => {
+    const startingIds = await openStarting(resolved.starting);
+    if (resolved.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(resolved.goal.task, startingIds) });
+    else goal = selectedLabels.length ? { kind: "question", question: `${resolved.goal.question} (${selectedLabels.join(', ')})` } : resolved.goal;
 
     if (options.driver !== undefined) {
       await drivenResearch(gate, options.driver);
@@ -1790,6 +1795,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
 
   return Object.freeze({
+    openStarting,
     gate_hooks: Object.freeze({
       // Only an admitted research call makes a complete body read. Retrieval,
       // opening, and scratchpad construction alone cannot satisfy a need.
@@ -1812,9 +1818,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       receipts, rounds: steps, fallbacks, searches: searchesRun.length, search_hits: searchHits, retrieved_tickets: retrievedTickets.size,
       refused_reads: refusedReadsCount, repeated_refusals: repeatedRefusals, unchecked_items: uncheckedItems, sources_looked_at: sourcesLookedAt.size, most_reads_in_a_step: mostReadsInAStep,
     }),
-    async run(gate: AgenticModelGateV1) {
+    async run(gate: AgenticModelGateV1, resolved: Pick<AgenticBriefV1, 'goal' | 'starting'> = brief) {
       const researchStartedAt = now();
-      await research(gate);
+      await research(gate, resolved);
       // A failed clarify can be repaired by finding the subjects or actually finishing the investigation.
       // Until then the ordinary incomplete-research writer could draft for the wrong subject.
       if (triedClarification && !clarification && (researchIncomplete || researchStop !== 'finished')) {

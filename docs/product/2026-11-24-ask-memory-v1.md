@@ -22,7 +22,7 @@ The reader introduced in `7ee96ef` preserves unknown rows on write. The installe
 
 The new desktop sends `previous.candidate` for implicit older context. Release the updated Authority before the desktop and its bundled Person client. Older desktops can continue sending the existing request format.
 
-Milestone 1 covers clarification before research. Retrieving an exact historical quote remains future work.
+Milestone 1 covers clarification before research.
 
 ### Milestone 2: clarification during research
 
@@ -35,6 +35,12 @@ Pending suggestions stay in memory. Reopening the question regenerates them. The
 The chosen source identifies whom or what the whole reply describes, so its access check covers the entire reply. While Ask is open, the desktop refreshes that check before its five-minute validity ends. Loss of access hides the reply. If Echo cannot renew the check, the reply stays hidden after expiry until a check succeeds. The person can retry from the same message.
 
 Deploy the Authority before an opting-in desktop or Person client. Clients that omit the capability continue to receive their existing answer format.
+
+### Exact wording from earlier messages
+
+“What did I say I’d send Maya?” can show the original message, including punctuation and line breaks. **Earlier message** jumps to it in the transcript. “Did I send it?” goes through ordinary research and requires current evidence. A question that asks both can show the earlier words alongside a separately sourced answer about delivery.
+
+On a follow-up, the desktop picks a small set of the person’s own messages from the selected conversation, including linked turns in the same Home or project. It includes the messages just quoted, then favors words related to the question and recent messages. The resolver can use a previous quote to tell what “it” means in the next question. The existing resolver identifies messages by their place in that list. The desktop quotes their saved wording and keeps local references so the links still work after restart. When none of the supplied messages match, Echo says so. If the original has since been pruned, the transcript says it is unavailable.
 
 ## Why
 

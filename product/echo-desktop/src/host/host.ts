@@ -621,7 +621,8 @@ async function handle(method: Exclude<HostMethodName, 'ask.cancel'>, params: unk
           () => { if (__ECHO_TEST_HOOK__) console.error('[client] ask progress line refused'); })
         : undefined;
       const progress = (line: string) => { alive(); steps?.(line); };
-      return forAccount(method, expect, askArgv(text, scope, previous, threads, subjects), stdout => answerView(lastJson(stdout), scope, threads?.length, previous !== undefined, askLabels(previous), previous?.purpose !== 'ask_again'), undefined, abortSignal, undefined, progress);
+      return forAccount(method, expect, askArgv(text, scope, previous, threads, subjects), stdout => answerView(lastJson(stdout), scope, threads?.length, previous !== undefined, askLabels(previous), previous?.purpose !== 'ask_again',
+        previous?.purpose === 'follow_up' ? previous.messages : undefined), undefined, abortSignal, undefined, progress);
     }
     case 'timeline.read': {
       const { expect } = params as Params<'timeline.read'>;

@@ -50,6 +50,29 @@ describe('the previous turn on the Ask request (ADR-0047)', () => {
     ]) expect(() => validatePersonAnswerRequestV3(invalid)).toThrow();
   });
 
+  it('carries whole user messages only on a follow-up, in order and without rewriting', () => {
+    const messages = ['A question?\nWith a second line.', 'A question?\nWith a second line.'];
+    expect(validatePersonAnswerRequestV3(ask(previous({ messages }))).previous?.messages).toEqual(messages);
+    expect(validatePersonAnswerRequestV3(ask(previous({ messages: [] }))).previous?.messages).toEqual([]);
+    for (const invalid of [[''], [' padded '], ['cafe\u0301'], ['x\u0007'], ['a', 1], 'text']) {
+      expect(() => validatePersonAnswerRequestV3(ask(previous({ messages: invalid })))).toThrow();
+    }
+    const again = { ...previous({ purpose: 'ask_again' }), messages };
+    expect(() => validatePersonAnswerRequestV3({ ...ask(again), question: again.question })).toThrow();
+    const { purpose: _purpose, ...older } = previous({ messages });
+    expect(() => validatePersonAnswerRequestV3(ask(previous({ earlier: [older] })))).toThrow();
+  });
+
+  it('identifies wording quoted in the preceding answer only within the messages offered now', () => {
+    const messages = ['Friday afternoon.', 'Before the launch.'];
+    const previousWith = (fields: Record<string, unknown>) => validatePersonAnswerRequestV3(ask(previous(fields))).previous;
+    expect(previousWith({ messages, recalled: [1, 0] })?.recalled).toEqual([1, 0]);
+    for (const fields of [{ recalled: [] }, { messages: [], recalled: [0] },
+      ...[[1, 1], [2], [-1], [0.5]].map(recalled => ({ messages, recalled }))]) {
+      expect(() => previousWith(fields)).toThrow();
+    }
+  });
+
   it('carries a follow-up or an Ask again, exactly as sent, and leaves a request without it unchanged', () => {
     expect(validatePersonAnswerRequestV3(ask(previous()))).toEqual(ask(previous()));
     expect(validatePersonAnswerRequestV3(ask(previous({ candidate: true }))).previous?.candidate).toBe(true);
@@ -130,6 +153,20 @@ const clarified = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe('what an answer to the previous turn carries (ADR-0047)', () => {
+  it('accepts quote-only matches, misses, and quotes alongside ordinary cited research', () => {
+    const quote = answered({ recalled: [2, 0], parts: [], citations: [] });
+    const miss = { ...quote, outcome: 'not_found', recalled: [] };
+    for (const valid of [quote, miss, answered({ recalled: [1] }), answered({ recalled: [] })]) {
+      expect(validatePersonAnswerResponseV8(valid)).toEqual(valid);
+    }
+    for (const invalid of [
+      { ...quote, recalled: [] }, { ...miss, recalled: [1] }, { ...quote, citations: [ticket] },
+      { ...quote, outcome: 'partial' }, answered({ parts: [], citations: [] }),
+      clarified({ recalled: [] }), answered({ recalled: [0], since: { statements: [] } }),
+      ...[[0, 0], [-1], [0.5], ['1'], null].map(recalled => answered({ recalled })),
+    ]) expect(() => validatePersonAnswerResponseV8(invalid)).toThrow();
+  });
+
   it('names the question it answers, and for an Ask again what is different since, each cited', () => {
     expect(validatePersonAnswerResponseV8(answered()).question).toBe('What are the details on THERM-482?');
     const since = { statements: [{ text: 'The DVT review on Oct 24 kept the gate on hold.', citation_indexes: [1], private: false }] };

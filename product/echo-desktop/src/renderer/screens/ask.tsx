@@ -6,7 +6,7 @@ import type {
 } from '../../shared/protocol.js';
 import {
   answerGaps, answerLead, answerSays, answerSentences, cardWord, documentName, drawnBlocks, externalSourceProvider, partShows, passageBlocks, rowId, rowStatement,
-  shownArranged, shownItems, shownTitles, statementGroups, tableDay, type AnswerLead, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
+  missingEarlierMessage, shownArranged, shownItems, shownTitles, statementGroups, tableDay, type AnswerLead, type AnswerTable, type Inline, type Sentence, type Shows, type SourceGroup,
 } from '../answer.js';
 import { askedStamp, askedWhen, meetingTime, stamped } from '../format.js';
 import { message } from '../messages.js';
@@ -22,7 +22,7 @@ import {
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, clarificationParts, recalledMessages, recallOnly, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -603,7 +603,7 @@ function TurnFoot({ state, turn, view, took, again, copy, fold = false }: {
   state: State; turn: TimelineTurn; view: TurnView; took: AskTook | undefined; again: boolean; copy: boolean; fold?: boolean;
 }) {
   const count = view.groups.length;
-  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took ? lookedThrough(took.receipt) : null;
+  const what = count > 0 ? (count === 1 ? '1 source' : `${count} sources`) : took && !recallOnly(turn) ? lookedThrough(took.receipt) : null;
   const label = [what, took ? duration(took.took) : null].filter(Boolean).join(' · ');
   const listed = state.sources?.listed.includes(view.id) === true;
   if (label === '' && !again && !copy && !fold) return null;
@@ -637,10 +637,38 @@ function againAt(state: State, turn: TimelineTurn): string | null {
 const UNREADABLE = 'You can no longer read what this answer cited.';
 
 /** A question as the person asked it: a message on the right. */
-function Asked({ text, testid = 'question', turn, selected }: { text: string; testid?: string; turn?: string; selected?: boolean }) {
-  return turn ? <button type="button" class="msg you selectable" data-testid={testid} aria-label={`Follow up on: ${text}`}
+function Asked({ text, testid = 'question', turn, selected, clarificationOf }: { text: string; testid?: string; turn?: string; selected?: boolean; clarificationOf?: string }) {
+  return turn ? <button id={`ask-original-${turn}`} type="button" class="msg you selectable" data-testid={testid} aria-label={`Follow up on: ${text}`}
     aria-pressed={selected} onClick={() => toggleTurn(turn, true)}>{text}</button>
-    : <div class="msg you selectable" data-testid={testid}>{text}</div>;
+    : <div id={clarificationOf && `ask-clarification-${clarificationOf}`} tabIndex={clarificationOf ? -1 : undefined} class="msg you selectable" data-testid={testid}>{text}</div>;
+}
+
+function ClarificationMessages({ turn }: { turn: TimelineTurn }) {
+  if (!turn.clarification) return null;
+  const parts = clarificationParts(turn);
+  if (!parts.length) return <Asked text={turn.clarification} testid="clarification-reply" />;
+  return <>{parts.map((text, i) => <Asked key={i} text={text} testid="clarification-reply"
+    clarificationOf={parts.length === 1 ? turn.id : `${turn.id}-${i + 1}`} />)}</>;
+}
+
+function EarlierMessages({ turn, state }: { turn: TimelineTurn; state: State }) {
+  if (turn.recalled === undefined) return null;
+  const messages = recalledMessages(turn, state.timeline.entries);
+  const missing = missingEarlierMessage(turn.recalled.length, messages.length);
+  return <div class="msg echo recalled">
+    {messages.map(message => {
+      const target = message.clarification ? `ask-clarification-${message.turn}${message.clarification === true ? '' : '-' + message.clarification}` : `ask-original-${message.turn}`;
+      return <figure class="answer-quote" key={target}>
+        <blockquote class="selectable" data-testid="recalled-message">{message.text}</blockquote>
+        <figcaption><button type="button" class="foot-action" onClick={() => {
+          const original = document.getElementById(target);
+          original?.focus({ preventScroll: true });
+          original?.scrollIntoView({ block: 'center' });
+        }}>Earlier message</button></figcaption>
+      </figure>;
+    })}
+    {missing && <p class="answer-empty">{missing}</p>}
+  </div>;
 }
 
 /**
@@ -659,10 +687,11 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
   return (
     <div class="turn" data-testid="turn" data-turn={turn.id}>
       <Asked text={turn.text} turn={turn.id} selected={state.ask?.opened === turn.id && state.ask.openedAt === state.ask.asked.length} />
-      {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+      <ClarificationMessages turn={turn} />
+      <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
-        : <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
+        : !recallOnly(turn) && <Reply state={state} view={view} empty={foundNothingInProject(turn) ? null : nothingLine(turn, state)} />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
       {(foundNothingInProject(turn) || widen) && (
         <div class="project-empty" data-testid={foundNothingInProject(turn) ? 'project-empty' : undefined}>
@@ -674,7 +703,7 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
         </div>
       )}
       {/* With every sentence left out, its sources go too; a fixed capability or retry explanation can still be copied. */}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted} />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={took} again={!current && askAgainOffered(turn)} copy={!omitted || turn.recalled !== undefined} />
     </div>
   );
 }
@@ -691,14 +720,16 @@ function FullTurn({ state, turn, took, current, last }: { state: State; turn: Ti
 function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn; opened: boolean }) {
   const view = turnView(turn, checksOf(turn, state));
   const omitted = allOmitted(turn, view.checks) && answerGaps(turn.answer, view.shows).length === 0;
+  const messages = turn.recalled && recalledMessages(turn, state.timeline.entries);
   const first = view.lead?.statement.text ?? answerSentences(turn.answer).find(([, sentence]) => view.shows(sentence.citation_indexes))?.[1].text;
+  const preview = messages?.[0]?.text ?? missingEarlierMessage(turn.recalled?.length, messages?.length ?? 0);
   return (
     <div class="folded-turn" data-turn={turn.id}>
       <Asked text={turn.text} testid="timeline-question" turn={turn.id} selected={opened && state.ask?.openedAt === state.ask?.asked.length} />
-      {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+      <ClarificationMessages turn={turn} />
       {opened ? <OpenedTurn state={state} turn={turn} view={view} omitted={omitted} /> : (
         <button type="button" class="msg echo folded" data-testid="timeline-row" aria-expanded="false" onClick={() => toggleTurn(turn.id)}>
-          <span class="short">{omitted ? UNREADABLE : first ?? nothingLine(turn, state)}</span>
+          <span class="short">{preview ?? (omitted ? UNREADABLE : first ?? nothingLine(turn, state))}</span>
         </button>
       )}
     </div>
@@ -713,11 +744,12 @@ function FoldedTurn({ state, turn, opened }: { state: State; turn: TimelineTurn;
 function OpenedTurn({ state, turn, view, omitted }: { state: State; turn: TimelineTurn; view: TurnView; omitted: boolean }) {
   return (
     <div class="opened" data-testid="opened-turn">
+      <EarlierMessages turn={turn} state={state} />
       {!omitted && turn.since && <SinceList state={state} view={view} since={turn.since} at={againAt(state, turn)} />}
       {omitted ? <div class="msg echo answer-empty" data-testid="answer-unreadable">{UNREADABLE}</div>
-        : <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
+        : !recallOnly(turn) && <Reply state={state} view={view} empty={nothingLine(turn, state)} dimmed />}
       {turn.answer.follow_ups && <AskFollowUps state={state} ids={turn.answer.follow_ups} />}
-      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again copy={!omitted} fold />
+      <TurnFoot state={state} turn={turn} view={omitted ? { ...view, groups: [] } : view} took={undefined} again={!recallOnly(turn)} copy={!omitted || turn.recalled !== undefined} fold />
     </div>
   );
 }
@@ -962,7 +994,7 @@ export function AskView({ state }: { state: State }) {
           {'answer' in turn && subjectAccess(turn, checksOf(turn, state)) !== 'same'
             ? <div class="turn" data-testid="turn" data-turn={turn.id}>
               <Asked text={turn.text} turn={turn.id} selected={thread.opened === turn.id} />
-              {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+              <ClarificationMessages turn={turn} />
               <div class="msg echo answer-empty" data-testid="answer-unreadable">
                 {checkingAnswerSources(turn.id) ? 'Checking this answer’s sources…' : 'This answer’s sources could not be verified.'}
               </div>

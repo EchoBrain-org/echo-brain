@@ -81,6 +81,25 @@ describe('the timeline file (C5)', () => {
     expect(readTimeline(person, ARI)).toEqual([first]);
   });
 
+  it('binds a recall response to the messages this request actually sent and saves only local references', () => {
+    const prior = turn(1, { clarification: 'One.\nTwo.', clarification_breaks: [4] });
+    const result = (recalled: number[]) => askLine({ schema_version: 8, kind: 'echo-clean-person-answer-v8', scope: prior.scope,
+      question: 'What did I ask?', outcome: recalled.length ? 'answered' : 'not_found', parts: [], citations: [], recalled });
+    const view = (indexes: number[], messages?: string[]) => answerView(result(indexes), prior.scope, undefined, true, false, false, messages);
+    expect(view([], []).recalled).toEqual([]);
+    expect(view([0], ['My question']).recalled).toEqual([0]);
+    expect(() => view([], undefined)).toThrow();
+    expect(() => view([1], ['My question'])).toThrow();
+    const stored = turn(0, { recalled: [{ turn: prior.id, clarification: 2 }] });
+    putTimeline(person, ARI, prior);
+    putTimeline(person, ARI, stored);
+    expect(readTimeline(person, ARI)).toEqual([prior, stored]);
+    expect(timelineTurn({ ...prior, clarification_breaks: [3] })).toBeNull();
+    for (const ref of [{ turn: 'missing id' }, { turn: prior.id, text: 'generated text' }, { turn: prior.id, clarification: false }]) {
+      expect(timelineTurn({ ...stored, recalled: [ref] })).toBeNull();
+    }
+  });
+
   it('keeps a selected answer unreadable to the ordinary v1 row parser while preserving it through other writes', () => {
     const first = turn(1);
     const protectedTurn = { ...first, subject_citations: [ticketCitation], unreadable: [first.answer.sources.length] };

@@ -163,6 +163,29 @@ describe('clarification discovered during Ask research', () => {
     expect(res).toMatchObject({ outcome: 'answered', citations: [{ citation: selected.citation }] });
   });
 
+  it.each(['pure', 'mixed', 'stale'] as const)('verifies a chosen subject before selecting the matching earlier message (%s)', async mode => {
+    const subject = pilots[1]!;
+    const live = 'Has the June pilot shipped?';
+    const quote = 'Which pilot did I say I would ship?' + (mode === 'mixed' ? ' Has it shipped?' : '');
+    const h = harness([finishOn(live, ['E1'])], undefined, [writerReply([{ text: subject.text!, evidence: ['E1'] }])],
+      [{ thread: 'open', resolution: 'recall', recalled: [2], ...(mode === 'mixed' ? { question: live } : {}) }]);
+    h.openCitation.mockResolvedValue(result(mode === 'stale' ? [] : [subject]));
+    const task = h.ask.answer({ question: quote, research_clarification: true, research_subjects: [{ label: subject.label, citation: subject.citation }],
+      previous: { purpose: 'follow_up', question: 'Pilot schedule?', asked_at: '2026-11-27T12:00:00.000Z', statements: [], citations: [],
+        messages: ['I promised the March pilot.', 'I promised the June pilot.'] } });
+    if (mode === 'stale') {
+      await expect(task).rejects.toMatchObject({ code: 'stale_access_state' });
+      expect(h.run.inputs).toHaveLength(0);
+    } else {
+      const response = await task;
+      expect(response).toMatchObject({ question: quote, recalled: [1] });
+      expect(JSON.parse(h.run.of('resolver')[0]!.user_prompt)).toMatchObject({ question: quote, selected_subjects: [subject.label] });
+      expect(h.run.of('step')).toHaveLength(mode === 'mixed' ? 1 : 0);
+      expect(response.citations).toHaveLength(mode === 'mixed' ? 1 : 0);
+    }
+    expect(h.openCitation).toHaveBeenCalledOnce();
+  });
+
   it.each(['same ambiguity', 'different ambiguity'] as const)('retains the prior intent and asks only for an unsettled distinction (%s)', async kind => {
     const selected = pilots[1]!;
     const goals = kind === 'same ambiguity'

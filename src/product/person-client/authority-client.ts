@@ -9,7 +9,7 @@ import {
   PERSON_PROJECTS_PATH_V2, PERSON_PROJECT_ACTIVITY_PATH_V1, PERSON_PROJECT_ARCHIVE_PATH_V1, PERSON_PROJECT_LEAVE_PATH_V1, PERSON_PROJECT_RENAME_PATH_V1, PERSON_RECORDS_PATH_V1,
   PERSON_RESEARCH_EVAL_MAX_RESPONSE_BYTES_V1, PERSON_RESEARCH_EVAL_READ_PATH_V1, PERSON_RESEARCH_EVAL_START_PATH_V1, PERSON_RUNS_MAX_RESPONSE_BYTES_V1, PERSON_RUNS_PATH_V1,
   PERSON_SOURCE_EVIDENCE_PATH_V1, PERSON_TOOL_COLLECTION_RESPONSE_MAX_BYTES_V1,
-  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personAnswerThreadsProblemV1, personQuestionToSend,
+  PERSON_TOOL_REQUEST_MAX_BYTES_V1, PERSON_UPDATE_REQUEST_MAX_BYTES_V1, PERSON_UPDATES_PATH_V3, PROJECT_CONTEXT_RESPONSE_MAX_BYTES, PERSON_ANSWER_REQUEST_MAX_BYTES_V3, PERSON_QUERY_INPUT_MESSAGES_V1, PERSON_ANSWER_BLOCK_KINDS_V2, PERSON_ASK_PROGRESS_LINE_MAX_CHARS_V1, validatePersonAskProgressStepEventV3, PersonQueryInputError, createPersonAskProgressDecoderV3, personAnswerRecallFitsV1, personAnswerThreadsProblemV1, personQuestionToSend,
   isOrganizationApiValidationError, validateEmployeeInvitationV1, validateEmployeeRequestV1, validateEmployeeRosterV1, validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse, validateOrganizationDirectorySearchV1, validateOrganizationDirectoryV1, validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse, validateOrganizationPersonSession, validateOrganizationPersonSessionRefreshRequest, validateOrganizationPersonToolsV4,
@@ -412,6 +412,9 @@ function inAskScope(response: PersonAnswerV8, scope: AskScope, previous?: Person
   const previousOnly = response.since !== undefined || (threads === undefined && response.question !== undefined && response.choices === undefined);
   if (previous === undefined && previousOnly) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority answered a previous turn the Ask did not send');
+  }
+  if (!personAnswerRecallFitsV1(response.recalled, previous?.purpose === 'follow_up' ? previous.messages : undefined)) {
+    throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority recalled a message the Ask did not send');
   }
   const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined, labels, researchClarification && previous?.purpose !== 'ask_again');
   if (placement === 'unexpected_choices') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned clarification choices the Ask did not request');

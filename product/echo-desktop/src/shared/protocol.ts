@@ -364,6 +364,8 @@ export interface Answer {
   readonly receipt: AskReceipt;
   /** Only for an Ask that carried `previous` or `threads`: the full question the answer answers ("Who owns THERM-482?"). */
   readonly question?: string;
+  /** Indexes of the person’s earlier messages selected for an exact quote in this answer. */
+  readonly recalled?: readonly number[];
   /** Only for Ask again: what is different now, each cited; empty when nothing material changed. */
   readonly since?: readonly AnswerStatement[];
   /** Only with outcome `clarify`: two to four things the question could mean. */
@@ -387,20 +389,26 @@ export interface Answer {
  * one?"'s choices, where it belongs) and what the turn keeps itself (the full
  * question, Ask again's "since", the label) are not kept twice.
  */
-export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge' | 'label'>;
+export type TimelineAnswer = Omit<Answer, 'receipt' | 'question' | 'since' | 'choices' | 'thread' | 'merge' | 'label' | 'recalled'>;
 
 /**
  * One question and its answer on the Ask timeline (ADR-0047), as the host keeps
  * it in the account's file on this device. Never sent to the Authority.
  */
-export interface PendingTurn {
+interface TurnClarification {
+  /** Only the person's typed replies. Optional offsets identify the newlines inserted between distinct submissions. */
+  readonly clarification?: string;
+  readonly clarification_breaks?: readonly number[];
+}
+
+export interface PendingTurn extends TurnClarification {
+  /** Whether the original question was typed, rather than selected or replayed. Older entries have no marker. */
+  readonly authored?: boolean;
   readonly id: string;
   readonly asked_at: string;
   readonly text: string;
   readonly scope: AskScope;
   readonly follows: string | null;
-  /** Only the person's own clarification is retained. Source-derived choices are resolved afresh on retry. */
-  readonly clarification?: string;
   readonly needs_clarification?: true;
   /** Repeat the same placement decision when a person resumes an interrupted question. */
   readonly action?: 'again' | 'everywhere';
@@ -410,10 +418,18 @@ export interface PendingTurn {
 
 export type TimelineEntry = PendingTurn | TimelineTurn;
 
-export interface TimelineTurn {
+export interface RecalledMessageRef {
+  readonly turn: string;
+  /** A sole clarification, or its one-based position when the person sent more than one. */
+  readonly clarification?: true | number;
+}
+
+export interface TimelineTurn extends TurnClarification {
+  readonly authored?: boolean;
+  /** References to local authored messages. An empty list records an explicit recall with no match. */
+  readonly recalled?: readonly RecalledMessageRef[];
   /** Evidence the person selected to identify the subject. Access to each governs the whole answer. */
   readonly subject_citations?: readonly PersonAnswerEvidenceCitationV8[];
-  readonly clarification?: string;
   /** A UUID the page gave it. */
   readonly id: string;
   /** When it was asked, by this computer's clock (ISO 8601). */

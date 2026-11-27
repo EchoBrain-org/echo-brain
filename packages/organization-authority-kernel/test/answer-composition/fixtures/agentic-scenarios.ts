@@ -160,7 +160,7 @@ export const cited = (item: EvidenceDeskItemV2, kind: PersonAnswerCitationV8["ki
 export function scripted(script: { readonly resolver?: readonly unknown[]; readonly steps?: readonly unknown[]; readonly writer?: readonly unknown[] }) {
   const inputs: StructuredGenerationInput[] = [];
   const queue = { resolver: [...(script.resolver ?? [])], step: [...(script.steps ?? [])], writer: [...(script.writer ?? [])] };
-  const roleOf = (input: StructuredGenerationInput) => input.system_prompt === THREAD_RESOLVER_PROMPT || input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
+  const roleOf = (input: StructuredGenerationInput) => input.system_prompt.startsWith(THREAD_RESOLVER_PROMPT) || input.system_prompt === FOLLOW_UP_RESOLVER_PROMPT ? "resolver" as const
     : input.system_prompt.startsWith(ANSWER_PROMPT) ? "writer" as const : "step" as const;
   return {
     inputs, of: (role: "resolver" | "step" | "writer") => inputs.filter(input => roleOf(input) === role),
