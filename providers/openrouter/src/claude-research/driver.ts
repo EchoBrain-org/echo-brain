@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
-import { AGENTIC_ASK_LIST_PAGE_ROWS_V1, AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
+import { AGENTIC_ASK_LIST_PAGE_ROWS_V1, AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1, AgenticAskGenerationFailureV1, type AgenticResearchDriverV1, type AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { ClaudeResearchResultErrorV1, runClaudeResearchV1 } from './sdk-client.js';
 import type { ClaudeAccountProfileV1 } from './account-profile.js';
 import { claudeModelFailureUnbilledV1, ClaudeModelRepeatRefusedErrorV1, ClaudeModelResponseErrorV1, ClaudeModelTransportErrorV1, startClaudeModelTransportV1, type ClaudeModelForwarderV1 } from './model-transport.js';
@@ -83,10 +83,13 @@ export function createClaudeResearchDriverV1(options: {
         source, ...dates, kind: z.string().optional(), status: z.string().optional(), owner: z.string().optional(), role: z.string().optional(), channel: z.string().optional(),
         limit: z.string().optional().describe(`Optional: at most this many rows of the next page, as decimal text; a page holds up to ${AGENTIC_ASK_LIST_PAGE_ROWS_V1}. Omit for the whole page.`),
       }, handler('list'))] : []),
+      ...(session.research_clarification ? [tool('clarify', 'Ask the person to choose a subject. For each option, give the E id and the distinguishing words you saw in that item. Once accepted, stop.',
+        { subjects: z.array(z.object({ id: z.string(), label: z.string() })).min(2) }, handler('clarify'))] : []),
       tool('finish', 'Submit research notes for ECHO\'s existing renderer. Only returned E/L ids are valid. completed=true includes validated not_found results; completed=false means open research remains. For Ask changes/messages set unsupported_action=true and keep only factual research in parts; for a task to hand to someone or track, set follow_up_requested=true instead. Validation feedback may require more reading. Once accepted, stop.', finish, handler('finish')),
     ];
     try {
-      await (options.run ?? runClaudeResearchV1)({ prompt: JSON.stringify(session.initial), system: SYSTEM, model: options.model, base_url: fence.base_url,
+      const system = session.research_clarification ? SYSTEM + '\n' + AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1 : SYSTEM;
+      await (options.run ?? runClaudeResearchV1)({ prompt: JSON.stringify(session.initial), system, model: options.model, base_url: fence.base_url,
         ...(options.account === undefined ? {} : { account: options.account }),
         signal, servers: { echo_research: createSdkMcpServer({ name: 'echo_research', version: '1.0.0', tools }) },
         tools: tools.map(value => `mcp__echo_research__${value.name}`) });

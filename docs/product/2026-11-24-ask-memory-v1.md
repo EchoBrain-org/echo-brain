@@ -22,7 +22,17 @@ The reader introduced in `7ee96ef` preserves unknown rows on write. The installe
 
 The new desktop sends `previous.candidate` for implicit older context. Release the updated Authority before the desktop and its bundled Person client. Older desktops can continue sending the existing request format.
 
-This milestone covers clarification before research. Clarification during research and retrieval of an exact historical quote are separate work.
+Milestone 1 covers clarification before research. Retrieving an exact historical quote remains future work.
+
+### Milestone 2: clarification during research
+
+When research finds two June pilots, “How did the pilots go?” can get two short, labeled answers. “Who owns the June pilot?” may need one inline question. Echo offers the distinguishing names from records the person can read. The person can choose a name or type what they meant. The reply completes the same transcript entry.
+
+Each suggested name comes from an approved record, a source passage, a Jira ticket or a Confluence page. Two names can come from the same item. Selecting a name sends the original question, its context and the chosen subject back to the Authority. Research reopens the citation in the current scope and checks the name before using it. If the source has changed or access has been lost, the person can refresh the choices.
+
+Pending suggestions stay in memory. Reopening the question regenerates them. The account history keeps the person's original wording and any clarification they typed. A completed answer also keeps the source references for the choices it used. Reopening that answer checks those references even when the answer cites other sources for its facts.
+
+Deploy the Authority before an opting-in desktop or Person client. Clients that omit the capability continue to receive their existing answer format.
 
 ## Why
 

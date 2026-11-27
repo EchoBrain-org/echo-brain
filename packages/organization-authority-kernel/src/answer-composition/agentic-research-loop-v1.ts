@@ -2,7 +2,7 @@ import { parseAgenticDriverFinishV1, type AgenticResearchDriverV1 } from './agen
 import { calendarDateV1, EVIDENCE_ANY_DATE_V1, evidenceDateFilterV1, matchedEvidenceDatesV1, validateEvidenceDateFilterV1, type EvidenceDateFilterV1, type EvidenceDateFieldV1, type EvidenceDateSelectionV1 } from "../shared/temporal-query-v1.js";
 import { askQuestionCompletionProblemsV1, askResearchCompletionProblemsV1, type AskResearchListV1, type AskResearchObservationV1 } from './agentic-ask-research-state-v1.js';
 import { canonicalSha256, type Sha256Digest } from "@echo-brain/federation-protocol";
-import { PERSON_EVIDENCE_TEXT_MAX_BYTES_V1 } from "@echo-brain/organization-api";
+import { isPersonAnswerLabelV1, PERSON_ANSWER_RESPONSE_MAX_BYTES_V4, PERSON_EVIDENCE_TEXT_MAX_BYTES_V1, type PersonAnswerEvidenceCitationV8, type PersonAnswerResponseV8 } from "@echo-brain/organization-api";
 import {
   evidenceDeskSourceV2,
   type EvidenceDeskItemV2,
@@ -34,7 +34,8 @@ import {
   type StepSource,
 } from "./agentic-ask-v1-model-protocol.js";
 import { fillAgenticTaskV1, type AgenticBriefV1 } from "./agentic-brief-v1.js";
-import { describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
+import { agenticClarifyResponseV1, OPENABLE_ASK_CITATION_KINDS_V1 } from './agentic-follow-up-resolver-v1.js';
+import { agenticEvidenceLabelV1, describeAgenticEvidenceItemV1, type AgenticEvidenceBundleItemV1, type AgenticEvidenceBundleV1 } from "./agentic-evidence-bundle-v1.js";
 import {
   agenticCitedObjectV1,
   agenticListEndUnverifiedV1,
@@ -133,6 +134,8 @@ export interface AgenticResearchCatalogV1 {
 
 export interface CreateAgenticResearchLoopV1Options {
   readonly driver?: AgenticResearchDriverV1;
+  /** Present only when the caller accepts research clarification. Choices continue the person's original wording. */
+  readonly clarification_question?: string;
   /** The request's access-checked desk; it binds the person and the scope. */
   readonly desk: EvidenceDeskPortV2;
   /** What to research: the goal, starting evidence, budget and options. */
@@ -186,6 +189,8 @@ export interface AgenticResearchLoopV1 {
   /** An admitted step call reads its scratchpad in full. */
   readonly gate_hooks: Pick<CreateAgenticModelGateV1Options, "before_call">;
   progress(): AgenticResearchProgressV1;
+  /** Present only when the planner requested clarification using research it actually saw. */
+  readonly clarification?: PersonAnswerResponseV8;
   /** Runs research once, calling the model only through `gate`, and returns everything it gathered. The runner adds the trigger's name. */
   run(gate: AgenticModelGateV1): Promise<Omit<AgenticEvidenceBundleV1, "trigger">>;
 }
@@ -1237,6 +1242,55 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     };
   };
   // ---- stop state ------------------------------------------------------
+  let triedClarification = false;
+  let clarification: PersonAnswerResponseV8 | undefined;
+  type SubjectEvidence = { id: string; title: string; text?: string; citation: PersonAnswerEvidenceCitationV8 };
+  // Keep the displayed fields of direct reads, including only the preview if that is all the model gets.
+  const subjectEvidence = (rows: readonly Readonly<Record<string, unknown>>[]): SubjectEvidence[] => {
+    if (options.clarification_question === undefined) return [];
+    return rows.flatMap(({ id, title, text, preview }) => {
+      const entry = typeof id === 'string' ? entryOf(id) : undefined;
+      if (!entry?.direct || typeof title !== 'string' || !OPENABLE_ASK_CITATION_KINDS_V1.has(entry.item.citation.kind)) return [];
+      const body = text ?? preview;
+      // Page and ticket inventories have no reopenable body coordinate. Bind the choice to what this packet showed.
+      const { citation } = entry.item;
+      if ((citation.kind === 'page' || citation.kind === 'ticket') && typeof body !== 'string') return [];
+      return [{ id: entry.short, citation, title, ...(typeof body === 'string' ? { text: body } : {}) }];
+    });
+  };
+  const containsLabel = (label: string, title: string, text?: string): boolean =>
+    [title, text].some(field => field !== undefined && cleanLine(field).includes(label));
+  const clarifyFrom = (args: unknown, observed: readonly SubjectEvidence[], alone = true): PersonAnswerResponseV8 => {
+    const input = object(args);
+    const question = options.clarification_question;
+    triedClarification = question !== undefined;
+    if (!alone) throw new AgenticAskOutputErrorV1('Use clarify as the only action');
+    if (question === undefined || !ask || !Array.isArray(input?.subjects) || input.subjects.length < 2 || Object.keys(input).length !== 1) {
+      throw new AgenticAskOutputErrorV1('Clarification needs at least two different subjects found by research');
+    }
+    const choices = input.subjects.map(raw => {
+      const subject = object(raw);
+      const label = cleanLine(subject?.label);
+      const row = observed.find(row => row.id === subject?.id && containsLabel(label, row.title, row.text));
+      if (!subject || Object.keys(subject).length !== 2 || !isPersonAnswerLabelV1(label) || !row) {
+        throw new AgenticAskOutputErrorV1('Name each subject with a short exact phrase shown for its E id. Open metadata-only tickets and pages first');
+      }
+      return { label, citation: row.citation };
+    });
+    if (new Set(choices.map(choice => choice.label.toLowerCase())).size !== choices.length) {
+      throw new AgenticAskOutputErrorV1('Choose distinct subject labels');
+    }
+    if (choices.some(choice => brief.starting.some(start => start.selected_label?.toLowerCase() === choice.label.toLowerCase()))) {
+      throw new AgenticAskOutputErrorV1('The person already chose that subject; continue the research');
+    }
+    // Each standalone choice includes the original question. Refuse an oversized proposal before copying it.
+    if (bytes(question) * (choices.length + 1) <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) {
+      try {
+        return agenticClarifyResponseV1(desk.scope, question, choices.map(choice => ({ ...choice, question: `${question} (${choice.label})` })));
+      } catch { /* The complete wire response must also fit, including JSON escaping and each label. */ }
+    }
+    throw new AgenticAskOutputErrorV1('Those clarification choices exceed the answer size limit');
+  };
   let researchIncomplete = true;
   let researchStop: 'finished' | 'empty_catalog' | 'no_progress' | 'stalled' | 'unusable_step' = 'unusable_step';
   let unsupportedAction = false;
@@ -1318,6 +1372,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // The reads run together, a few at a time in brief order, and are registered in brief order, so ids, receipts and
     // failures are those of reading one at a time: a failure that stops research stops only the reads after it, and the
     // first failure in brief order is the one thrown.
+    const staleSelection = () => new AuthorityOperationError("stale_access_state", "The selected subject is no longer available");
     type StartingRead = { readonly opened: EvidenceDeskResultV2; readonly readable: readonly EvidenceDeskItemV2[]; readonly anchor: EvidenceDeskItemV2 | undefined } | { readonly unreadable: true } | { readonly skipped: true };
     assertLive();
     const stopReads = brief.starting.map(() => new AbortController());
@@ -1325,24 +1380,31 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     const waiting: (() => void)[] = [];
     /** What each starting read released, by brief index, kept the moment the desk returns it. */
     const released: (EvidenceDeskResultV2 | undefined)[] = [];
-    const settled = await Promise.allSettled(brief.starting.map(async ({ citation, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
+    const settled = await Promise.allSettled(brief.starting.map(async ({ citation, selected_label: selectedLabel, if_unreadable: ifUnreadable }, index): Promise<StartingRead> => {
       const signal = AbortSignal.any([activeSignal, stopReads[index]!.signal]);
       if (reading >= STARTING_READS_AT_ONCE) await new Promise<void>(resolve => { waiting.push(resolve); });
       reading += 1;
       try {
         signal.throwIfAborted();
         const opened = await observeAgenticLifecycleV1('starting_read', 'research_starting_read', { index: index + 1, citation, if_unreadable: ifUnreadable }, async () => {
+          if (selectedLabel !== undefined && (!desk.openCitation || !isPersonAnswerLabelV1(selectedLabel) ||
+            !OPENABLE_ASK_CITATION_KINDS_V1.has(String(object(citation)?.kind)))) throw staleSelection();
           if (desk.openCitation === undefined) throw new AuthorityOperationError("unavailable", "Starting evidence is unavailable");
           return raceAbort(signal, desk.openCitation({ citation, signal }));
         }, releasedView);
         released[index] = opened;
         const readable = opened.items.filter(item => item.text !== undefined);
-        const anchor = readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0];
+        const anchor = selectedLabel === undefined
+          ? readable.find(item => citationIdentity(item.citation) === citationIdentity(citation)) ?? readable[0]
+          : opened.items.find(item => canonicalSha256(item.citation) === canonicalSha256(citation) &&
+              containsLabel(selectedLabel, agenticEvidenceLabelV1(item, context.time_zone ?? 'UTC'), item.text));
+        if (selectedLabel !== undefined && !anchor) throw staleSelection();
         // Fail closed unless the brief asked to report it: research never runs without evidence its brief names.
         if (anchor === undefined && ifUnreadable === "fail") throw new AuthorityOperationError("not_found", "Starting evidence is not available");
         return { opened, readable, anchor };
       } catch (error) {
         // A deleted or now-hidden item is news to a brief that asked to hear about it; nothing else about it is known.
+        if (selectedLabel !== undefined && unreadableRefusal(error)) error = staleSelection();
         if (ifUnreadable !== "fail" && unreadableRefusal(error)) return { unreadable: true };
         // A follow-up's item its tool cannot read for now is left out: research goes on as if it was never named. A cancel
         // or a stall stays what it is, whatever the tool said as it stopped.
@@ -1385,10 +1447,14 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         const entry = register(item); entry.opened = true; entry.preloaded = true;
         if (item === anchor) { startingIds.push(entry.short); entry.direct = true; }
       }
-      if (anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
+      if (anchor.text !== undefined && anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
     if (brief.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(brief.goal.task, startingIds) });
+    else {
+      const labels = brief.starting.flatMap(start => start.selected_label ?? []);
+      if (labels.length > 0) goal = { kind: "question", question: `${brief.goal.question} (${labels.join(', ')})` };
+    }
 
     if (options.driver !== undefined) {
       await drivenResearch(gate, options.driver);
@@ -1428,12 +1494,18 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
       const user = { ...head, opened: pad.opened, seen: pad.seen, ...leftOut, ...tailWith(new Set(pad.entries)) };
       const openIds = [...entries.values()].map(entry => entry.short);
       const finishAvailable = researchObservations.length > 0 || pad.read.length > 0 || [...entries.values()].some(entry => entry.full);
-      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, ask);
-      let step: Step;
+      const subjects = subjectEvidence([...pad.opened, ...pad.seen]);
+      const stepSchema = createStepSchema(sourceCatalog.map(source => source.source), openIds, finishAvailable, listAvailable, ask, subjects.map(row => row.id));
+      let step: Step | { readonly clarification: PersonAnswerResponseV8 };
       // A count only: the names wait for the access check before this call (the gate's before_call).
       report?.before_check(pad.read.filter(entry => entry.direct === true).map(entry => entry.item));
       try {
         step = await gate.withRepair(stepCall, researchPrompt, user, stepSchema, value => {
+          const actions = object(value)?.actions;
+          const clarification = Array.isArray(actions) && actions.find(action => object(action)?.tool === 'clarify');
+          if (clarification) {
+            return { clarification: clarifyFrom(object(clarification)?.args, subjects, actions.length === 1) };
+          }
           const parsed = parseStep(value, { lists: ask });
           if (parsed.actions.length === 0) throw new AgenticAskOutputErrorV1('actions must contain a read action or a valid finish');
           for (const action of parsed.actions) {
@@ -1474,6 +1546,12 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         break;
       }
       steps += 1;
+      if ('clarification' in step) {
+        clarification = step.clarification;
+        researchStop = 'finished';
+        recordRound(roundStartedAt, [roundView('clarify', {}, undefined)]);
+        break;
+      }
       plan = proposedPlan(step.parts);
       // Batched reads must be observed in another step before completion.
       const reads = step.actions.filter(action => action.tool !== "finish");
@@ -1527,7 +1605,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     let serial: Promise<unknown> = Promise.resolve();
     let terminal: unknown;
     let finished = false;
-    const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[]; readonly observations: readonly AskResearchObservationV1[] }>();
+    let admittedSubjects: readonly SubjectEvidence[] = [];
+    const packets = new Map<Sha256Digest, { readonly read: readonly Entry[]; readonly shown: readonly Entry[]; readonly subjects: readonly SubjectEvidence[]; readonly observations: readonly AskResearchObservationV1[] }>();
     const seenObservations = new Set<AskResearchObservationV1>();
     // A round is one model turn: the reads it asked for are recorded together when the next turn starts.
     let turnActions: AgenticResearchActionV1[] = [], turnStarted = 0;
@@ -1554,7 +1633,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         while (read.length > 0 && JSON.stringify(payload).length > DRIVEN_RESULT_CHARS) { read = read.slice(0, -1); payload = build(); }
       }
       report?.before_check(read.filter(entry => entry.direct === true).map(entry => entry.item));
-      packets.set(canonicalSha256(payload), { read, shown: selected, observations });
+      packets.set(canonicalSha256(payload), { read, shown: selected, subjects: subjectEvidence(payload.items), observations });
       return payload;
     };
     const initial = view([...entries.values()], { ...goalFields(), ...context, scope, source_catalog: sourceCatalog });
@@ -1585,7 +1664,8 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     };
     quiet();
     try {
-      await Promise.race([silentHarness, driver.run({ initial, list_available: listAvailable, question: ask, signal: AbortSignal.any([activeSignal, harness.signal]), silence_ms: options.silence_ms,
+      await Promise.race([silentHarness, driver.run({ initial, list_available: listAvailable, question: ask,
+        ...(options.clarification_question !== undefined && ask ? { research_clarification: true as const } : {}), signal: AbortSignal.any([activeSignal, harness.signal]), silence_ms: options.silence_ms,
         model_request: (request, forward) => busy(() => gate.external({ ...request, before_forward: () => {
           closeTurn(); steps += 1;
           const present = (request.payload_digests ?? []).map(digest => packets.get(digest)).filter(value => value !== undefined);
@@ -1594,6 +1674,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
           // Only an admitted inference carrying the actual result observes a read.
           // Same-turn tools, token counting and omitted packets cannot establish absence.
           for (const observation of present.flatMap(value => value.observations)) seenObservations.add(observation);
+          admittedSubjects = present.flatMap(value => value.subjects);
         } }, forward)),
         call: (tool, args) => busy(() => {
           const next = serial.then(async () => {
@@ -1602,6 +1683,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
             if (finished) return { accepted: true, finished: true };
             const started = now();
             try {
+              if (tool === 'clarify') {
+                clarification = clarifyFrom(args, admittedSubjects);
+                researchStop = 'finished';
+                finished = true;
+                addAction(started, roundView('clarify', {}, undefined));
+                return { accepted: true, finished: true };
+              }
               if (tool === 'finish') {
                 const value = parseAgenticDriverFinishV1(args, ask);
                 // SDK needs are declared at finish; any read actually observed in
@@ -1719,6 +1807,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         report?.given(direct(researchPromptEntries), direct(researchPromptShown));
       },
     }),
+    get clarification() { return clarification; },
     progress: () => Object.freeze({
       receipts, rounds: steps, fallbacks, searches: searchesRun.length, search_hits: searchHits, retrieved_tickets: retrievedTickets.size,
       refused_reads: refusedReadsCount, repeated_refusals: repeatedRefusals, unchecked_items: uncheckedItems, sources_looked_at: sourcesLookedAt.size, most_reads_in_a_step: mostReadsInAStep,
@@ -1726,6 +1815,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     async run(gate: AgenticModelGateV1) {
       const researchStartedAt = now();
       await research(gate);
+      // A failed clarify can be repaired by finding the subjects or actually finishing the investigation.
+      // Until then the ordinary incomplete-research writer could draft for the wrong subject.
+      if (triedClarification && !clarification && (researchIncomplete || researchStop !== 'finished')) {
+        throw new AuthorityOperationError('unavailable', 'Research could not distinguish the subjects');
+      }
       return evidenceBundle(gate, researchStartedAt);
     },
   });

@@ -1188,6 +1188,149 @@ describe('the door: the title opens every conversation (ADR-0057)', () => {
 });
 
 describe('one Ask transcript per scope', () => {
+
+  const launchQuestion = 'Who owns the launch?';
+  const pilot = { label: 'Pilot launch', question: 'Who owns the pilot launch?', citation: ticket('PILOT-1', '10001').cited!.citation };
+  const partner = { label: 'Partner launch', question: 'Who owns the partner launch?', citation: ticket('PARTNER-2', '10002').cited!.citation };
+  const selected = { label: pilot.label, citation: pilot.citation };
+  const offer = (choices: typeof pilot[]) => ok({ scope: GLOBAL, outcome: 'clarify', question: launchQuestion, parts: [], sources: [],
+    choices, receipt: { looked_through: choices.length } });
+
+  it.each(['typed', 'choice'])('completes first-turn research clarification after restart with a %s reply', async reply => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const pending = kept()[0]!;
+    expect(pending).toMatchObject({ text: launchQuestion, needs_clarification: true, follows: null });
+    expect(JSON.stringify(pending)).not.toContain(pilot.label);
+    await readAgain(store);
+    await store.returnToAsk();
+    expect(asked()).toHaveLength(1);
+    expect(text(await page(store))).not.toContain(pilot.label);
+    const detail = 'The summer launch, please.';
+    if (reply === 'choice') {
+      store.retryPending(pending.id);
+      await flush();
+      expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+      expect(byTestId(await page(store), 'choice').map(text)).toEqual([pilot.label, partner.label]);
+      script = params => answered(params, { question: pilot.question, label: pilot.label, parts: [
+        { question: pilot.question, status: 'partial', statements: [], gap: pilot.label, gap_details: { not_found: pilot.label, interrupted: true } }] });
+      store.chooseClarified(pilot);
+    } else {
+      script = null;
+      await store.ask(detail);
+    }
+    await flush();
+    const own = reply === 'typed' ? [launchQuestion, detail].join('\n') : launchQuestion;
+    expect(asked().at(-1)).toMatchObject({ question: own });
+    expect(asked().at(-1)).not.toHaveProperty('previous');
+    expect(kept()).toHaveLength(1);
+    expect(kept()[0]).toMatchObject({ id: pending.id, text: launchQuestion, typed: own, question: own, answer: { outcome: 'answered' } });
+    if (reply === 'typed') {
+      expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+      expect(kept()[0]).toHaveProperty('clarification', detail);
+    } else {
+      expect(asked().at(-1)!.research_subjects).toEqual([selected]);
+      expect(asked()).toHaveLength(3);
+      expect(kept()[0]).toMatchObject({ subject_citations: [pilot.citation], answer: { parts: [
+        { question: pilot.question, gap: pilot.label, gap_details: { not_found: pilot.label, interrupted: true } }] } });
+      expect(kept()[0]).not.toHaveProperty('label');
+      expect(kept()[0]).not.toHaveProperty('research_subjects');
+    }
+  });
+
+  it.each(['research first', 'intent first'])('keeps the access-checked intent wording when choices arrive %s', async order => {
+    const earlier = turn('Which launch briefs are available?', DAY);
+    seed(earlier);
+    const store = await startStore();
+    const intent = { label: 'Readiness brief', question: 'Who owns the readiness brief?' };
+    const intents = ok({ scope: GLOBAL, outcome: 'clarify', parts: [], sources: [], receipt: { looked_through: 0 },
+      question: launchQuestion, choices: [intent, { label: 'Supplier update', question: 'Who owns the supplier update?' }] });
+    script = params => {
+      if (params.question === intent.question && params.research_subjects) return answered(params);
+      if (params.question === intent.question) return offer([pilot, partner]);
+      return params.research_subjects || order === 'intent first' ? intents : offer([pilot, partner]);
+    };
+    await store.ask(launchQuestion);
+    const row = kept()[1]!;
+    store.chooseClarified(order === 'research first' ? pilot : intent);
+    await flush();
+    store.chooseClarified(order === 'research first' ? intent : pilot);
+    await flush();
+    expect(asked()).toHaveLength(3);
+    expect(asked()[2]).toMatchObject({ question: intent.question, research_subjects: [selected] });
+    expect(kept()[1]).toMatchObject({ id: row.id, text: launchQuestion, typed: launchQuestion, question: launchQuestion, answer: { outcome: 'answered' } });
+  });
+
+  it('hides the whole saved reply and stops copying or carrying it after losing the selected source, even while its fact is readable', async () => {
+    const statement = said('The restricted pilot ships on Friday.', [0]);
+    const date = ticket('DATE-3', '10003');
+    const saved = turn(launchQuestion, DAY, { subject_citations: [pilot.citation], answer: answerOf(launchQuestion, GLOBAL, {
+      sources: [date], parts: [{ question: pilot.label, status: 'partial', statements: [statement],
+        blocks: [{ kind: 'text', title: 'Restricted pilot schedule', statements: [0] }], gap_details: { not_found: 'Restricted pilot budget is missing.' } }] }) });
+    seed(saved);
+    const store = await startStore();
+    await store.returnToAsk();
+    await flush();
+    const message = () => page(store).then(text);
+    expect(await message()).toContain(statement.text);
+    expect(await message()).toContain('Restricted pilot schedule');
+
+    checks = items => ok({ items: items.map(item => ({ state: item.citation.ticket_id === '10001' ? 'unreadable' : 'same' })) });
+    await readAgain(store);
+    await store.returnToAsk();
+    await flush();
+    const hidden = await message();
+    expect(hidden).not.toContain('Restricted pilot');
+    expect(hidden).not.toContain(statement.text);
+    expect(kept()[0]).toMatchObject({ unreadable: [1] });
+    expect(await store.copyAnswer(saved.id)).toBe(false);
+    expect(store.answerGroups()).toEqual([]);
+    click(byTestId(await page(store), 'ask-again')[0]);
+    await flush();
+    expect(asked().at(-1)).toMatchObject({ question: launchQuestion, previous: { question: launchQuestion, statements: [], citations: [] } });
+  });
+
+  it('waits for an explicit retry when a selected subject is no longer accessible', async () => {
+    const store = await startStore();
+    script = () => offer([pilot, partner]);
+    await store.ask(launchQuestion);
+    const id = kept()[0]!.id;
+    script = () => fail('forbidden');
+    store.chooseClarified(pilot);
+    await flush();
+    expect(asked()).toHaveLength(2);
+    expect(asked()[1]).toMatchObject({ question: launchQuestion, research_subjects: [selected] });
+    expect(byTestId(await page(store), 'ask-retry').map(text)).toEqual(['Refresh choices']);
+    expect(kept()[0]).toMatchObject({ id, needs_clarification: true });
+    script = () => offer([partner]);
+    store.retryAsk();
+    await flush();
+    expect(asked().at(-1)).not.toHaveProperty('research_subjects');
+    expect(byTestId(await page(store), 'choice').map(text)).toEqual([partner.label]);
+    expect(JSON.stringify(kept())).not.toContain(pilot.label);
+  });
+
+  it.each(['typed', 'choice'])('keeps the first selected subject while the person clarifies a second time by %s', async reply => {
+    const store = await startStore();
+    const summer = { ...partner, label: 'Summer', question: 'Who owns the summer pilot?' };
+    script = params => !params.research_subjects ? offer([pilot, partner]) : offer([summer]);
+    await store.ask(launchQuestion);
+    store.chooseClarified(pilot);
+    await flush();
+    expect(asked()).toHaveLength(2);
+    expect(byTestId(await page(store), 'choice').map(text)).toEqual([summer.label]);
+    script = params => answered(params);
+    if (reply === 'typed') await store.ask('The summer team.');
+    else store.chooseClarified(summer);
+    await flush();
+    expect(asked()).toHaveLength(3);
+    expect(asked()[2]).toMatchObject(reply === 'typed'
+      ? { question: launchQuestion + '\nThe summer team.', research_subjects: [selected] }
+      : { question: launchQuestion, research_subjects: [selected, { label: summer.label, citation: summer.citation }] });
+    expect(kept()).toHaveLength(1);
+  });
+
   it('preserves the restored prompt and composer draft until the returning account’s history arrives', async () => {
     const store = await startStore();
     script = params => ok({ scope: GLOBAL, outcome: 'clarify', parts: [], sources: [], receipt: { looked_through: 0 },

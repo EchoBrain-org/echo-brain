@@ -146,6 +146,10 @@ function argumentSchema(argument: keyof StepArgs, sources: readonly StepSource[]
   return { ...base, description: ARGUMENT_DESCRIPTIONS[argument] };
 }
 
+/** Shared with the native research driver's opt-in clarify tool. */
+export const AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1 =
+  "If research finds two or more plausible subjects and the choice changes the work requested, call clarify as the only action with subjects [{id, label}, ...]. Each label names one subject using a short exact phrase from the title or text you saw for that E id. Open metadata-only tickets and pages first, then cite the E id of the returned body. Two subjects may come from one item. If short, labeled findings for each subject answer the question (such as the status of both pilots), give those findings instead. If the subjects have no reopenable supporting item, look for one; if the distinction stays unresolved, explain the gap and do not act on a guess. A missing fact alone is not a reason to clarify.";
+
 /** Provider-neutral selectors advertised by the request's source catalog. */
 export type StepSource = string;
 
@@ -154,9 +158,9 @@ export type StepSource = string;
  * With `ask` (Ask's step, ADR-0041) every need declares its kind and the arguments have explicit contracts; a task goal
  * retains its existing schema and runtime compatibility with legacy date ages and filter aliases.
  */
-export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true, listAvailable = true, ask = false): StructuredGenerationJsonSchema { return Object.freeze({
+export function createStepSchema(sources: readonly StepSource[], openIds?: readonly string[], finishAvailable = true, listAvailable = true, ask = false, subjects: readonly string[] = []): StructuredGenerationJsonSchema { return Object.freeze({
   type: "object", additionalProperties: false, required: ["parts", "actions"], properties: {
-    parts: { type: "array", minItems: 1, items: {
+    parts: { type: "array", minItems: subjects.length > 0 ? 0 : 1, items: {
       type: "object", additionalProperties: false, required: ["question", "needs", "notes"], properties: {
         question: ask ? { type: "string", minLength: 1, description: "A non-blank part of the person's original question; keep the same parts across steps." } : { type: "string" },
         needs: { type: "array", items: {
@@ -172,12 +176,21 @@ export function createStepSchema(sources: readonly StepSource[], openIds?: reado
       },
     } },
     actions: { type: "array", minItems: 1, items: {
-      anyOf: Object.entries(actionArgs(ask)).filter(([name]) => (name !== 'open' || openIds?.length !== 0) && (name !== 'finish' || finishAvailable) && (name !== 'list' || listAvailable)).map(([name, names]) => ({
+      anyOf: [...Object.entries(actionArgs(ask)).filter(([name]) => (name !== 'open' || openIds?.length !== 0) && (name !== 'finish' || finishAvailable) && (name !== 'list' || listAvailable)).map(([name, names]) => ({
         type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
           tool: closedString([name]),
           args: { type: "object", additionalProperties: false, required: names.slice(0, 1), properties: Object.fromEntries(names.map(argument => [argument, ask ? argumentSchema(argument, sources, openIds) : argument === 'source' ? closedString(sources) : argument === 'id' && openIds !== undefined ? closedString(openIds) : argString])) },
         },
-      })),
+      })), ...(subjects.length > 0 ? [{
+        type: "object", additionalProperties: false, required: ["tool", "args"], properties: {
+          tool: closedString(["clarify"]),
+          args: { type: "object", additionalProperties: false, required: ["subjects"], properties: {
+            subjects: { type: "array", minItems: 2, items: {
+              type: "object", additionalProperties: false, required: ["id", "label"], properties: { id: closedString(subjects), label: { type: "string" } },
+            } },
+          } },
+        },
+      }] : [])],
     } },
   },
 }); }

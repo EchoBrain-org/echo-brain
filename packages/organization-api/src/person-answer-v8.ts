@@ -71,19 +71,19 @@ export interface PersonAnswerResponseV8 {
   readonly kind: 'echo-clean-person-answer-v8';
   readonly scope: PersonAnswerScopeV3;
   /**
-   * `clarify` answers only a follow-up that could mean more than one thing (ADR-0047): it carries `choices`, the
-   * question asked, and no part or citation.
+   * A clarification names the question and offers either choices or other threads.
+   * It carries no answer parts or citations.
    */
   readonly outcome: (typeof PERSON_ANSWER_OUTCOMES_V8)[number];
   readonly citations: readonly PersonAnswerCitationV8[];
   readonly direct?: PersonAnswerStatementV4;
   readonly parts: readonly PersonAnswerPartV4[];
   readonly notice?: string;
-  /** Only on an answer to a request that carried `previous` (ADR-0047) or `threads` (ADR-0056): the full question this answer answers. */
+  /** The full question on a follow-up, a thread placement, or a clarification. */
   readonly question?: string;
   /** Only on an Ask again answer that compared with the earlier one (ADR-0047): what is different since. */
   readonly since?: PersonAnswerSinceV1;
-  /** Only with outcome `clarify` (ADR-0047): one full question for each thing the follow-up could mean. */
+  /** A follow-up choice supplies the next question. A cited research choice continues the original Ask with its selected subject. */
   readonly choices?: readonly PersonAnswerChoiceV1[];
   /**
    * Only on an answer whose writer drafted follow-ups (ADR-0053): their open-item ids, in the writer's order. Each is saved

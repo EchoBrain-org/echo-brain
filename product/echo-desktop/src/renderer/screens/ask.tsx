@@ -22,7 +22,7 @@ import {
   type AskClarify, type AskTook, type PaneTarget, type Read, type State,
 } from '../store.js';
 import {
-  allOmitted, sameScope, shownInFull, showsOf, turnGroups, type Suggestion, type TurnChecks,
+  allOmitted, sameScope, shownInFull, showsOf, subjectAccess, turnGroups, type Suggestion, type TurnChecks,
 } from '../timeline.js';
 import { AskFollowUps } from './ask-follow-ups.js';
 import { Chevron, Close, Copy, Doc, Folder, KindMark, Lock, Meeting, OnePerson, Plug, Plus, Refresh, Ticket, Ticks, Up } from './icons.js';
@@ -959,7 +959,14 @@ export function AskView({ state }: { state: State }) {
       {rows.map((turn, index) => (
         <Fragment key={turn.id}>
           {stamped(turn.asked_at, rows[index - 1]?.asked_at) && <Stamp at={turn.asked_at} />}
-          {'answer' in turn ? (shownInFull(turn, turns, full)
+          {'answer' in turn && subjectAccess(turn, checksOf(turn, state)) !== 'same'
+            ? <div class="turn" data-testid="turn" data-turn={turn.id}>
+              <Asked text={turn.text} turn={turn.id} selected={thread.opened === turn.id} />
+              {turn.clarification && <Asked text={turn.clarification} testid="clarification-reply" />}
+              <div class="msg echo answer-empty" data-testid="answer-unreadable">This answer’s sources could not be verified.</div>
+              {askAgainOffered(turn) && <button type="button" class="foot-action" data-testid="ask-again" disabled={askBusy(state)}
+                onClick={() => askAgain(turn.id)}><Refresh />Ask again</button>}
+            </div> : 'answer' in turn ? (shownInFull(turn, turns, full)
             ? <FullTurn state={state} turn={turn} took={thread.took[turn.id]} current={thread.asked.includes(turn.id)} last={turn.id === turns.at(-1)?.id} />
             : <FoldedTurn state={state} turn={turn} opened={thread.opened === turn.id} />)
             : <div class="turn" data-turn={turn.id} data-testid={failed?.id === turn.id ? 'ask-failed' : 'pending-turn'}>
@@ -968,7 +975,8 @@ export function AskView({ state }: { state: State }) {
               {asking?.id === turn.id ? <Asking progress={asking.progress} /> : clarify?.id === turn.id ? <Clarify state={state} clarify={clarify} />
                 : failed?.id === turn.id ? <>
                   <div class="msg echo error" data-testid="ask-error">{message(failed.failure)}</div>
-                  {failed.failure.retryable && <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>Try again</button>}
+                  {(failed.failure.retryable || failed.how.researchSubjects) && <button type="button" class="link-button" data-testid="ask-retry" onClick={retryAsk}>
+                    {failed.how.researchSubjects ? 'Refresh choices' : 'Try again'}</button>}
                 </> : <>
                   <div class="msg echo">{'needs_clarification' in turn && turn.needs_clarification ? 'Which subject did you mean?' : 'This question was interrupted.'}</div>
                   <button type="button" class="link-button" data-testid="resume-turn" disabled={askBusy(state)} onClick={() => retryPending(turn.id)}>Resume question</button>

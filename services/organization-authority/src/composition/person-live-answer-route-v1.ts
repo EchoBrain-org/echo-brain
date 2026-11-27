@@ -172,7 +172,9 @@ export function createPersonLiveAnswerRouteV1(options: CreatePersonLiveAnswerRou
       const follow_up: AgenticFollowUpCarryV1 = { ...(resolved === undefined ? {} : { resolved }), on_resolved: kept => { resolved = kept; } };
       // A client that reads labels (ADR-0057) may be sent one; nothing of it is kept.
       const carried = { ...(previous === undefined ? {} : { previous }), ...(threads === undefined ? {} : { threads }),
-        ...(input.request.labels === true ? { labels: true as const } : {}), follow_up };
+        ...(input.request.labels === true ? { labels: true as const } : {}),
+        ...(input.request.research_clarification === true ? { research_clarification: true as const } : {}),
+        ...(input.request.research_subjects === undefined ? {} : { research_subjects: input.request.research_subjects }), follow_up };
       const desk = await bindPersonLiveEvidenceDeskV1(options, options.live_sources ?? [], { access_token: input.access_token, scope, ask: true, signal }, context);
       const asker = askerOf(options, authorization);
       // The follow-ups an answer drafts (ADR-0053) are saved for this asker, under this request's id, which every attempt shares.

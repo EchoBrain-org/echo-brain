@@ -1,6 +1,6 @@
 import type {
   PersonAnswerBlockV2, PersonAnswerCardEntityV2, PersonAnswerChoiceV1, PersonAnswerCitationV8, PersonAnswerEventV2, PersonAnswerEvidenceCitationV8,
-  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerTableRowV1, PersonAnswerThreadPlacementV1, PersonAnswerThreadV1,
+  PersonAnswerFactV2, PersonAnswerGapDetailsV1, PersonAnswerPreviousV1, PersonAnswerResearchSubjectV1, PersonAnswerTableRowV1, PersonAnswerThreadPlacementV1, PersonAnswerThreadV1,
   PersonAskCheckCitationKindV1, PersonAskCheckItemV1, PersonAskCheckRequestItemV1, PersonAskCheckStateV1, PersonChangesAreaV1, PersonChangesV1, PersonMeetingRequestV2,
   PersonMeetingResultsV2, PersonReviewRequestV1, PersonReviewResultsV1, PersonOpenItemCurrentV1, PersonOpenItemV1, PersonProjectActivityItemV1, PersonRunsRequestV1, PersonRunsResultsV1,
 } from '@echo-brain/organization-api';
@@ -272,7 +272,16 @@ export type CheckCitation = Extract<PersonAnswerEvidenceCitationV8, { readonly k
  * original's passage, a follow-up, a ticket, a page or a project). Opaque here.
  */
 export function checkOf(source: AnswerSource): CheckCitation | undefined {
-  const citation = source.cited?.citation;
+  return checkCitation(source.cited?.citation);
+}
+
+export function subjectCitation(citation: PersonAnswerEvidenceCitationV8): PersonAnswerEvidenceCitationV8 {
+  if (citation.kind !== 'source_revision') return citation;
+  const { label: _label, ...coordinates } = citation;
+  return coordinates;
+}
+
+export function checkCitation(citation: PersonAnswerEvidenceCitationV8 | undefined): CheckCitation | undefined {
   return citation !== undefined && (CHECK_KINDS as readonly string[]).includes(citation.kind) ? citation as CheckCitation : undefined;
 }
 
@@ -340,6 +349,7 @@ export interface AnswerPart {
 
 /** One thing a follow-up could be about, as Ask offers it to choose (ADR-0047): a short label, and the full question it asks. */
 export type AskChoice = PersonAnswerChoiceV1;
+export type AskResearchSubject = PersonAnswerResearchSubjectV1;
 
 /** An Agentic Ask answer. */
 export interface Answer {
@@ -401,6 +411,8 @@ export interface PendingTurn {
 export type TimelineEntry = PendingTurn | TimelineTurn;
 
 export interface TimelineTurn {
+  /** Evidence the person selected to identify the subject. Access to each governs the whole answer. */
+  readonly subject_citations?: readonly PersonAnswerEvidenceCitationV8[];
   readonly clarification?: string;
   /** A UUID the page gave it. */
   readonly id: string;
@@ -788,7 +800,7 @@ export interface HostMethods {
     result: Receipt;
   };
   /** `previous`: the earlier turn a follow-up or Ask again carries (C3). `threads`: the asker's other threads (ADR-0056). */
-  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[] }; result: Answer };
+  'ask.run': { params: { expect: Expect; question: string; scope: AskScope; cancel_id: string; previous?: AskPrevious; threads?: AskThread[]; research_subjects?: readonly AskResearchSubject[] }; result: Answer };
   /** The account's Ask timeline on this device, oldest first; an unreadable file reads as empty (ADR-0047). */
   'timeline.read': { params: { expect: Expect }; result: { turns: TimelineEntry[] } };
   /**

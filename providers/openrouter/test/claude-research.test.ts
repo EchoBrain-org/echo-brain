@@ -113,6 +113,17 @@ it('waits for an aborted child to actually close before completing request clean
   expect(closed).toBe(true);
 });
 
+it.each([false, true])('offers the native clarify tool when the client opts in: %s', async enabled => {
+  const driver = createClaudeResearchDriverV1({ model, forward: async ({ res }) => { res.end('{}'); return {}; },
+    run: async input => {
+      expect(input.tools.includes('mcp__echo_research__clarify')).toBe(enabled);
+      await fetch(`${input.base_url}/v1/messages`, { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+    } });
+  await driver.run({ initial: {}, question: true, list_available: true, ...(enabled ? { research_clarification: true as const } : {}),
+    signal: new AbortController().signal, silence_ms: 60_000, call: async () => ({}),
+    model_request: async (_request, send) => (await send(new AbortController().signal)).value });
+});
+
 it('delivers provider errors to the SDK and freshly admits its retry without latching an access failure', async () => {
   let checks = 0, forwards = 0;
   const errors: unknown[] = [];

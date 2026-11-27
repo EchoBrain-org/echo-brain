@@ -295,7 +295,7 @@ export function recordRead(value: unknown): RecordRead | null {
  * client holds them (personAnswerThreadsProblemV1; `threads`: how many were sent, `continued`: whether a previous turn
  * was, `labels`: whether it read labels).
  */
-export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false, labels = false): Answer {
+export function answerView(raw: unknown, scope: AskScope, threads?: number, continued = false, labels = false, researchClarification = false): Answer {
   let line: ReturnType<typeof validatePersonAskProgressResultLineV3>;
   try {
     line = validatePersonAskProgressResultLineV3(raw);
@@ -308,7 +308,7 @@ export function answerView(raw: unknown, scope: AskScope, threads?: number, cont
   const { direct, parts, outcome } = result;
   const sources = result.citations.map(citedSource);
   const { thread, merge, label } = result;
-  if (personAnswerThreadsProblemV1(result, threads, continued, labels) !== null) throw new ViewError();
+  if (personAnswerThreadsProblemV1(result, threads, continued, labels, researchClarification) !== null) throw new ViewError();
   // A count is bounded by the progress contract: one at its bound is at least that many.
   return { scope, sources, ...(direct === undefined ? {} : { direct }), parts, outcome, receipt: { looked_through: receipt.looked_through },
     ...(result.question === undefined ? {} : { question: result.question }),

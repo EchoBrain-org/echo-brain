@@ -1,5 +1,5 @@
 import type { PersonAnswerStatementV4 } from './person-answer-v4.js';
-import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
+import type { PersonAnswerCitationV8, PersonAnswerEvidenceCitationV8 } from './person-answer-v8.js';
 
 /**
  * The previous turn on Ask (ADR-0047, Ask timeline v1 C3). An Ask on
@@ -21,9 +21,8 @@ import type { PersonAnswerCitationV8 } from './person-answer-v8.js';
  *   (`invalid_request`). The answer also says what is different `since` the
  *   earlier answer, each sentence citing current evidence.
  *
- * Only an answer to a request that carried `previous` names its `question`,
- * and only such an answer may carry `since` or `choices`: a client that never
- * sends it never meets them.
+ * A first Ask can also receive choices when it opts in to research clarification.
+ * The `since` comparison always requires an earlier answer.
  */
 
 /**
@@ -126,14 +125,17 @@ export type PersonAnswerThreadPlacementV1 =
   | { readonly kind: 'new' }
   | { readonly kind: 'other'; readonly threads: readonly number[] };
 
-/**
- * One thing a follow-up could mean: a short label naming it, and the full
- * question to ask about it, which passes the question rules (so at most 240
- * characters) and is asked as it is when chosen.
- */
+/** An explicit choice from this Ask's research. Reopen the source before using its label. */
+export interface PersonAnswerResearchSubjectV1 {
+  readonly label: string;
+  readonly citation: PersonAnswerEvidenceCitationV8;
+}
+
+/** One interpretation of a question. Research choices identify the evidence that supplied the label. */
 export interface PersonAnswerChoiceV1 {
   readonly label: string;
   readonly question: string;
+  readonly citation?: PersonAnswerEvidenceCitationV8;
 }
 
 /**

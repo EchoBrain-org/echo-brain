@@ -10,6 +10,8 @@ import type { AgenticResearchBudgetV1, AgenticResearchGoalV1 } from "./agentic-r
 /** One starting item: a citation released by an earlier request, re-read fresh through the desk before round one. */
 export interface AgenticBriefStartingItemV1 {
   readonly citation: unknown;
+  /** An Ask choice must still name this exact item and phrase before it can qualify the research goal. */
+  readonly selected_label?: string;
   /**
    * `fail` stops the run when the item cannot be read; `report` lists it in the bundle and research goes on. `skip` (a
    * question's starting items only: a follow-up's, ADR-0047) is `report`, and an item its tool cannot read for now

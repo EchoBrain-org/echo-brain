@@ -28,7 +28,7 @@ import {
   validateProjectMemberSetV1, validateProjectMembersV1, validateProjectMutationReceiptV1, validateProjectPageRequestV2, validateProjectRenameV1,
   validateProjectSettingsReceiptV1, validateProjectSummaryV2,
   type EmployeeInvitationV1, type EmployeeRosterV1, type OrganizationAuthorityDescriptorResponseV1, type OrganizationPersonOidcBeginRequestV2,
-  type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerThreadPlacementV1, type PersonAnswerThreadV1, type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
+  type OrganizationPersonOidcBeginResponseV2, type OrganizationPersonSessionV2, type PersonAnswerPreviousV1, type PersonAnswerResearchSubjectV1, type PersonAnswerThreadV1, type PersonAnswerResponseV8 as OrganizationPersonAnswerV8,
   type PersonAskCheckRequestV1, type PersonAskCheckV1, type PersonAskProgressStepEventV3, type PersonAskProgressTerminalEventV3, type PersonAskReceiptV3,
   type PersonChangesV1, type PersonDocumentAssociateV1,
   type PersonDocumentDissociateV1, type PersonDocumentSearchV2, type PersonListRequestV1,
@@ -385,12 +385,14 @@ type AskScope = ProjectIdV1 | undefined;
  * The Ask's V3 request, with any previous turn and threads, and whether it reads labels (ADR-0057): the Authority alone
  * applies the question rule and says which rule a question breaks.
  */
-function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[], labels?: boolean) {
+function askRequest(question: string, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[], labels?: boolean, researchClarification?: boolean, researchSubjects?: readonly PersonAnswerResearchSubjectV1[]) {
   return { schema_version: 3, question: personQuestionToSend(question),
     ...(scope === undefined ? {} : { project_id: scope }),
     ...(previous === undefined ? {} : { previous }),
     ...(threads === undefined ? {} : { threads }),
-    ...(labels === true ? { labels: true } : {}) };
+    ...(labels === true ? { labels: true } : {}),
+    ...(researchClarification === true ? { research_clarification: true } : {}),
+    ...(researchSubjects === undefined ? {} : { research_subjects: researchSubjects }) };
 }
 
 /** Every Ask sends the client's clock and time zone. */
@@ -399,19 +401,20 @@ function askHeaders(): Readonly<Record<string, string>> {
 }
 
 /**
- * An answer echoes the requested scope; since and choices come only to an Ask that sent its previous turn, its question
- * also to one that sent threads (ADR-0047), and the rest of T2 is personAnswerThreadsProblemV1's.
+ * An answer echoes the requested scope. A first Ask can receive research choices when the client opted in.
  */
-function inAskScope<T extends { readonly scope: unknown; readonly question?: string; readonly thread?: PersonAnswerThreadPlacementV1; readonly merge?: readonly number[]; readonly label?: string }>(
-  response: T, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[], labels = false): T {
+function inAskScope(response: PersonAnswerV8, scope: AskScope, previous?: PersonAnswerPreviousV1, threads?: readonly PersonAnswerThreadV1[],
+  labels = false, researchClarification = false): PersonAnswerV8 {
   const expectedScope = scope === undefined ? { kind: 'global' } : { kind: 'project', project_id: scope };
   if (canonicalJson(response.scope) !== canonicalJson(expectedScope)) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned different Ask scope');
   }
-  if (previous === undefined && [...(threads === undefined ? ['question'] : []), 'since', 'choices'].some(key => Object.hasOwn(response, key))) {
+  const previousOnly = response.since !== undefined || (threads === undefined && response.question !== undefined && response.choices === undefined);
+  if (previous === undefined && previousOnly) {
     throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority answered a previous turn the Ask did not send');
   }
-  const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined, labels);
+  const placement = personAnswerThreadsProblemV1(response, threads?.length, previous !== undefined, labels, researchClarification && previous?.purpose !== 'ask_again');
+  if (placement === 'unexpected_choices') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority returned clarification choices the Ask did not request');
   if (placement === 'unsent') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority named a thread the Ask did not send');
   if (placement === 'unplaced') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority did not place a question the Ask sent threads for');
   if (placement === 'unasked') throw new PersonAuthorityClientError('invalid_response', 200, 'Person Authority labelled a conversation the Ask did not ask it to');
@@ -867,12 +870,12 @@ export class PersonAuthorityClient {
    */
   async askV7WithProgress(accessToken: string, question: string, scope: ProjectIdV1 | undefined, signal: AbortSignal | undefined,
     onProgress: PersonAskProgressSinkV3, previous?: PersonAnswerPreviousV1, onHeartbeat?: () => void,
-    threads?: readonly PersonAnswerThreadV1[], labels?: boolean): Promise<PersonLiveAnswerV3> {
+    threads?: readonly PersonAnswerThreadV1[], labels?: boolean, researchClarification?: boolean, researchSubjects?: readonly PersonAnswerResearchSubjectV1[]): Promise<PersonLiveAnswerV3> {
     const watch = silenceWatch(ASK_SILENCE_MS, signal);
     let terminal: PersonAskProgressTerminalEventV3;
     try {
       // Sent as built, within the Ask's own body bound: the Authority validates the request once (askRequest).
-      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous, threads, labels), validate_request: request => request,
+      const response = await this.post({ path: PERSON_ANSWER_PATH_V7, body: askRequest(question, scope, previous, threads, labels, researchClarification, researchSubjects), validate_request: request => request,
         maximum_request_bytes: PERSON_ANSWER_REQUEST_MAX_BYTES_V3,
         access_token: accessToken, headers: { ...askHeaders(), accept: `${PERSON_ASK_PROGRESS_CONTENT_TYPE_V1}, application/json` } }, watch.signal);
       watch.alive();
@@ -891,7 +894,7 @@ export class PersonAuthorityClient {
     if (terminal.type === 'error') {
       throw new PersonAuthorityClientError(terminal.error.code, terminal.status, refusalMessage(terminal.error.code));
     }
-    return Object.freeze({ result: inAskScope(terminal.response, scope, previous, threads, labels === true), receipt: terminal.receipt });
+    return Object.freeze({ result: inAskScope(terminal.response, scope, previous, threads, labels, researchClarification), receipt: terminal.receipt });
   }
 
   /** Staging-only research evaluation: starts one research run (research loop evaluation v1). */

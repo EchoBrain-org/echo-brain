@@ -175,6 +175,53 @@ describe('person ask --threads (ADR-0056)', () => {
   });
 });
 
+describe('person ask --research-clarification', () => {
+  const subject = { label: 'THERM-482', citation: ticket.citation };
+  const offer = { ...choices, choices: choices.choices.map(choice => ({ ...choice, citation: ticket.citation })) };
+
+  it.each([
+    { mode: 'plain', options: [] },
+    { mode: 'progress with an empty thread list', options: ['--progress', '--threads=[]'] },
+  ])('accepts first-turn research choices in $mode mode', async ({ options }) => {
+    const fetch = replying(offer);
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, '--research-clarification', ...options])).toBe(0);
+    expect(bodyOf(fetch.mock.calls[0]![1]).research_clarification).toBe(true);
+    expect(lines(run.output.stdout).at(-1)).toMatchObject({ ok: true, result: offer });
+  });
+
+  it.each([
+    ['cited choices without opt-in', offer, []],
+    ['cited choices for an older follow-up client', offer, [`--previous=${JSON.stringify(PREVIOUS)}`]],
+    ['uncited choices without previous even with opt-in', choices, ['--research-clarification', '--threads=[]']],
+    ['an unsent thread', elsewhere([0]), ['--threads=[]', '--research-clarification']],
+    ['an ordinary answer missing its placement', answered({ question: QUESTION }), ['--threads=[]', '--research-clarification']],
+  ] as const)('refuses %s', async (_case, answer, options) => {
+    const fetch = replying(answer);
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, ...options])).toBe(1);
+    expect(lines(run.output.stderr).at(-1)).toMatchObject({ code: 'invalid_response' });
+    if (options.length === 0) expect(bodyOf(fetch.mock.calls[0]![1])).not.toHaveProperty('research_clarification');
+  });
+
+  it('sends the original question and its selected subject together', async () => {
+    const fetch = replying(answered());
+    expect(await cli(fetch).run(['ask', `--question=${QUESTION}`, '--research-clarification', `--research-subjects=${JSON.stringify([subject])}`])).toBe(0);
+    expect(bodyOf(fetch.mock.calls[0]![1])).toEqual({ schema_version: 3, question: QUESTION, research_clarification: true, research_subjects: [subject] });
+  });
+
+  it.each([
+    [`--research-subjects=${JSON.stringify([subject])}`],
+    ['--research-clarification', '--research-subjects=bad-json'],
+  ])('rejects invalid research subjects before calling the Authority', async (...options) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const run = cli(fetch);
+    expect(await run.run(['ask', `--question=${QUESTION}`, ...options])).toBe(2);
+    expect(lines(run.output.stderr).at(-1)).toMatchObject({ code: 'invalid_request' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('person ask --labels (ADR-0057)', () => {
   const LABELLED = [{ ...THREADS[0]!, label: 'billing migration: owns, due' }, THREADS[1]!];
   const LABEL = 'DVT gate: blocking, change';

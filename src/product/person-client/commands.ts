@@ -11,7 +11,7 @@ import { validatePersonRunsRequestV1, type PersonRunsRequestV1 } from '@echo-bra
 import { personCitedRecordV1, type PersonCitedRecordV1 } from '@echo-brain/organization-api';
 import { validatePersonAskCheckRequestV1, type PersonAskCheckRequestV1 } from '@echo-brain/organization-api';
 import { validatePersonAskProgressLineV3, validatePersonAskProgressResultLineV3 } from '@echo-brain/organization-api';
-import type { PersonAnswerPreviousV1, PersonAnswerThreadV1 } from '@echo-brain/organization-api';
+import type { PersonAnswerPreviousV1, PersonAnswerResearchSubjectV1, PersonAnswerThreadV1 } from '@echo-brain/organization-api';
 import { PersonToolOutcomeErrorV1, type PersonToolProviderV1, type PersonToolVerbNameV1, type PersonToolVerbV1 } from '@echo-brain/organization-api';
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
@@ -54,6 +54,8 @@ export interface PersonClientCliDependencies {
 const OPTIONS = {
   progress: { type: "boolean" },
   labels: { type: "boolean" },
+  "research-clarification": { type: "boolean" },
+  "research-subjects": { type: "string" },
   "document-id": { type: "string" },
   audience: { type: "string" },
   "expected-membership-id": { type: "string" },
@@ -136,7 +138,7 @@ const RULES: Readonly<
   "session-refresh": {},
   logout: {},
   ask: {
-    accepts: ["question", "project", "progress", "previous", "threads", "labels"],
+    accepts: ["question", "project", "progress", "previous", "threads", "labels", "research-clarification", "research-subjects"],
     requires: ["question"],
   },
   list: { accepts: ["project", "only-me", "cursor"] },
@@ -230,7 +232,7 @@ Run \`echo-brain person tools <verb> --help\` for each tool's options.
 
 Removes the local session. A revoked session is also removed locally.
 `,
-  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>] [--labels]
+  ask: `usage: echo-brain person ask --question <text> [--project <project-id>] [--progress [--expected-membership-id <id> --expected-authority <origin>]] [--previous <json>] [--threads <json>] [--labels] [--research-clarification [--research-subjects <json>]]
 
 Ask one question in plain language, of any length that fits the Ask's 64 KiB request; line breaks and tabs are fine, other control characters are not. It is sent as NFC text without edge whitespace. Without --project, ECHO retrieves across context you may read. With --project, only context associated with that project. Answers include typed citations; each opens with person open --ref when it carries a ref, except a meeting's meeting:sha256:<digest>, which reads with person records --record-sha256 sha256:<digest> --brief, a follow-up's follow_up:<item_id>, which opens with person runs --request '{"schema_version":1,"operation":"item","item_id":"<item_id>"}', a project's project:<project-id>, which opens with person projects read-v2 --project-id <project-id>, and a tool's tool:<tool>, which person tools lists. A person and a tool container (a Jira project or Confluence space, with its key) carry no ref: a container's permalink opens it in its tool.
 
@@ -243,6 +245,8 @@ Ask asks POST /v7/person/ask, with every configured request-local live source, i
 --threads carries your other threads as JSON, most recently asked first: [{"questions":[the questions you typed in it, oldest first],"asked_at":...}], or [] when you have none. Each may carry its "label", every word of which is a word of its questions. Your own words only, never stored, and never beside an Ask again. The answer then says where the question belongs when not in the previous turn's thread: "thread" is {"kind":"new"}, or {"kind":"other","threads":[indexes into what you sent]} with the outcome "clarify" and no answer; "merge" lists the indexes of threads on the same subject. A list that is not valid is refused with invalid_request.
 
 --labels asks for the label of the conversation a follow-up continues: one line in your own words, returned as "label" on an ordinary answer to an Ask that carried --previous. Never beside an Ask again.
+
+--research-clarification lets ECHO ask you to choose between interpretations it finds while researching, even on your first question. To continue, send your original question with --research-subjects containing the selected labels and citations as JSON, for example [{"label":...,"citation":...}].
 `,
   list: `usage: echo-brain person list (--project <project-id> | --only-me) [--cursor <next_cursor>]
 
@@ -995,6 +999,7 @@ export async function runPersonClientCli(
     let askPrevious: PersonAnswerPreviousV1 | undefined;
     let askThreads: readonly PersonAnswerThreadV1[] | undefined;
     let askLabels: true | undefined;
+    let researchSubjects: readonly PersonAnswerResearchSubjectV1[] | undefined;
   let toolVerbDefinition: PersonToolVerbV1 | undefined;
   let pin: AccountPin | undefined;
   try {
@@ -1095,6 +1100,16 @@ export async function runPersonClientCli(
     if (action === "ask" && values.previous !== undefined) askPrevious = askPreviousOf(values);
     if (action === "ask" && values.threads !== undefined) askThreads = askThreadsOf(values, askPrevious);
     if (action === "ask" && values.labels === true) askLabels = askLabelsOf(askPrevious);
+    if (action === "ask" && values["research-subjects"] !== undefined) {
+      let subjects: unknown;
+      try { subjects = JSON.parse(requiredText(values, "research-subjects")); }
+      catch { throw new AskPreviousError("Ask research subjects JSON is invalid"); }
+      try {
+        researchSubjects = validatePersonAnswerRequestV3({ schema_version: 3, question: personQuestionToSend(requiredText(values, "question")),
+          ...(askPrevious ? { previous: askPrevious } : {}), ...(values["research-clarification"] === true ? { research_clarification: true } : {}),
+          research_subjects: subjects }).research_subjects;
+      } catch (error) { throw new AskPreviousError(`Ask research subjects are invalid: ${(error as Error).message}`); }
+    }
     // List and open requests are complete and validated before any network or session use.
     if (action === "list") {
       listRequest = validatePersonListRequestV1({
@@ -1294,17 +1309,18 @@ export async function runPersonClientCli(
         // Not empty is the client's only check: the Authority says which question rule a question breaks.
         const question = personQuestionToSend(requiredText(values, "question"));
         const scope = values.project === undefined ? undefined : validateProjectIdV1(requiredText(values, "project"));
+        const researchClarification = values["research-clarification"] === true;
         if (values.progress === true) {
           // One line per step event as it arrives; the last line is the answer's, with its receipt.
           // Progress V3 lines: a step may name a follow-up, a project, a person, a tool or a tool container.
           // Each heartbeat prints an alive line, so a caller waits on liveness, not on a clock.
           const answer = await client.askWithLiveProgress(question, scope, dependencies.abort_signal,
             progress => print(stdout, validatePersonAskProgressLineV3({ ok: true, progress })), askPrevious,
-            () => print(stdout, { ok: true, alive: true }), askThreads, askLabels);
+            () => print(stdout, { ok: true, alive: true }), askThreads, askLabels, researchClarification, researchSubjects);
           print(stdout, validatePersonAskProgressResultLineV3({ ok: true, result: answer.result, receipt: answer.receipt }));
           break;
         }
-        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious, askThreads, askLabels) });
+        print(stdout, { ok: true, result: await client.askWithLiveSources(question, scope, dependencies.abort_signal, askPrevious, askThreads, askLabels, researchClarification, researchSubjects) });
         break;
       }
       case "list":

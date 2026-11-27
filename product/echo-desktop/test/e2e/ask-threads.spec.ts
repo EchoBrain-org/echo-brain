@@ -222,7 +222,7 @@ test('"New question", behind the door, keeps the transcript, and the next questi
   await expect(page.getByTestId('ask-field')).toBeFocused();
   // About the pilot, which ECHO would have placed there: asked fresh, nothing rides on it and nothing places it.
   await ask(page, 'is the pilot on track?');
-  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'is the pilot on track?', labels: true });
+  expect(asks().at(-1)).toEqual({ schema_version: 3, question: 'is the pilot on track?', labels: true, research_clarification: true });
   await expect(page.getByTestId('question')).toHaveText(['is the pilot on track?']);
   await expect.poll(filed).toEqual({ 'When does the pilot start?': 'When does the pilot start?', 'is the pilot on track?': 'is the pilot on track?' });
   // Only that one question was fresh: the next continues the conversation it started.
@@ -278,6 +278,42 @@ test('a conversation an answer names as the same thing is linked to the one the 
   await askAtHome(page, 'an unrelated one: what is for lunch?');
   expect((asks().at(-1)!.threads as { questions: string[] }[]).map(thread => thread.questions)).toEqual([
     ['When does the pilot start?']]);
+});
+
+test('a first-question research choice is regenerated after restart and finishes the same timeline row', async () => {
+  run = await launch('ask-threads');
+  const question = 'Who owns the launch?';
+  const labels = ['Pilot launch', 'Partner launch'];
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await run.page.getByTestId('ask-field').fill(question);
+  await run.page.getByTestId('ask-field').press('Enter');
+  await expect(run.page.getByTestId('choice')).toHaveText(labels);
+  expect(asks()).toEqual([expect.objectContaining({ question, research_clarification: true })]);
+  const pending = file()[0]!;
+  const disk = readFileSync(join(run.home, TIMELINE_FILE), 'utf8');
+  expect(disk).not.toContain('Partner');
+  await run.close();
+  run = await launch('ask-threads', { [TIMELINE_FILE]: disk });
+  const { page } = run;
+  await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
+  await page.getByTestId('sidebar-ask').click();
+  await expect(page.getByTestId('choice')).toHaveCount(0);
+  await page.getByTestId('resume-turn').click();
+  await expect(page.getByTestId('choice')).toHaveText(labels);
+  await page.getByRole('button', { name: 'Partner launch', exact: true }).click();
+  await expect(page.getByTestId('turn').getByTestId('question')).toHaveText(question);
+  expect(asks().map(call => call.question)).toEqual([question, question]);
+  expect(asks()[0]).not.toHaveProperty('research_subjects');
+  expect(asks()[1]!.research_subjects).toEqual([{ label: 'Partner launch', citation: expect.objectContaining({ kind: 'ticket', ticket_id: '10002' }) }]);
+  await expect.poll(() => file()).toEqual([expect.objectContaining({ id: pending.id, text: question, question, typed: question, answer: expect.objectContaining({ reply: expect.objectContaining({ outcome: 'answered' }), subject_citations: [expect.objectContaining({ ticket_id: '10002' })] }) })]);
+  const completed = readFileSync(join(run.home, TIMELINE_FILE), 'utf8');
+  await run.close();
+  run = await launch('ask-threads-checked', { [TIMELINE_FILE]: completed });
+  await expect(run.page.getByTestId('sidebar-project')).toHaveCount(2);
+  await run.page.getByTestId('sidebar-ask').click();
+  await expect(run.page.getByTestId('answer')).toBeVisible();
+  expect(run.calls().filter(call => call.path === '/v1/person/ask/check').flatMap(call => call.body?.items ?? []))
+    .toContainEqual(expect.objectContaining({ citation: expect.objectContaining({ ticket_id: '10002' }) }));
 });
 
 test('an older implicit subject asks for clarification and a typed reply after restart completes the original question', async () => {
@@ -466,7 +502,7 @@ test('an answer that does not say where a question asked with the conversations 
   await page.getByTestId('ask-field').press('Enter');
   await expect(page.getByTestId('ask-error')).toHaveText('ECHO sent back something this app could not read. Try again, or update the app.');
   await expect(page.getByTestId('turn')).toHaveCount(0);
-  expect(asks()).toEqual([{ schema_version: 3, question: 'When does the pilot start?', threads: [], labels: true }]);
+  expect(asks()).toEqual([{ schema_version: 3, question: 'When does the pilot start?', threads: [], labels: true, research_clarification: true }]);
   expect(file()).toMatchObject([{ text: 'When does the pilot start?' }]);
   expect(file()[0]).not.toHaveProperty('answer');
 });
@@ -477,7 +513,7 @@ test('from a person\'s only conversation a new subject starts a second one: the 
   await expect(page.getByTestId('sidebar-project')).toHaveCount(2);
   await ask(page, 'When does the pilot start?');
   // The first question ever is one to be placed too: its list is empty.
-  expect(asks()[0]).toEqual({ schema_version: 3, question: 'When does the pilot start?', threads: [], labels: true });
+  expect(asks()[0]).toEqual({ schema_version: 3, question: 'When does the pilot start?', threads: [], labels: true, research_clarification: true });
   // In that conversation, a question about it continues it.
   await ask(page, 'who decided that?');
   expect(asks()[1]).toMatchObject({ previous: { purpose: 'follow_up', question: 'When does the pilot start?' }, threads: [] });

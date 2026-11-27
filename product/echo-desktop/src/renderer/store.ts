@@ -5,18 +5,18 @@ import type {
 // account being shown; late replies for a page that has moved on are dropped.
 import { useEffect, useState } from 'preact/hooks';
 import type {
-  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
+  AccountCommand, AnswerSource, AppStatus, ApprovedRecord, AskCheckResult, AskChoice, AskResearchSubject, AskProgressNotice, AskReceipt, AskScope, Audience, ConnectedTool,
   ContextContent, DocumentText, Employee, Expect, Extraction, Failure, FileHandle, HomeView, ItemRef, ListItem, ListScope, Member, OpenItemsView, OpenItemView,
   ProjectChange, ProjectGranolaMapping, ProjectConfluenceMapping, ConfluenceSpace, GranolaFolder, NoticeTarget, ProjectJiraMapping, ProjectPage, ProjectScope, ProjectSummary, Receipt, RecordRef, Result,
   RunsResults, SourceEvidence, PendingTurn, TimelineEntry, TimelineTurn, ToolAttempt, ExternalAnswerSource, UpdateState,
 } from '../shared/protocol.js';
-import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, sameExpect, SESSION_ENDED } from '../shared/protocol.js';
+import { ACCOUNT_GONE, isWriteCall, MAX_COPY_CHARACTERS, MAX_REQUEST_BYTES, sameExpect, SESSION_ENDED, subjectCitation } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerMarkdown, answerSentences, answerText, documentName, nothingMatched, type SourceGroup } from './answer.js';
 import { suggestedQuestions, weekQuestion } from './bar.js';
 import {
   askCarries, askedSuggestions, chainsOf, CHECK_FRESH_MS, checkedOf, checkPlan, checksHiding, doorChains, earlierOf, earlierTurns, followedTurn, foundUnreadable,
-  freshChecks, freshStates, homeTurns, knownStates, labelOf, otherChains, turnReadable, previousOf, sameScope, shownInFull, showsOf, threadActive, threadIds, threadsOf,
+  freshChecks, freshStates, homeTurns, knownStates, labelOf, otherChains, turnReadable, previousOf, sameScope, shownInFull, showsOf, subjectAccess, threadActive, threadIds, threadsOf,
   unreadableAfter, turnGroups,
   type Chain, type CheckPlan, type Suggestion, type Thread, type TurnCheck, type TurnChecks,
 } from './timeline.js';
@@ -55,7 +55,7 @@ export interface OpenThread {
  * How a question is asked (ADR-0047), kept on a failed one so Try again asks it the same way: what a question built from
  * an earlier turn sends is derived from that turn each time it is sent (askAs), never replayed.
  */
-type AskHow =
+type AskHow = { readonly researchSubjects?: readonly AskResearchSubject[] } & (
   /**
    * The person's own words. `follows`: the turn they continue (null: none, so a new thread). `placed`: it carries the
    * conversations it may belong to, even none; false once a jump or the person has said where it goes, so nothing moves
@@ -68,7 +68,7 @@ type AskHow =
   | { readonly kind: 'again' | 'everywhere'; readonly turn: string }
   /** A choice of "Which one?", model-written, for the follow-up `typed` that continued `follows`, with what its offer carried and the `links` its follow-up had. */
   | { readonly kind: 'choice'; readonly question: string; readonly typed: string | null; readonly follows: string | null; readonly carried: readonly string[];
-      readonly placed: boolean; readonly candidate?: true; readonly links?: readonly string[] };
+      readonly placed: boolean; readonly candidate?: true; readonly links?: readonly string[] });
 
 type TopicQuestion = Extract<AskHow, { kind: 'typed' | 'choice' }>;
 
@@ -3686,7 +3686,11 @@ function keepChecks(checks: Readonly<Record<string, TurnCheck>>): void {
   const kept = freshChecks(checks, now);
   setTimeline({ ...state.timeline, checks: kept });
   const next = Math.min(...Object.values(kept).map(check => check.at + CHECK_FRESH_MS));
-  if (Number.isFinite(next)) checksExpire = setTimeout(() => { checksExpire = null; keepChecks(state.timeline.checks); }, next - now);
+  if (Number.isFinite(next)) checksExpire = setTimeout(() => {
+    checksExpire = null;
+    keepChecks(state.timeline.checks);
+    if (state.ask && askThread().some(turn => turn.subject_citations?.length && !state.timeline.checks[turn.id])) void checkTimeline();
+  }, next - now);
 }
 
 /** What the person is told when a turn could not be kept on this computer. */
@@ -3995,7 +3999,7 @@ export function ask(question: string, scope: AskScope = state.barScope): Promise
     // A typed detail can correct an automatic match. An explicit topic stays fixed.
     const selection = live.kind === 'choice' ? { question: [live.question, words].join('\n'), carried: live.carried } : undefined;
     return askAs({ kind: 'typed', question: clarifiedWords(reply), follows: live.follows, placed: live.placed || !!live.candidate,
-      candidate: live.candidate, links: live.links, selection }, scope, reply);
+      candidate: live.candidate, links: live.links, researchSubjects: live.researchSubjects, selection }, scope, reply);
   }
   const selected = open && open.asked.length === open.openedAt ? turnOf(open.opened) : undefined;
   const anchor = selected && sameScope(selected.scope, scope) ? selected : undefined;
@@ -4010,6 +4014,7 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   const started = pending ? Date.parse(pending.asked_at) : Date.now();
   const account = expect();
   if (!account || askBusy()) return;
+  const subjects = how.researchSubjects;
   const fromId = 'turn' in how ? how.turn : how.follows;
   const built = fromId === null ? null : turnOf(fromId) ?? null;
   // Own words and choices continue a turn only in its conversation's home; Ask again and everywhere use the turn itself.
@@ -4030,7 +4035,7 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
     if (how.kind === 'choice' && !derived.choiceReadable) {
       text = typed;
       // Only the wording lost its source. Keep the live topic, placement, and links for this request and its retry.
-      if (typed !== null) how = { kind: 'typed', question: typed, follows: how.follows, placed: how.placed, candidate: how.candidate, links: how.links };
+      if (typed !== null) how = { kind: 'typed', question: typed, follows: how.follows, placed: how.placed, candidate: how.candidate, links: how.links, researchSubjects: subjects };
     } else text = how.kind === 'choice' ? how.question : derived.question ?? null;
   }
   if (!text) {
@@ -4058,7 +4063,7 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   });
   // Commit the person's submission before starting research. A retry replaces the same row.
   // A clicked choice may name a private source. Its original pending row can regenerate the choices under current access on restart.
-  if (typed !== null && how.kind !== 'choice') {
+  if (typed !== null && how.kind !== 'choice' && (!subjects || pending?.clarification !== pendingTurn(id)?.clarification)) {
     pending = { id, asked_at: new Date(started).toISOString(), text: pending?.text ?? typed, scope, follows: from?.id ?? null,
       ...(how.kind === 'again' || how.kind === 'everywhere' ? { action: how.kind } : {}),
       ...(how.kind === 'typed' && !how.placed ? { fixed: true } : {}),
@@ -4087,11 +4092,11 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   // Ask everywhere carries nothing: its turn is in another scope. A typed follow-up names its conversation's label (R2).
   const previous = !from || how.kind === 'everywhere' || derived?.question === undefined ? null
     : previousOf(from, again ? 'ask_again' : 'follow_up', derived.checks, askText(text), scope, derived.question, how.kind === 'typed' ? chain?.sent : undefined,
-      'candidate' in how ? how.candidate : undefined);
+      'candidate' in how ? how.candidate : undefined, subjects);
   // Placed among all conversations but the one it continues; a follow-up none of whose turn may go stays where it was typed.
   const toPlace = (how.kind === 'typed' || how.kind === 'choice') && how.placed && (from === null || previous !== null);
   const carries = askCarries(askText(text), scope, previous, from ? earlierOf(home, from, derived?.found ?? null) : [],
-    toPlace ? otherChains(chains(), scope, target?.id ?? null) : null);
+    toPlace ? otherChains(chains(), scope, target?.id ?? null) : null, subjects);
   // What its answer's question may be written from (R10): the turns this request carried (askCarries may drop the
   // oldest), and a choice's offer; other conversations go by own words only (R2).
   const went = carries.previous === undefined || !from ? [] : [from.id, ...older.slice(older.length - (carries.previous.earlier?.length ?? 0)).map(each => each.id)];
@@ -4100,7 +4105,8 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   const cancelId = crypto.randomUUID();
   activeAskCancelId = cancelId;
   const result = await rpc('ask.run', { expect: account, question: text, scope, cancel_id: cancelId,
-    ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }) });
+    ...(carries.previous === undefined ? {} : { previous: carries.previous }), ...(carries.threads === undefined ? {} : { threads: carries.threads }),
+    ...(subjects === undefined ? {} : { research_subjects: subjects }) });
   if (activeAskCancelId === cancelId) activeAskCancelId = null;
   const current = state.ask;
   if (current?.seq !== mine) return; // cancelled, or Ask was left
@@ -4160,13 +4166,20 @@ async function askAs(how: AskHow, scope: AskScope, pending?: PendingTurn): Promi
   // Its conversation's label is kept only when every word of it was typed there (R2): in the conversation it goes on,
   // in those it joins, or as this question.
   const words = [...(chainOf(goesOn)?.questions ?? []), ...linked.flatMap(other => other.questions), ...(typed === null ? [] : [askText(typed)])];
+  // Keep only the evidence coordinates of selected subjects. The full answer depends on them in addition to its fact citations.
+  const question = subjects && pending ? clarifiedWords(pending) : full ?? text;
+  const dependencies = subjects?.map(subject => subjectCitation(subject.citation));
   const turn: TimelineTurn = {
-    id, asked_at: new Date(started).toISOString(), text: pending?.text ?? text, question: full ?? text, scope, answer: kept,
+    id, asked_at: new Date(started).toISOString(), text: pending?.text ?? text, question, scope, answer: kept,
+    ...(dependencies ? { subject_citations: dependencies } : {}),
     ...(pending?.clarification === undefined ? {} : { clarification: pending.clarification }), citations_complete: true,
     ...(typed === null ? {} : { typed: pending ? clarifiedWords(pending) : typed }), follows: from?.id ?? null,
     ...(since === undefined ? {} : { since }), ...(how.kind === 'again' ? { again_of: how.turn } : {}), thread: landed, carried,
     ...(joins.length === 0 ? {} : { continues: joins }), ...(labelOf([{ label }], words) === undefined ? {} : { label }),
   };
+  // The Authority just rechecked each selected subject before releasing this answer.
+  if (dependencies) keepChecks({ ...state.timeline.checks, [id]: { at: Date.now(),
+    states: Object.fromEntries(dependencies.map((_, i) => [kept.sources.length + i, 'same' as const])) } });
   keepTurns([turn]);
   // Only an Ask that took long enough to show its work keeps its receipt, timed as its live line was.
   const took = Date.now() - attempt;
@@ -4216,7 +4229,7 @@ export function nothingLine(turn: TimelineTurn, current: State = state): string 
 
 /** A completed factual gap can be searched more widely even when other parts were answered. */
 export function canAskEverywhere(turn: TimelineTurn, current: State = state): boolean {
-  if (turn.scope.kind !== 'project' || !showsOf(checksOf(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
+  if (turn.scope.kind !== 'project' || subjectAccess(turn, checksOf(turn, current)) !== 'same' || !showsOf(checksOf(turn, current))(turn.answer.sources.map((_, index) => index))) return false;
   return foundNothingInProject(turn) || (turn.answer.parts.some(part => part.gap_details?.not_found !== undefined)
     && !turn.answer.parts.some(part => part.gap_details?.interrupted));
 }
@@ -4251,6 +4264,13 @@ export function chooseClarified(choice: AskChoice): void {
   const clarify = state.ask?.clarify;
   if (clarify?.kind !== 'choices' || askBusy()) return;
   const { how, carried, alternatives } = clarify;
+  if (choice.citation) {
+    const row = pendingTurn(clarify.id);
+    if (!row) return;
+    const researchSubjects = [...(how.researchSubjects ?? []), { label: choice.label, citation: choice.citation }];
+    void askAs({ ...how, researchSubjects }, clarify.scope, row);
+    return;
+  }
   const typed = how.kind === 'choice' ? how.typed : how.question;
   void askAs({ ...how, kind: 'choice', question: choice.question, typed, carried, placed: alternatives }, clarify.scope, pendingTurn(clarify.id));
 }
@@ -4327,7 +4347,10 @@ export function retryPending(id: string): void {
 
 export function retryAsk(): void {
   const failed = state.ask?.failed;
-  if (failed && !askBusy()) void askAs(failed.how, failed.scope, pendingTurn(failed.id));
+  if (!failed || askBusy()) return;
+  const row = pendingTurn(failed.id);
+  // A selection that failed access must be offered again under current access on the person's explicit retry.
+  void askAs(failed.how.researchSubjects && row ? typedPending(row) : failed.how, failed.scope, row);
 }
 
 /**
@@ -4510,6 +4533,7 @@ export async function copyAnswer(id: string | null): Promise<boolean> {
   if (turn === undefined) return false;
   const { answer } = turn;
   const checks = checksOf(turn);
+  if (subjectAccess(turn, checks) !== 'same') return false;
   const groups = turnGroups(answer, checks);
   const shows = showsOf(checks);
   // Ask again's "Since" (ADR-0047), named by the day the earlier answer was asked, as the page names it.
@@ -4531,7 +4555,8 @@ export function closeAsk(): void {
 
 /** The turn whose sources the pane's numbers are: the answer that came last, or the turn a number or source row was chosen in. */
 export function activeTurn(current: State = state): TimelineTurn | undefined {
-  return turnOf(current.sources?.turn, current);
+  const turn = turnOf(current.sources?.turn, current);
+  return turn && subjectAccess(turn, checksOf(turn, current)) === 'same' ? turn : undefined;
 }
 
 /** The citations of that turn's answer. */
@@ -4562,7 +4587,7 @@ function shownTurns(current: State = state): TimelineTurn[] {
   const view = current.ask;
   if (!view) return [];
   const turns = askThread(current);
-  const shown = turns.filter(turn => turn.id === view.opened || shownInFull(turn, turns, fullTurns(view)));
+  const shown = turns.filter(turn => (turn.id === view.opened || shownInFull(turn, turns, fullTurns(view))) && subjectAccess(turn, checksOf(turn, current)) === 'same');
   const active = activeTurn(current);
   return active && shown.includes(active) ? [active, ...shown.filter(turn => turn !== active)] : shown;
 }
@@ -4772,7 +4797,7 @@ function readPane(gen: number, source: AnswerSource): void {
 export function chooseSource(group: number, focus: string | null, turn: string | null): void {
   const sources = state.sources;
   const shown = turnOf(turn);
-  const chosen = shown ? turnGroups(shown.answer, checksOf(shown))[group] : undefined;
+  const chosen = shown && subjectAccess(shown, checksOf(shown)) === 'same' ? turnGroups(shown.answer, checksOf(shown))[group] : undefined;
   const source = chosen ? shown!.answer.sources[chosen.indexes[0]!] : undefined;
   if (!sources || !shown || !source) return;
   set({ sources: { ...sources, turn: shown.id, open: group, focus, evidence: null } });

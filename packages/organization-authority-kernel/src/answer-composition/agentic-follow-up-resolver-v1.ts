@@ -52,7 +52,7 @@ import type { StructuredGenerationJsonSchema, StructuredGenerationPort } from ".
 const RESOLVE_CALL: AgenticModelCallV1 = Object.freeze({ role: "answer", span: "ask_resolve" });
 const RESOLUTIONS = ["same", "resolved", "clarify"] as const;
 /** Kinds research opens from a citation before its first step: approved records, originals, tickets and pages. */
-const OPENABLE: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
+export const OPENABLE_ASK_CITATION_KINDS_V1: ReadonlySet<string> = new Set(["approved_record", "source_revision", "ticket", "page"]);
 
 /** What a follow-up refers to; `about` indexes the open thread's citations as one list (threadCitations). */
 export type AgenticFollowUpResolutionV1 =
@@ -528,7 +528,7 @@ export function agenticFollowUpStartingV1(previous: PersonAnswerPreviousV1, abou
   const { citations } = threadCitations(previous);
   return Object.freeze(about.flatMap(index => {
     const cited = citations[index]?.citation;
-    if (cited === undefined || !OPENABLE.has(cited.kind)) return [];
+    if (cited === undefined || !OPENABLE_ASK_CITATION_KINDS_V1.has(cited.kind)) return [];
     return [Object.freeze({ citation: cited, if_unreadable: "skip" as const })];
   }));
 }

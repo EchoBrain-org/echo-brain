@@ -5,7 +5,7 @@
 import {
   PERSON_ASK_CHECK_REQUEST_KIND_V1, validatePersonAnswerPreviousV1, validatePersonAnswerRequestV3, validatePersonAskCheckRequestV1, validateProjectIdV1,
 } from '@echo-brain/organization-api';
-import type { AskPrevious, AskProgressNotice, AskScope, AskStep, AskThread, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
+import type { AskPrevious, AskProgressNotice, AskResearchSubject, AskScope, AskStep, AskThread, Expect, RecordRead, SourceRef } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { jsonLines } from './cli.js';
 import { askStepView } from './views.js';
@@ -18,8 +18,9 @@ import { askStepView } from './views.js';
  * step is the client's own. `previous` (ADR-0047) and `threads` (ADR-0056)
  * come already checked (askContext). It reads labels (askLabels).
  */
-export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[]): string[] {
-  return ['ask', `--question=${text}`, '--progress',
+export function askArgv(text: string, scope: AskScope, previous?: AskPrevious, threads?: readonly AskThread[], subjects?: readonly AskResearchSubject[]): string[] {
+  return ['ask', `--question=${text}`, '--progress', ...(previous?.purpose === 'ask_again' ? [] : ['--research-clarification']),
+    ...(subjects === undefined ? [] : [`--research-subjects=${JSON.stringify(subjects)}`]),
     ...(scope.kind === 'project' ? [`--project=${scope.project_id}`] : []),
     ...(previous === undefined ? [] : [`--previous=${JSON.stringify(previous)}`]),
     ...(threads === undefined ? [] : [`--threads=${JSON.stringify(threads)}`]),

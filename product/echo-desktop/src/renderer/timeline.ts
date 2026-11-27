@@ -6,9 +6,9 @@
 // and makes the calls.
 import { isPersonAnswerLabelV1, personAnswerLabelFitsV1 } from '@echo-brain/organization-api/person-answer-previous-v1';
 import type {
-  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskScope, AskThread, CheckCitation, TimelineTurn,
+  Answer, AnswerSource, AnswerStatement, AskCheckItem, AskCheckResult, AskCheckState, AskPrevious, AskResearchSubject, AskScope, AskThread, CheckCitation, TimelineTurn,
 } from '../shared/protocol.js';
-import { checkOf, MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../shared/protocol.js';
+import { checkCitation, checkOf, subjectCitation, MAX_REQUEST_BYTES, THREAD_ACTIVE_MS } from '../shared/protocol.js';
 import { askText } from '../shared/query.js';
 import { answerSentences, sourceGroups, type Sentence, type Shows, type SourceGroup } from './answer.js';
 
@@ -94,8 +94,7 @@ export interface CheckPlan {
 
 /** The answer's sources a check can ask about, numbered as the page numbers them, each with what a check asks of it. */
 function checkable(turn: TimelineTurn): { at: number; citation: CheckCitation }[] {
-  return turn.answer.sources.flatMap((source, at) => {
-    const citation = checkOf(source);
+  return [...turn.answer.sources.map(checkOf), ...(turn.subject_citations ?? []).map(checkCitation)].flatMap((citation, at) => {
     return citation === undefined ? [] : [{ at, citation }];
   });
 }
@@ -205,9 +204,9 @@ export function followedTurn(turns: readonly TimelineTurn[], opened: string | nu
 const jsonBytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
 /** An Ask request's body as the client sends it (`PersonAnswerRequestV3`), for its bytes; every Ask but an Ask again reads labels (askLabels). */
-function bodyBytes(question: string, scope: AskScope, previous: AskPrevious | null): number {
+function bodyBytes(question: string, scope: AskScope, previous: AskPrevious | null, subjects?: readonly AskResearchSubject[]): number {
   return jsonBytes({ schema_version: 3, question, ...(scope.kind === 'project' ? { project_id: scope.project_id } : {}), ...(previous === null ? {} : { previous }),
-    ...(previous?.purpose === 'ask_again' ? {} : { labels: true }) });
+    ...(subjects === undefined ? {} : { research_subjects: subjects }), ...(previous?.purpose === 'ask_again' ? {} : { labels: true, research_clarification: true }) });
 }
 
 /** The most an Ask's body may take: a little short of the bound, for how the client writes the same body. */
@@ -219,9 +218,14 @@ function sourceReadable(turn: TimelineTurn, known: TurnChecks | null | undefined
   return source !== undefined && checkOf(source) !== undefined && known?.[at] === 'same';
 }
 
-/** Whether `known` finds the turn with at least one source, every one readable. */
+/** Access to every source selected to identify this answer’s subject. */
+export function subjectAccess(turn: TimelineTurn, known: TurnChecks | null | undefined): AskCheckState {
+  const states = (turn.subject_citations ?? []).map((_, i) => known?.[turn.answer.sources.length + i]);
+  return states.includes('unreadable') ? 'unreadable' : states.every(state => state === 'same') ? 'same' : 'unknown';
+}
+
 export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined): boolean {
-  return turn.answer.sources.length > 0 && turn.answer.sources.every((_, at) => sourceReadable(turn, known, at));
+  return subjectAccess(turn, known) === 'same' && turn.answer.sources.length > 0 && turn.answer.sources.every((_, at) => sourceReadable(turn, known, at));
 }
 
 /**
@@ -240,11 +244,11 @@ export function turnReadable(turn: TimelineTurn, known: TurnChecks | undefined):
  * bound. `label`: its conversation's label, on a follow-up only (ADR-0057).
  */
 export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], known: TurnChecks | null, question: string, scope: AskScope,
-  earlier: string = askText(turn.question), label?: string, candidate?: true): AskPrevious {
+  earlier: string = askText(turn.question), label?: string, candidate?: true, subjects?: readonly AskResearchSubject[]): AskPrevious {
   const chosen = readableStatements(turn, known);
   const labelled = purpose === 'follow_up' ? { ...(label === undefined ? {} : { label }), ...(candidate ? { candidate } : {}) } : {};
   let previous: AskPrevious = { purpose, ...carried(turn, earlier, chosen), ...labelled };
-  while (chosen.length > 0 && bodyBytes(question, scope, previous) > BODY_ROOM) {
+  while (chosen.length > 0 && bodyBytes(question, scope, previous, subjects) > BODY_ROOM) {
     chosen.pop();
     previous = { purpose, ...carried(turn, earlier, chosen), ...labelled };
   }
@@ -253,9 +257,15 @@ export function previousOf(turn: TimelineTurn, purpose: AskPrevious['purpose'], 
 
 /** A turn's sentences an Ask may carry: those whose every source `known` found readable; none from an older desktop's turn. */
 function readableStatements(turn: TimelineTurn, known: TurnChecks | null): AnswerStatement[] {
-  return known === null || turn.citations_complete !== true ? [] : [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
+  if (known === null || turn.citations_complete !== true || subjectAccess(turn, known) !== 'same') return [];
+  // The Authority checks a carried sentence’s original citations again. Carry it only if those
+  // citations can also vouch for every selected subject at that final access check.
+  const dependencies = turn.subject_citations?.map(citation => JSON.stringify(citation));
+  const keys = dependencies && turn.answer.sources.map(source => source.cited && JSON.stringify(subjectCitation(source.cited.citation)));
+  return [turn.answer.direct, ...turn.answer.parts.flatMap(part => [...part.statements, ...(part.records ?? [])])]
     .filter((statement): statement is AnswerStatement => statement !== undefined && statement.text.trim() !== ''
-      && statement.citation_indexes.every(at => sourceReadable(turn, known, at)));
+      && statement.citation_indexes.every(at => sourceReadable(turn, known, at))
+      && (!dependencies || dependencies.every(key => statement.citation_indexes.some(at => keys?.[at] === key))));
 }
 
 /** A turn as an Ask carries it, previous or older alike, with only the citations its `chosen` sentences cite. */
@@ -556,13 +566,13 @@ export interface AskCarries {
  * least recently asked first, then older turns from the oldest. `others` null: not to be placed, no list; to be placed,
  * a list goes even when empty, so the answer can say the question starts a thread.
  */
-export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Chain[] | null): AskCarries {
+export function askCarries(question: string, scope: AskScope, previous: AskPrevious | null, earlier: readonly AskEarlierTurn[], others: readonly Chain[] | null, subjects?: readonly AskResearchSubject[]): AskCarries {
   const threads = (others ?? []).map(({ questions, asked_at, sent }): AskThread => ({ questions, asked_at, ...(sent === undefined ? {} : { label: sent }) }));
   // Each entry with the comma before the next, and each list that goes with its key and brackets.
   const sizes = (entries: readonly unknown[]) => entries.map(entry => jsonBytes(entry) + 1);
   const total = (bytes: readonly number[]) => bytes.reduce((sum, size) => sum + size, 0);
   const [turnBytes, threadBytes] = [sizes(previous === null ? [] : earlier), sizes(threads)];
-  const room = BODY_ROOM - bodyBytes(question, scope, previous);
+  const room = BODY_ROOM - bodyBytes(question, scope, previous, subjects);
   let [turns, listed, from, kept] = [total(turnBytes), total(threadBytes), 0, threads.length];
   const fits = () => (from < turnBytes.length ? 16 + turns : 0) + (kept > 0 ? 16 + listed : 0) <= room;
   while (kept > 0 && !fits()) listed -= threadBytes[--kept]!;

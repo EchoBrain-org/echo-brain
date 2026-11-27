@@ -15,7 +15,8 @@
 // timeline deletes any other account's, so an account change leaves nothing of
 // the last one here. Kept apart from host.ts so all of it is tested on a real
 // folder.
-import { isPersonAnswerLabelV1, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { isPersonAnswerLabelV1, validatePersonAnswerEvidenceCitationV8, validatePersonAnswerGapDetailsV1, validateProjectIdV1 } from '@echo-brain/organization-api';
+import { subjectCitation } from '../shared/protocol.js';
 import { constants as buffer } from 'node:buffer';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, constants, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
@@ -102,8 +103,12 @@ function storedTurns(personDirectory: string, account: Expect, strict = false): 
  * wherever it is found (R2), never the answer it came with.
  */
 export function readTimeline(personDirectory: string, account: Expect): TimelineEntry[] {
-  return storedTurns(personDirectory, account).map(({ label, ...turn }) => timelineEntry(isPersonAnswerLabelV1(label) ? { ...turn, label } : turn))
-    .filter((turn): turn is TimelineEntry => turn !== null);
+  return storedTurns(personDirectory, account).map(({ label, ...row }) => {
+    const turn = isPersonAnswerLabelV1(label) ? { ...row, label } : row;
+    return record(row.answer) && 'reply' in row.answer
+      ? timelineEntry({ ...turn, answer: row.answer.reply, subject_citations: row.answer.subject_citations ?? null })
+      : timelineEntry(turn);
+  }).filter((turn): turn is TimelineEntry => turn !== null);
 }
 
 /**
@@ -128,7 +133,12 @@ export function putTimeline(personDirectory: string, account: Expect, turn: Time
   const directory = folder(personDirectory, 'write');
   if (directory === null) throw new Error('The Ask timeline folder is not private');
   const turns = storedTurns(personDirectory, account, known);
-  const put = turn as unknown as StoredTurn;
+  // Older readers preserve this envelope until a desktop that checks the selected sources can display the reply.
+  let put = turn as unknown as StoredTurn;
+  if ('subject_citations' in turn && turn.subject_citations) {
+    const { answer: reply, subject_citations, ...row } = turn;
+    put = { ...row, answer: { subject_citations: subject_citations.map(subjectCitation), reply } };
+  }
   const at = turns.findIndex(kept => kept.id === turn.id);
   if (at < 0) {
     if (known) return;
@@ -360,8 +370,13 @@ export function timelineTurn(value: unknown): TimelineTurn | null {
       && new Set(ids).size === ids.length))) return null;
   // Its label in form; whose words it may use is the page's to check each time it reads it (R2).
   if (value.label !== undefined && !isPersonAnswerLabelV1(value.label)) return null;
-  // The sources a check found unreadable: distinct places among the answer's own sources.
-  const sources = (value.answer as TimelineAnswer).sources.length;
+  const subjects = value.subject_citations;
+  if (subjects !== undefined) {
+    if (!Array.isArray(subjects) || subjects.length === 0) return null;
+    try { subjects.forEach(subject => validatePersonAnswerEvidenceCitationV8(subject)); } catch { return null; }
+  }
+  // Subject dependencies follow the numbered answer sources in the access check.
+  const sources = (value.answer as TimelineAnswer).sources.length + (subjects?.length ?? 0);
   if (value.unreadable !== undefined && !(indexes(value.unreadable) && new Set(value.unreadable).size === value.unreadable.length
       && value.unreadable.every(at => at < sources))) {
     return null;

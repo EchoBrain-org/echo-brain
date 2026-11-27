@@ -2,7 +2,7 @@ import { once } from "node:events";
 import { request as httpRequest } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
-import { PERSON_ANSWER_PATH_V7 } from "@echo-brain/organization-api";
+import { createPersonAskProgressDecoderV3, PERSON_ANSWER_PATH_V7 } from "@echo-brain/organization-api";
 import type { StructuredGenerationInput } from "@echo-brain/organization-authority-kernel/answer-composition/structured-generation-v1";
 import type { AgenticResearchDriverSessionV1 } from '@echo-brain/organization-authority-kernel/answer-composition/agentic-ask-v1';
 import { AuthorityOperationError } from "@echo-brain/organization-authority-kernel/domain/errors";
@@ -15,7 +15,7 @@ import { PersonRecordSearchIndexLagV1, type PersonEvidenceDeskRecordsV1 } from "
 import { createOrganizationAuthorityHttpServer } from "../src/presentation/organization-authority-http-server.js";
 import type { PersonAnswerV7HttpApplication } from "../src/presentation/person-live-answer-http-application.js";
 import { authorityHttpServerOptions } from "./fixtures/authority-http-server.js";
-import { streamedAnswer } from "./fixtures/ask-over-http.js";
+import { decodeAll, streamedAnswer } from "./fixtures/ask-over-http.js";
 
 /** Ask on `/v7` (`ask`) behind the real HTTP server. */
 async function server(input: { readonly ask?: PersonAnswerV7HttpApplication }) {
@@ -196,23 +196,30 @@ function askFixture(nativeDriver = false) {
       source_sha256: canonicalSha256({ source: 1 }), representation_sha256: canonicalSha256({ representation: 1 }), anchor_sha256: canonicalSha256({ anchor: 1 }),
     },
   });
+  const notes = [note];
   const scopes: unknown[] = [];
   const release = (scope: unknown) => ({
     release: { authorization: { principal_id: "prn_asker", membership_id: "mem_asker", session_family_id: "session_asker", checked_at }, scope, grants_sha256: canonicalSha256([]), released_atoms: [] },
-    receipt: canonicalSha256({ release: scopes.length }), items: [note], truncated: false,
+    receipt: canonicalSha256({ release: scopes.length }), items: notes, truncated: false,
   });
   const originals = {
     deskAuthorize: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return { checked_at }; }),
     deskSearch: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return release(input.scope); }),
-    deskOpen: vi.fn((input: { readonly scope: unknown }) => { scopes.push(input.scope); return release(input.scope); }),
+    deskOpen: vi.fn((input: { readonly scope: unknown; readonly citation: OriginalContextDeskItemV1['citation'] }) => {
+      scopes.push(input.scope);
+      const { source_id, revision_id, anchor_sha256 } = input.citation;
+      return { ...release(input.scope), items: notes.filter(({ citation }) => citation.source_id === source_id &&
+        citation.revision_id === revision_id && citation.anchor_sha256 === anchor_sha256) };
+    }),
     revalidateDeskRelease: vi.fn(() => ({ checked_at })),
   };
   const records = { initializeDesk: vi.fn((_input: object) => { throw new PersonRecordSearchIndexLagV1(); }) };
   // Searches once, finishes on what it found, and cites it.
   const generate = vi.fn(async (input: StructuredGenerationInput) => {
-    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string }[] };
+    const prompt = JSON.parse(input.user_prompt) as { question: string; last_results?: { results?: string[] }[]; evidence?: { id: string; text: string }[] };
     if ((input.schema.properties as Record<string, unknown>).blocks !== undefined) {
-      return { blocks: [{ block: "answer", sentences: [{ text: "You decided to launch on Tuesday.", evidence: [prompt.evidence![0]!.id] }] }], not_found: [] };
+      const evidence = prompt.evidence![0]!;
+      return { blocks: [{ block: "answer", sentences: [{ text: evidence.text, evidence: [evidence.id] }] }], not_found: [] };
     }
     const hit = prompt.last_results?.[0]?.results?.[0];
     return hit === undefined
@@ -229,13 +236,18 @@ function askFixture(nativeDriver = false) {
   };
   const route = createPersonLiveAnswerRouteV1(options);
   async function nativeRun(session: AgenticResearchDriverSessionV1) {
-      expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
-      const read = await session.call('search', { query: 'launch' });
-      await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(read), payload_digests: [canonicalSha256(session.initial), canonicalSha256(read)], operation: 'messages' }, async () => ({ value: true }));
-      expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Launch on Tuesday.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
+    expect(JSON.stringify(session.initial)).toContain('everything the asker can read');
+    const hasStartingItem = Array.isArray(session.initial.items) && session.initial.items.length > 0;
+    const packets = hasStartingItem ? [session.initial] : [session.initial, await session.call('search', { query: 'launch' })];
+    await session.model_request({ model: 'fixture', body_sha256: canonicalSha256(packets), payload_digests: packets.map(packet => canonicalSha256(packet)), operation: 'messages' }, async () => ({ value: true }));
+    if (session.research_clarification && !hasStartingItem) {
+      expect(await session.call('clarify', { subjects: notes.map((item, index) => ({ id: `E${index + 1}`, label: item.label })) })).toMatchObject({ accepted: true });
+      return;
+    }
+    expect(await session.call('finish', { completed: true, parts: [{ question: 'Launch day', notes: 'Use the launch date from the note.', needs: [{ need: 'launch day', kind: 'content', status: 'found', evidence: ['E1'] }] }] })).toMatchObject({ accepted: true });
   }
   // The desk cites an original with its display label.
-  return { note, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
+  return { note, notes, cited: { ...note.citation, label: note.label }, scopes, originals, records, generate, route };
 }
 
 function send(url: string, path: string, body: unknown): Promise<Response> {
@@ -249,6 +261,38 @@ async function post(url: string, path: string, body: unknown): Promise<{ readonl
 }
 
 describe("Ask scope, and citation refs (ADR-0024)", () => {
+  it('streams evidence-backed choices for an ambiguous first question before writing an answer', async () => {
+    const f = askFixture(true);
+    const second = { ...f.note, label: 'Partner launch note', text: 'The partner launch is on Friday.', ref: `note:ctx_${'b'.repeat(64)}`,
+      citation: { ...f.note.citation, source_id: `source:${'e'.repeat(64)}`, anchor_sha256: canonicalSha256('partner launch') } } satisfies OriginalContextDeskItemV1;
+    f.notes.push(second);
+    const value = await server({ ask: f.route });
+    const question = 'Which date should I put in the launch note?';
+    try {
+      const response = await send(value.url, PERSON_ANSWER_PATH_V7, { schema_version: 3, question, threads: [], research_clarification: true });
+      expect(response.status).toBe(200);
+      const last = decodeAll(createPersonAskProgressDecoderV3(), await response.text()).at(-1);
+      expect(last).toMatchObject({ type: 'answer', response: { outcome: 'clarify', question, parts: [], citations: [],
+        choices: [{ label: f.note.label, citation: f.note.citation }, { label: second.label, citation: second.citation }] }, receipt: { looked_through: 2 } });
+      expect(f.generate).not.toHaveBeenCalled();
+      if (last?.type !== 'answer' || !last.response.choices) throw new Error('expected subject choices');
+      const { label, citation } = last.response.choices[1]!;
+      const continuation = { schema_version: 3, question, threads: [], research_clarification: true, research_subjects: [{ label, citation }] };
+      const answer = await streamedAnswer(await send(value.url, PERSON_ANSWER_PATH_V7, continuation));
+      expect(answer).toMatchObject({ outcome: 'answered', citations: [{ citation: second.citation }] });
+      expect(JSON.stringify(answer.parts)).toContain(second.text);
+      expect(f.originals.deskSearch).toHaveBeenCalledTimes(1);
+
+      // A source revoked before the click cannot silently turn a selection into an answer about the other launch.
+      f.notes.pop();
+      f.generate.mockClear();
+      const stale = await send(value.url, PERSON_ANSWER_PATH_V7, continuation);
+      const terminal = decodeAll(createPersonAskProgressDecoderV3(), await stale.text()).at(-1);
+      expect(terminal).toMatchObject({ type: 'error', error: { code: 'stale_access_state' } });
+      expect(f.generate).not.toHaveBeenCalled();
+    } finally { await value.close(); }
+  });
+
   it('serves the native research driver through the existing authenticated HTTP route and writer', async () => {
     const f = askFixture(true);
     const value = await server({ ask: f.route });

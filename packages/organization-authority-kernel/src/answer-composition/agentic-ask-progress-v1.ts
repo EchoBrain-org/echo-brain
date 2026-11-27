@@ -1,4 +1,4 @@
-import type { PersonAnswerPreviousV1, PersonAnswerResponseV8, PersonAnswerThreadV1, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
+import type { PersonAnswerPreviousV1, PersonAnswerResearchSubjectV1, PersonAnswerResponseV8, PersonAnswerThreadV1, PersonAskProgressStepEventV3, PersonAskReceiptV3 } from "@echo-brain/organization-api";
 import type { AgenticFollowUpCarryV1 } from "./agentic-follow-up-resolver-v1.js";
 
 /**
@@ -49,6 +49,9 @@ export interface AgenticAskProgressInputV3 {
   readonly threads?: readonly PersonAnswerThreadV1[];
   /** The client reads labels (ADR-0057). */
   readonly labels?: true;
+  /** The client can continue a clarification discovered by research. */
+  readonly research_clarification?: true;
+  readonly research_subjects?: readonly PersonAnswerResearchSubjectV1[];
   readonly follow_up?: AgenticFollowUpCarryV1;
 }
 

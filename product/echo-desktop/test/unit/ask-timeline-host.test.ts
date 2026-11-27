@@ -30,7 +30,7 @@ import { askArgv, askCheckArgv, askCheckRequest, askContext, askPrevious, askThr
 import { askText } from '../../src/shared/query.js';
 import {
   deleteOtherTimelines, deleteTimeline, MAX_TIMELINE_FILE_BYTES, pruneTurns, putTimeline, readTimeline, TIMELINE_FILE_FRAME_BYTES,
-  timelinePath, timelineTurn, TimelineWriteUnsure,
+  timelineEntry, timelinePath, timelineTurn, TimelineWriteUnsure,
 } from '../../src/host/timeline.js';
 import { answerView } from '../../src/host/views.js';
 import { blocksAnswer } from '../fixtures/authority.js';
@@ -79,6 +79,30 @@ describe('the timeline file (C5)', () => {
     expect(readdirSync(folder())).toEqual([path.split('/').at(-1)]);
     expect(readTimeline(person, MINA)).toEqual([]);
     expect(readTimeline(person, ARI)).toEqual([first]);
+  });
+
+  it('keeps a selected answer unreadable to the ordinary v1 row parser while preserving it through other writes', () => {
+    const first = turn(1);
+    const protectedTurn = { ...first, subject_citations: [ticketCitation], unreadable: [first.answer.sources.length] };
+    putTimeline(person, ARI, protectedTurn);
+    const path = timelinePath(person, ARI);
+    const disk = () => JSON.parse(readFileSync(path, 'utf8')).turns[0];
+    const envelope = disk();
+    expect(envelope.answer).toEqual({ subject_citations: [ticketCitation], reply: first.answer });
+    expect(timelineEntry(envelope)).toBeNull();
+    expect(readTimeline(person, ARI)).toEqual([protectedTurn]);
+    putTimeline(person, ARI, turn());
+    expect(disk()).toEqual(envelope);
+    expect(readTimeline(person, ARI)[0]).toEqual(protectedTurn);
+  });
+
+  it('persists the selected source revision’s coordinates without its optional display label', () => {
+    const coordinates = { kind: 'source_revision' as const, source_id: `source:${'3'.repeat(64)}` as const, revision_id: 'r1', source_sha256: sha('4'),
+      representation_sha256: sha('5'), anchor_sha256: sha('6') };
+    putTimeline(person, ARI, { ...turn(), subject_citations: [{ ...coordinates, label: 'Restricted personnel review' }] });
+    const file = readFileSync(timelinePath(person, ARI), 'utf8');
+    expect(file).not.toContain('Restricted personnel review');
+    expect(readTimeline(person, ARI)[0]).toMatchObject({ subject_citations: [coordinates] });
   });
 
   it('reopens unfinished questions and fills the original row even when another question finished first', () => {
@@ -438,7 +462,7 @@ describe('what the page sends with an Ask and a check', () => {
       + "what's still blocked on supplier samples, and what changed since last Tuesday's review?\nAnd which of those are due before Friday's build review?";
     expect(new Set(question.match(/[\p{L}\p{N}]+/gu)!.map(word => word.toLowerCase())).size).toBeGreaterThan(32);
     expect(question.length).toBeGreaterThan(240);
-    expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress', '--labels']);
+    expect(askArgv(askText(` ${question} `), { kind: 'global' })).toEqual(['ask', `--question=${question}`, '--progress', '--research-clarification', '--labels']);
   });
 
   it('waits on liveness: an Ask\'s silence outlasts the client\'s own 40 s stall and two session refreshes; a cited passage its 15 s read and 15 s session', () => {
