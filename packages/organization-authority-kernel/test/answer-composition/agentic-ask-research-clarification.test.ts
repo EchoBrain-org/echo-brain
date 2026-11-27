@@ -159,8 +159,35 @@ describe('clarification discovered during Ask research', () => {
     const res = await h.ask.answer({ question, research_clarification: true, research_subjects: [{ label: selected.label, citation: selected.citation }] });
     expect(h.openCitation).toHaveBeenCalledOnce();
     expect(JSON.parse(h.run.of('step')[0]!.user_prompt)).toMatchObject({ question: wording, opened: [{ title: selected.label }] });
-    expect(JSON.parse(h.run.of('writer')[0]!.user_prompt)).toMatchObject({ question: wording });
+    for (const role of ['step', 'writer'] as const) {
+      expect(JSON.parse(h.run.of(role)[0]!.user_prompt)).toMatchObject({ question: wording, selected_subjects: [selected.label] });
+    }
     expect(res).toMatchObject({ outcome: 'answered', citations: [{ citation: selected.citation }] });
+  });
+
+  it.each([[1, 'answered'], [2, 'partial']] as const)('answers for the chosen record when research offers the same records under different labels %i time(s)', async (attempts, outcome) => {
+    const first = harness([searchFor(question, 'pilot'), clarify]);
+    const offered = await first.ask.answer({ question, research_clarification: true });
+    const chosen = offered.choices![0]!;
+    const selected = pilots[0]!;
+    const relabeled = askWhich([{ id: 'E1', label: 'March pilot shipped' }, { id: 'E2', label: 'June pilot is waiting' }]);
+    const resumed = harness([searchFor(chosen.question, 'pilot'), relabeled, attempts === 1 ? finishOn(chosen.question, ['E1']) : relabeled],
+      undefined, [writerReply([{ text: selected.text!, evidence: ['E1'] }])]);
+    resumed.openCitation.mockResolvedValue(result([selected]));
+    const answer = await resumed.ask.answer({ question, research_clarification: true,
+      research_subjects: [{ label: chosen.label, citation: chosen.citation! }] });
+    expect(resumed.openCitation).toHaveBeenCalledOnce();
+    expect(answer).toMatchObject({ outcome, citations: [{ citation: selected.citation }] });
+  });
+
+  it('can clarify a new distinction within the chosen record', async () => {
+    const selected = { ...pilots[0]!, text: 'The March pilot needs a Retail brief and a Partner brief.' };
+    const labels = ['Retail brief', 'Partner brief'];
+    const h = harness([askWhich(labels.map(label => ({ id: 'E1', label })))]);
+    h.openCitation.mockResolvedValue(result([selected]));
+    const answer = await h.ask.answer({ question, research_clarification: true,
+      research_subjects: [{ label: selected.label, citation: selected.citation }] });
+    expect(answer).toMatchObject({ outcome: 'clarify', choices: labels.map(label => ({ label, citation: selected.citation })) });
   });
 
   it.each(['pure', 'mixed', 'stale'] as const)('verifies a chosen subject before selecting the matching earlier message (%s)', async mode => {

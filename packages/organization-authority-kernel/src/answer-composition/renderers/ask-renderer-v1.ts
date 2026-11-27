@@ -176,6 +176,8 @@ export interface AskEarlierAnswerV1 {
 export interface CreateAskRendererV1Options {
   /** The writer's system prompt, with the live-source guidance when live sources are available. */
   readonly answer_prompt: string;
+  /** The subjects the person chose and research reopened. */
+  readonly selected_subjects?: readonly string[];
   /** The sources research could read, as the research model saw them. */
   readonly source_catalog: readonly Readonly<Record<string, unknown>>[];
   /** What the writer is told the desk reads. */
@@ -379,6 +381,7 @@ export function createAskRendererV1(options: CreateAskRendererV1Options): Agenti
       const answerContext = {
         // An Ask again's writer reads the earlier answer beside the question (ADR-0047); no other writer's input changes.
         question: askedQuestion, ...(earlier === undefined ? {} : { earlier }), ...options.context, scope: options.scope, source_catalog: options.source_catalog,
+        ...(options.selected_subjects === undefined ? {} : { selected_subjects: options.selected_subjects }),
         // The writer picks its blocks from a catalog beside the sources' (ADR-0051).
         block_catalog: ANSWER_BLOCK_CATALOG,
         // Lists carry their filters (ADR-0041); this describes what research read, not whether an arbitrary fact exists.

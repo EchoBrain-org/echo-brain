@@ -1262,10 +1262,11 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   const containsLabel = (label: string, title: string, text?: string): boolean =>
     [title, text].some(field => field !== undefined && cleanLine(field).includes(label));
-  const selectedLabels: string[] = [];
+  const selectedSubjects: { label: string; citationHash: Sha256Digest }[] = [];
   const clarifyFrom = (args: unknown, observed: readonly SubjectEvidence[], alone = true): PersonAnswerResponseV8 => {
     const input = object(args);
     const question = options.clarification_question;
+    const alreadyUnresolved = triedClarification;
     triedClarification = question !== undefined;
     if (!alone) throw new AgenticAskOutputErrorV1('Use clarify as the only action');
     if (question === undefined || !ask || !Array.isArray(input?.subjects) || input.subjects.length < 2 || Object.keys(input).length !== 1) {
@@ -1283,8 +1284,13 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     if (new Set(choices.map(choice => choice.label.toLowerCase())).size !== choices.length) {
       throw new AgenticAskOutputErrorV1('Choose distinct subject labels');
     }
-    if (choices.some(choice => selectedLabels.some(label => label.toLowerCase() === choice.label.toLowerCase()))) {
-      throw new AgenticAskOutputErrorV1('The person already chose that subject; continue the research');
+    const offeredRecords = new Set(choices.map(choice => canonicalSha256(choice.citation)));
+    // A choice between records is settled by its citation. One record can still contain several distinct subjects.
+    if (selectedSubjects.some(subject => (offeredRecords.size > 1 && offeredRecords.has(subject.citationHash)) ||
+      choices.some(choice => choice.label.toLowerCase() === subject.label.toLowerCase()))) {
+      // A settled choice adds no ambiguity, even when the model exhausts its repair attempt.
+      triedClarification = alreadyUnresolved;
+      throw new AgenticAskOutputErrorV1('The person already chose that subject. Continue with it, or clarify a different distinction within it.');
     }
     // Each standalone choice includes the original question. Refuse an oversized proposal before copying it.
     if (bytes(question) * (choices.length + 1) <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) {
@@ -1329,7 +1335,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   };
   /** The goal as the model sees it: a task's slots are filled once its starting items are read. */
   let goal: AgenticResearchGoalV1 = brief.goal;
-  const goalFields = (): Record<string, unknown> => goal.kind === "question" ? { question: goal.question } : { task: goal.task };
+  const goalFields = (): Record<string, unknown> => goal.kind === "question" ? {
+    question: goal.question, ...(selectedSubjects.length ? { selected_subjects: selectedSubjects.map(subject => subject.label) } : {}),
+  } : { task: goal.task };
 
   const checkCompletion = (completionPlan: readonly PartState[], finishAvailable: boolean, observations: readonly AskResearchObservationV1[] = researchObservations) => {
     // A question goal's needs are checked by their declared kinds (ADR-0041); a task goal's need an item read in full.
@@ -1450,16 +1458,17 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
         if (item === anchor) { startingIds.push(entry.short); entry.direct = true; }
       }
       if (anchor.text !== undefined && anchor.citation.kind !== "source_revision") anchorsRead.add(anchor.id);
+      const label = starting[index]!.selected_label;
+      if (label !== undefined) selectedSubjects.push({ label, citationHash: canonicalSha256(anchor.citation) });
       for (const item of opened.items.filter(value => value.text === undefined)) register(item);
     }
-    selectedLabels.push(...starting.flatMap(start => start.selected_label ?? []));
     return startingIds;
   };
 
   const research = async (gate: AgenticModelGateV1, resolved: Pick<AgenticBriefV1, 'goal' | 'starting'>): Promise<void> => {
     const startingIds = await openStarting(resolved.starting);
     if (resolved.goal.kind === "task") goal = Object.freeze({ kind: "task", task: fillAgenticTaskV1(resolved.goal.task, startingIds) });
-    else goal = selectedLabels.length ? { kind: "question", question: `${resolved.goal.question} (${selectedLabels.join(', ')})` } : resolved.goal;
+    else goal = selectedSubjects.length ? { kind: "question", question: `${resolved.goal.question} (${selectedSubjects.map(subject => subject.label).join(', ')})` } : resolved.goal;
 
     if (options.driver !== undefined) {
       await drivenResearch(gate, options.driver);

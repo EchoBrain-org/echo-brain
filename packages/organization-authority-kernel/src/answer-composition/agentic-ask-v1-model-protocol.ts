@@ -146,8 +146,11 @@ function argumentSchema(argument: keyof StepArgs, sources: readonly StepSource[]
   return { ...base, description: ARGUMENT_DESCRIPTIONS[argument] };
 }
 
+export const SELECTED_SUBJECTS_GUIDANCE = "When selected_subjects is present, the person has answered the earlier clarification. Complete the request for the selected subjects. Only include facts and gaps needed to answer for that selection. Leave out alternatives mentioned just to settle which subject the person meant.";
+
 /** Shared with the native research driver's opt-in clarify tool. */
 export const AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1 =
+  SELECTED_SUBJECTS_GUIDANCE + "\n" +
   "If research finds two or more plausible subjects and the choice changes the work requested, call clarify as the only action with subjects [{id, label}, ...]. Each label names one subject using a short exact phrase from the title or text you saw for that E id. Open metadata-only tickets and pages first, then cite the E id of the returned body. Two subjects may come from one item. If short, labeled findings for each subject answer the question (such as the status of both pilots), give those findings instead. If the subjects have no reopenable supporting item, look for one; if the distinction stays unresolved, explain the gap and do not act on a guess. A missing fact alone is not a reason to clarify.";
 
 /** Provider-neutral selectors advertised by the request's source catalog. */
