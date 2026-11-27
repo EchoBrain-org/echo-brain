@@ -165,19 +165,19 @@ describe('clarification discovered during Ask research', () => {
     expect(res).toMatchObject({ outcome: 'answered', citations: [{ citation: selected.citation }] });
   });
 
-  it('answers for the chosen record even when research offers the same records under different labels', async () => {
+  it.each([[1, 'answered'], [2, 'partial']] as const)('answers for the chosen record when research offers the same records under different labels %i time(s)', async (attempts, outcome) => {
     const first = harness([searchFor(question, 'pilot'), clarify]);
     const offered = await first.ask.answer({ question, research_clarification: true });
     const chosen = offered.choices![0]!;
     const selected = pilots[0]!;
     const relabeled = askWhich([{ id: 'E1', label: 'March pilot shipped' }, { id: 'E2', label: 'June pilot is waiting' }]);
-    const resumed = harness([searchFor(chosen.question, 'pilot'), relabeled, finishOn(chosen.question, ['E1'])],
+    const resumed = harness([searchFor(chosen.question, 'pilot'), relabeled, attempts === 1 ? finishOn(chosen.question, ['E1']) : relabeled],
       undefined, [writerReply([{ text: selected.text!, evidence: ['E1'] }])]);
     resumed.openCitation.mockResolvedValue(result([selected]));
     const answer = await resumed.ask.answer({ question, research_clarification: true,
       research_subjects: [{ label: chosen.label, citation: chosen.citation! }] });
     expect(resumed.openCitation).toHaveBeenCalledOnce();
-    expect(answer).toMatchObject({ outcome: 'answered', citations: [{ citation: selected.citation }] });
+    expect(answer).toMatchObject({ outcome, citations: [{ citation: selected.citation }] });
   });
 
   it('can clarify a new distinction within the chosen record', async () => {

@@ -1266,6 +1266,7 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
   const clarifyFrom = (args: unknown, observed: readonly SubjectEvidence[], alone = true): PersonAnswerResponseV8 => {
     const input = object(args);
     const question = options.clarification_question;
+    const alreadyUnresolved = triedClarification;
     triedClarification = question !== undefined;
     if (!alone) throw new AgenticAskOutputErrorV1('Use clarify as the only action');
     if (question === undefined || !ask || !Array.isArray(input?.subjects) || input.subjects.length < 2 || Object.keys(input).length !== 1) {
@@ -1287,7 +1288,9 @@ export function createAgenticResearchLoopV1(options: CreateAgenticResearchLoopV1
     // A choice between records is settled by its citation. One record can still contain several distinct subjects.
     if (selectedSubjects.some(subject => (offeredRecords.size > 1 && offeredRecords.has(subject.citationHash)) ||
       choices.some(choice => choice.label.toLowerCase() === subject.label.toLowerCase()))) {
-      throw new AgenticAskOutputErrorV1('The person already chose that subject. Continue researching the chosen subject.');
+      // A settled choice adds no ambiguity, even when the model exhausts its repair attempt.
+      triedClarification = alreadyUnresolved;
+      throw new AgenticAskOutputErrorV1('The person already chose that subject. Continue with it, or clarify a different distinction within it.');
     }
     // Each standalone choice includes the original question. Refuse an oversized proposal before copying it.
     if (bytes(question) * (choices.length + 1) <= PERSON_ANSWER_RESPONSE_MAX_BYTES_V4) {

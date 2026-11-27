@@ -146,7 +146,7 @@ function argumentSchema(argument: keyof StepArgs, sources: readonly StepSource[]
   return { ...base, description: ARGUMENT_DESCRIPTIONS[argument] };
 }
 
-export const SELECTED_SUBJECTS_GUIDANCE = "When selected_subjects is present, the person has answered the earlier clarification. Complete the request for the selected subjects. Alternatives mentioned only to choose between them are settled and do not count as missing facts.";
+export const SELECTED_SUBJECTS_GUIDANCE = "When selected_subjects is present, the person has answered the earlier clarification. Complete the request for the selected subjects. Only include facts and gaps needed to answer for that selection. Leave out alternatives mentioned just to settle which subject the person meant.";
 
 /** Shared with the native research driver's opt-in clarify tool. */
 export const AGENTIC_RESEARCH_CLARIFICATION_GUIDANCE_V1 =
